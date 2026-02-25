@@ -9,6 +9,8 @@ import { Button } from '@/components/ui/Button';
 import { Sparkles, Send, Bot, ImagePlus, X, User, MessageSquarePlus, MessageSquare, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { generateMonthKey } from '@/utils/date';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 export function AIAssistant() {
     const today = new Date();
@@ -297,11 +299,17 @@ export function AIAssistant() {
                                                     </a>
                                                 </div>
                                             )}
-                                            <div className={`px-5 py-4 text-sm whitespace-pre-wrap leading-relaxed border
+                                            <div className={`px-5 py-4 text-sm whitespace-pre-wrap leading-relaxed border max-w-full overflow-hidden
                                                 ${isUser
                                                     ? 'bg-surface-800 border-surface-700 text-gray-100 rounded-3xl rounded-tr-md'
-                                                    : 'bg-transparent border-surface-800/60 text-gray-200 rounded-3xl rounded-tl-md'}`}>
-                                                {msg.content}
+                                                    : 'bg-transparent border-surface-800/60 text-gray-200 rounded-3xl rounded-tl-md prose prose-invert prose-p:leading-relaxed prose-pre:bg-surface-800 prose-pre:border prose-pre:border-surface-700 prose-sm hover:prose-a:text-indigo-400'}`}>
+                                                {isUser ? (
+                                                    msg.content
+                                                ) : (
+                                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                        {msg.content}
+                                                    </ReactMarkdown>
+                                                )}
                                             </div>
                                         </div>
                                     </div>

@@ -49,6 +49,7 @@ export interface UserSettings {
     budget: number;
     startDay: number; // 1-31
     currency: string;
+    whatsappAllowedNumbers?: string[];
     updatedAt: string;
 }
 

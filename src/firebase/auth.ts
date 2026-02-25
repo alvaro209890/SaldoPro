@@ -36,6 +36,7 @@ export async function registerUser(email: string, password: string, displayName:
         budget: 0,
         startDay: 1,
         currency: 'BRL',
+        whatsappAllowedNumbers: [],
         updatedAt: new Date().toISOString(),
     });
 

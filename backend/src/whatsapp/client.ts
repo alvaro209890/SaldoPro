@@ -10,7 +10,7 @@ import QRCode from 'qrcode';
 import qrcodeTerminal from 'qrcode-terminal';
 import { processWhatsAppAIMessage } from '../ai/assistant';
 import { env } from '../config/env';
-import { inboundMessageExists, saveMessageSafe } from '../lib/firestore';
+import { getAllowedWhatsAppNumbers, inboundMessageExists, saveMessageSafe } from '../lib/firestore';
 import { logger } from '../lib/logger';
 import type { MessageDirection, RuntimeStatus, WhatsAppMessageRecord } from '../types/whatsapp';
 import {
@@ -19,6 +19,7 @@ import {
   isGroupJid,
   isStatusJid,
   jidToPhone,
+  normalizePhoneNumber,
   normalizePhoneToJid
 } from './events';
 
@@ -44,6 +45,8 @@ export class WhatsAppClient {
   private allowReconnect = true;
   private readonly processedInboundIds = new Set<string>();
   private readonly processedInboundOrder: string[] = [];
+  private allowedNumbersCache = new Set<string>();
+  private allowedNumbersCacheAt = 0;
 
   async start(): Promise<void> {
     await mkdir(env.whatsappAuthDir, { recursive: true });
@@ -235,6 +238,14 @@ export class WhatsAppClient {
     const remoteJid = key.remoteJid ?? '';
     if (!remoteJid || isStatusJid(remoteJid) || isGroupJid(remoteJid)) return;
     if (key.fromMe) return;
+    const remotePhone = jidToPhone(remoteJid);
+    if (!(await this.isAllowedSender(remotePhone))) {
+      this.rememberInbound(messageId);
+      logger.info('Ignoring WhatsApp message from non-whitelisted number', {
+        from: remotePhone
+      });
+      return;
+    }
 
     const alreadyInFirestore = await inboundMessageExists(messageId);
     if (alreadyInFirestore) {
@@ -250,7 +261,7 @@ export class WhatsAppClient {
     const inboundRecord: WhatsAppMessageRecord = {
       messageId,
       direction: 'inbound',
-      from: jidToPhone(remoteJid),
+      from: remotePhone,
       to: this.phone ?? '',
       text,
       timestamp,
@@ -434,6 +445,36 @@ export class WhatsAppClient {
     if (this.processedInboundOrder.length > 5000) {
       const oldest = this.processedInboundOrder.shift();
       if (oldest) this.processedInboundIds.delete(oldest);
+    }
+  }
+
+  private async isAllowedSender(phone: string): Promise<boolean> {
+    const normalized = normalizePhoneNumber(phone);
+    if (normalized.length < 10) return false;
+
+    if (Date.now() - this.allowedNumbersCacheAt > 30000) {
+      await this.refreshAllowedNumbers();
+    }
+
+    return this.allowedNumbersCache.has(normalized);
+  }
+
+  private async refreshAllowedNumbers(): Promise<void> {
+    const uid = env.whatsappOwnerUid;
+    if (!uid) {
+      this.allowedNumbersCache = new Set();
+      this.allowedNumbersCacheAt = Date.now();
+      return;
+    }
+
+    try {
+      const numbers = await getAllowedWhatsAppNumbers(uid);
+      this.allowedNumbersCache = new Set(numbers.map((number) => normalizePhoneNumber(number)));
+      this.allowedNumbersCacheAt = Date.now();
+    } catch (error) {
+      logger.error('Failed to refresh WhatsApp allowed numbers', error);
+      this.allowedNumbersCache = new Set();
+      this.allowedNumbersCacheAt = Date.now();
     }
   }
 }

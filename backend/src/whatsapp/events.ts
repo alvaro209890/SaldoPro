@@ -34,18 +34,22 @@ export function isStatusJid(jid: string | null | undefined): boolean {
   return jid === 'status@broadcast';
 }
 
+export function normalizePhoneNumber(value: string | null | undefined): string {
+  if (!value) return '';
+  return value.replace(/[^\d]/g, '');
+}
+
 export function jidToPhone(jid: string | null | undefined): string {
   if (!jid) return '';
-  return jid.split('@')[0] ?? '';
+  return normalizePhoneNumber(jid.split('@')[0] ?? '');
 }
 
 export function normalizePhoneToJid(phoneOrJid: string): string {
   const value = phoneOrJid.trim();
   if (value.includes('@')) return value;
-  const digits = value.replace(/[^\d]/g, '');
+  const digits = normalizePhoneNumber(value);
   if (digits.length < 10) {
     throw new Error('Invalid phone number');
   }
   return `${digits}@s.whatsapp.net`;
 }
-

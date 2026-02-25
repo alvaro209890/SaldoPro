@@ -66,6 +66,8 @@ class WhatsAppClient {
     allowReconnect = true;
     processedInboundIds = new Set();
     processedInboundOrder = [];
+    allowedNumbersCache = new Set();
+    allowedNumbersCacheAt = 0;
     async start() {
         await (0, promises_1.mkdir)(env_1.env.whatsappAuthDir, { recursive: true });
         await this.connect();
@@ -221,6 +223,14 @@ class WhatsAppClient {
             return;
         if (key.fromMe)
             return;
+        const remotePhone = (0, events_1.jidToPhone)(remoteJid);
+        if (!(await this.isAllowedSender(remotePhone))) {
+            this.rememberInbound(messageId);
+            logger_1.logger.info('Ignoring WhatsApp message from non-whitelisted number', {
+                from: remotePhone
+            });
+            return;
+        }
         const alreadyInFirestore = await (0, firestore_1.inboundMessageExists)(messageId);
         if (alreadyInFirestore) {
             this.rememberInbound(messageId);
@@ -233,7 +243,7 @@ class WhatsAppClient {
         const inboundRecord = {
             messageId,
             direction: 'inbound',
-            from: (0, events_1.jidToPhone)(remoteJid),
+            from: remotePhone,
             to: this.phone ?? '',
             text,
             timestamp,
@@ -411,6 +421,33 @@ class WhatsAppClient {
             const oldest = this.processedInboundOrder.shift();
             if (oldest)
                 this.processedInboundIds.delete(oldest);
+        }
+    }
+    async isAllowedSender(phone) {
+        const normalized = (0, events_1.normalizePhoneNumber)(phone);
+        if (normalized.length < 10)
+            return false;
+        if (Date.now() - this.allowedNumbersCacheAt > 30000) {
+            await this.refreshAllowedNumbers();
+        }
+        return this.allowedNumbersCache.has(normalized);
+    }
+    async refreshAllowedNumbers() {
+        const uid = env_1.env.whatsappOwnerUid;
+        if (!uid) {
+            this.allowedNumbersCache = new Set();
+            this.allowedNumbersCacheAt = Date.now();
+            return;
+        }
+        try {
+            const numbers = await (0, firestore_1.getAllowedWhatsAppNumbers)(uid);
+            this.allowedNumbersCache = new Set(numbers.map((number) => (0, events_1.normalizePhoneNumber)(number)));
+            this.allowedNumbersCacheAt = Date.now();
+        }
+        catch (error) {
+            logger_1.logger.error('Failed to refresh WhatsApp allowed numbers', error);
+            this.allowedNumbersCache = new Set();
+            this.allowedNumbersCacheAt = Date.now();
         }
     }
 }

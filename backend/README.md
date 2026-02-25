@@ -9,6 +9,7 @@ Backend Node.js + TypeScript para integrar WhatsApp (Baileys) com Firestore e ro
 - Listener de mensagens recebidas.
 - Auto-resposta simples por variavel de ambiente.
 - Modo IA no WhatsApp usando Groq para criar/editar/excluir lancamentos no Firestore.
+- Whitelist de numeros autorizados lida de `users/{uid}/settings/profile.whatsappAllowedNumbers`.
 - Persistencia de mensagens na colecao `whatsappMessages` no Firestore.
 - API protegida por Bearer token.
 
@@ -78,6 +79,12 @@ Authorization: Bearer <WHATSAPP_API_TOKEN>
   - `FIREBASE_PROJECT_ID`
   - `FIREBASE_CLIENT_EMAIL`
   - `FIREBASE_PRIVATE_KEY`
+
+## Controle de numeros autorizados
+
+- Cadastre os numeros no frontend em `Configuracoes > WhatsApp Autorizado`.
+- O backend so responde mensagens vindas de numeros listados em `whatsappAllowedNumbers`.
+- Numeros nao cadastrados sao ignorados (sem resposta e sem acao da IA).
 
 ## Observacao importante
 

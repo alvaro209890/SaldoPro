@@ -3,6 +3,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { env } from '../config/env';
 import { logger } from './logger';
 import type { WhatsAppMessageRecord } from '../types/whatsapp';
+import { normalizePhoneNumber } from '../whatsapp/events';
 
 const COLLECTION_NAME = 'whatsappMessages';
 
@@ -140,4 +141,16 @@ export async function updateUserTransaction(
 
 export async function deleteUserTransaction(uid: string, transactionId: string): Promise<void> {
   await db.collection('users').doc(uid).collection('transactions').doc(transactionId).delete();
+}
+
+export async function getAllowedWhatsAppNumbers(uid: string): Promise<string[]> {
+  const snap = await db.collection('users').doc(uid).collection('settings').doc('profile').get();
+  if (!snap.exists) return [];
+
+  const data = snap.data() as { whatsappAllowedNumbers?: unknown };
+  if (!Array.isArray(data.whatsappAllowedNumbers)) return [];
+
+  return [...new Set(data.whatsappAllowedNumbers
+    .map((value) => (typeof value === 'string' ? normalizePhoneNumber(value) : ''))
+    .filter((value) => value.length >= 10))];
 }

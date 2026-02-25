@@ -66,3 +66,6 @@ if (exports.env.whatsappAiEnabled) {
         throw new Error('Missing required environment variable: GROQ_API_KEY');
     }
 }
+if ((exports.env.whatsappAiEnabled || exports.env.whatsappAutoReplyEnabled) && !exports.env.whatsappOwnerUid) {
+    throw new Error('Missing required environment variable: WHATSAPP_OWNER_UID');
+}

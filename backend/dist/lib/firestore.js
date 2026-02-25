@@ -8,10 +8,12 @@ exports.getRecentTransactions = getRecentTransactions;
 exports.addUserTransaction = addUserTransaction;
 exports.updateUserTransaction = updateUserTransaction;
 exports.deleteUserTransaction = deleteUserTransaction;
+exports.getAllowedWhatsAppNumbers = getAllowedWhatsAppNumbers;
 const app_1 = require("firebase-admin/app");
 const firestore_1 = require("firebase-admin/firestore");
 const env_1 = require("../config/env");
 const logger_1 = require("./logger");
+const events_1 = require("../whatsapp/events");
 const COLLECTION_NAME = 'whatsappMessages';
 function sanitizeDocId(value) {
     return value.replace(/[^\w.-]/g, '_');
@@ -99,4 +101,15 @@ async function updateUserTransaction(uid, transactionId, changes) {
 }
 async function deleteUserTransaction(uid, transactionId) {
     await db.collection('users').doc(uid).collection('transactions').doc(transactionId).delete();
+}
+async function getAllowedWhatsAppNumbers(uid) {
+    const snap = await db.collection('users').doc(uid).collection('settings').doc('profile').get();
+    if (!snap.exists)
+        return [];
+    const data = snap.data();
+    if (!Array.isArray(data.whatsappAllowedNumbers))
+        return [];
+    return [...new Set(data.whatsappAllowedNumbers
+            .map((value) => (typeof value === 'string' ? (0, events_1.normalizePhoneNumber)(value) : ''))
+            .filter((value) => value.length >= 10))];
 }

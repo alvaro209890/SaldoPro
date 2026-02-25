@@ -4,6 +4,7 @@ exports.extractRawType = extractRawType;
 exports.extractMessageText = extractMessageText;
 exports.isGroupJid = isGroupJid;
 exports.isStatusJid = isStatusJid;
+exports.normalizePhoneNumber = normalizePhoneNumber;
 exports.jidToPhone = jidToPhone;
 exports.normalizePhoneToJid = normalizePhoneToJid;
 function extractRawType(message) {
@@ -42,16 +43,21 @@ function isGroupJid(jid) {
 function isStatusJid(jid) {
     return jid === 'status@broadcast';
 }
+function normalizePhoneNumber(value) {
+    if (!value)
+        return '';
+    return value.replace(/[^\d]/g, '');
+}
 function jidToPhone(jid) {
     if (!jid)
         return '';
-    return jid.split('@')[0] ?? '';
+    return normalizePhoneNumber(jid.split('@')[0] ?? '');
 }
 function normalizePhoneToJid(phoneOrJid) {
     const value = phoneOrJid.trim();
     if (value.includes('@'))
         return value;
-    const digits = value.replace(/[^\d]/g, '');
+    const digits = normalizePhoneNumber(value);
     if (digits.length < 10) {
         throw new Error('Invalid phone number');
     }
