@@ -11,6 +11,7 @@ import { Transactions } from '@/pages/Transactions';
 import { Categories } from '@/pages/Categories';
 import { Reports } from '@/pages/Reports';
 import { Settings } from '@/pages/Settings';
+import { AIAssistant } from '@/pages/AIAssistant';
 
 export function App() {
     return (
@@ -28,6 +29,7 @@ export function App() {
                     <Route path="categories" element={<Categories />} />
                     <Route path="reports" element={<Reports />} />
                     <Route path="settings" element={<Settings />} />
+                    <Route path="ai" element={<AIAssistant />} />
                 </Route>
             </Route>
 
