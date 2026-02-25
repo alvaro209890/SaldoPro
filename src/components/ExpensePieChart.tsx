@@ -32,9 +32,9 @@ export function ExpensePieChart({ transactions, categories }: ExpensePieChartPro
             .sort((a, b) => b.value - a.value);
     }, [transactions, categories]);
 
-    if (transactions.filter((t) => t.type === 'expense').length === 0) {
+    if (data.length === 0) {
         return (
-            <Card title="Despesas por Categoria" value="" icon={PieChartIcon} className="h-full">
+            <Card title="Despesas por Categoria" icon={PieChartIcon} className="h-full">
                 <div className="flex h-[300px] items-center justify-center mt-4">
                     <EmptyState
                         icon={PieChartIcon}
@@ -48,7 +48,7 @@ export function ExpensePieChart({ transactions, categories }: ExpensePieChartPro
     }
 
     return (
-        <Card title="Despesas por Categoria" value="" icon={PieChartIcon} className="h-full">
+        <Card title="Despesas por Categoria" icon={PieChartIcon} className="h-full">
             <div className="h-[300px] mt-4">
                 <ResponsiveContainer width="100%" height="100%">
                     <PieChart>

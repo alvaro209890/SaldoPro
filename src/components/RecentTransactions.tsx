@@ -21,7 +21,6 @@ export function RecentTransactions({
     return (
         <Card
             title="Transações Recentes"
-            value=""
             icon={ListOrdered}
             className="h-full flex flex-col"
         >

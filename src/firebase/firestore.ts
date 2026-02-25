@@ -11,7 +11,7 @@ import {
     type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './config';
-import type { Transaction, Category, UserSettings } from '@/types';
+import type { Transaction, Category, UserSettings, StoredChatMessage, ChatSession } from '@/types';
 import { generateMonthKey } from '@/utils/date';
 
 // ─── Transactions ────────────────────────────────────────────
@@ -165,3 +165,104 @@ export async function updateSettings(
         updatedAt: new Date().toISOString(),
     });
 }
+
+// ─── Chat Sessions ──────────────────────────────────────────────
+
+export function onChatSessionsSnapshot(
+    uid: string,
+    callback: (sessions: ChatSession[]) => void,
+    onError?: (error: Error) => void
+): Unsubscribe {
+    const ref = collection(db, 'users', uid, 'chatSessions');
+    const q = query(ref, orderBy('updatedAt', 'desc'));
+
+    return onSnapshot(
+        q,
+        (snap) => {
+            const sessions = snap.docs.map((d) => ({
+                id: d.id,
+                ...d.data(),
+            })) as ChatSession[];
+            callback(sessions);
+        },
+        (error) => {
+            console.error('Error fetching chat sessions:', error);
+            if (onError) onError(error);
+        }
+    );
+}
+
+export async function createChatSession(uid: string, title: string) {
+    const ref = collection(db, 'users', uid, 'chatSessions');
+    const now = new Date().toISOString();
+    return addDoc(ref, {
+        title,
+        createdAt: now,
+        updatedAt: now,
+    });
+}
+
+export async function updateChatSession(uid: string, sessionId: string, title: string) {
+    const ref = doc(db, 'users', uid, 'chatSessions', sessionId);
+    return updateDoc(ref, {
+        title,
+        updatedAt: new Date().toISOString(),
+    });
+}
+
+export async function deleteChatSession(uid: string, sessionId: string) {
+    const ref = doc(db, 'users', uid, 'chatSessions', sessionId);
+    return deleteDoc(ref);
+}
+
+// ─── Chat Messages ──────────────────────────────────────────────
+
+export function onChatMessagesSnapshot(
+    uid: string,
+    sessionId: string,
+    callback: (messages: StoredChatMessage[]) => void,
+    onError?: (error: Error) => void
+): Unsubscribe {
+    const ref = collection(db, 'users', uid, 'chatSessions', sessionId, 'messages');
+    const q = query(
+        ref,
+        orderBy('createdAt', 'asc')
+    );
+
+    return onSnapshot(
+        q,
+        (snap) => {
+            const messages = snap.docs.map((d) => ({
+                id: d.id,
+                ...d.data(),
+            })) as StoredChatMessage[];
+            callback(messages);
+        },
+        (error) => {
+            console.error('Error fetching chat messages:', error);
+            if (onError) onError(error);
+        }
+    );
+}
+
+export async function addChatMessage(
+    uid: string,
+    data: Omit<StoredChatMessage, 'id' | 'createdAt'>
+) {
+    const ref = collection(db, 'users', uid, 'chatSessions', data.sessionId, 'messages');
+    const sessionRef = doc(db, 'users', uid, 'chatSessions', data.sessionId);
+
+    // Create the message
+    const addPromise = addDoc(ref, {
+        ...data,
+        createdAt: new Date().toISOString(),
+    });
+
+    // Update the parent session's updatedAt timestamp
+    const updateSessionPromise = updateDoc(sessionRef, {
+        updatedAt: new Date().toISOString(),
+    });
+
+    return Promise.all([addPromise, updateSessionPromise]);
+}
+

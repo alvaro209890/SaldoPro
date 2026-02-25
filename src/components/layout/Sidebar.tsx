@@ -10,6 +10,7 @@ import {
     LogOut,
     X,
     Wallet,
+    Sparkles,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -20,6 +21,7 @@ interface SidebarProps {
 const NAV_ITEMS = [
     { label: 'Dashboard', path: '/app/dashboard', icon: LayoutDashboard },
     { label: 'Transações', path: '/app/transactions', icon: ArrowRightLeft },
+    { label: 'Lançamento IA', path: '/app/ai', icon: Sparkles },
     { label: 'Categorias', path: '/app/categories', icon: Tags },
     { label: 'Relatórios', path: '/app/reports', icon: PieChart },
     { label: 'Configurações', path: '/app/settings', icon: Settings },

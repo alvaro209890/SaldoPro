@@ -27,6 +27,7 @@ export function Settings() {
         register,
         handleSubmit,
         reset,
+        control,
         formState: { errors, isDirty },
     } = useForm<SettingsFormData>({
         resolver: zodResolver(settingsSchema),

@@ -7,6 +7,22 @@ export interface UserProfile {
     createdAt: string;
 }
 
+export interface ChatSession {
+    id: string;
+    title: string;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface StoredChatMessage {
+    id: string;
+    sessionId: string;
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    imageUrl?: string;
+    createdAt: string;
+}
+
 export interface Transaction {
     id: string;
     type: 'income' | 'expense';

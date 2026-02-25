@@ -12,19 +12,25 @@ interface DashboardCardsProps {
 }
 
 export function DashboardCards({ isLoading, income, expense, balance, budget }: DashboardCardsProps) {
+    const hasBudget = typeof budget === 'number' && budget > 0;
+    const budgetUsagePct = hasBudget ? (expense / budget!) * 100 : 0;
+    const budgetBarPct = Math.min(100, Math.max(0, budgetUsagePct));
+    const isOverBudget = hasBudget && expense > budget!;
+    const budgetDiff = hasBudget ? budget! - expense : 0;
+
     if (isLoading) {
         return (
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
                 <LoadingSkeleton variant="card" />
                 <LoadingSkeleton variant="card" />
                 <LoadingSkeleton variant="card" />
-                {budget ? <LoadingSkeleton variant="card" /> : null}
+                {hasBudget ? <LoadingSkeleton variant="card" /> : null}
             </div>
         );
     }
 
     return (
-        <div className={`grid grid-cols-1 gap-6 sm:grid-cols-2 ${budget ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
+        <div className={`grid grid-cols-1 gap-6 sm:grid-cols-2 ${hasBudget ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
             <Card
                 title="Receitas"
                 value={formatBRL(income)}
@@ -49,15 +55,29 @@ export function DashboardCards({ isLoading, income, expense, balance, budget }: 
                 className="border-indigo-500/10"
             />
 
-            {budget ? (
+            {hasBudget ? (
                 <Card
-                    title="Orçamento Mensal"
-                    value={formatBRL(budget)}
-                    subtitle={`${((expense / budget) * 100).toFixed(1)}% utilizado`}
+                    title="Orçamento mensal"
+                    value={formatBRL(budget!)}
+                    subtitle={`${budgetUsagePct.toFixed(1)}% utilizado`}
                     icon={Target}
-                    iconClassName="bg-purple-500/10 text-purple-500"
-                    className="border-purple-500/10"
-                />
+                    iconClassName={isOverBudget ? 'bg-red-500/10 text-red-500' : 'bg-purple-500/10 text-purple-500'}
+                    className={isOverBudget ? 'border-red-500/20' : 'border-purple-500/10'}
+                >
+                    <div className="mt-4">
+                        <div className="h-2 w-full rounded-full bg-surface-800 overflow-hidden">
+                            <div
+                                className={`h-full rounded-full ${isOverBudget ? 'bg-red-500' : 'bg-emerald-500'}`}
+                                style={{ width: `${budgetBarPct}%` }}
+                            />
+                        </div>
+                        <div className={`mt-2 text-xs ${isOverBudget ? 'text-red-400' : 'text-gray-500'}`}>
+                            {isOverBudget
+                                ? `Excedido: ${formatBRL(Math.abs(budgetDiff))}`
+                                : `Restante: ${formatBRL(budgetDiff)}`}
+                        </div>
+                    </div>
+                </Card>
             ) : null}
         </div>
     );
