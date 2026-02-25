@@ -76,6 +76,7 @@ Authorization: Bearer <WHATSAPP_API_TOKEN>
 ## Render
 
 - O `render.yaml` na raiz cria um web service para `backend/`.
+- O build instala devDependencies com `npm ci --include=dev` para compilar TypeScript.
 - O disco persistente precisa ser mantido em `/opt/render/project/src/backend/.baileys_auth`.
 - Configure as env vars secretas no painel da Render, incluindo:
   - `WHATSAPP_API_TOKEN`

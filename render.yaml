@@ -3,7 +3,7 @@ services:
     name: saldopro-whatsapp-backend
     runtime: node
     rootDir: backend
-    buildCommand: npm ci && npm run build
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm run start
     healthCheckPath: /healthz
     disk:
@@ -11,6 +11,8 @@ services:
       mountPath: /opt/render/project/src/backend/.baileys_auth
       sizeGB: 1
     envVars:
+      - key: NPM_CONFIG_PRODUCTION
+        value: false
       - key: NODE_ENV
         value: production
       - key: PORT
