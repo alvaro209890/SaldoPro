@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { env } from '../config/env';
+import { getAllowedWhatsAppNumbers } from '../lib/firestore';
 import { logger } from '../lib/logger';
 import { WhatsAppClient } from '../whatsapp/client';
+import { normalizePhoneNumber } from '../whatsapp/events';
 
 interface SendMessageBody {
   to?: string;
@@ -43,6 +45,14 @@ export function createWhatsAppRouter(client: WhatsAppClient): Router {
         return;
       }
 
+      const ownerUid = env.whatsappOwnerUid;
+      const allowedNumbers = ownerUid ? await getAllowedWhatsAppNumbers(ownerUid) : [];
+      const normalizedTarget = normalizePhoneNumber(to);
+      if (!allowedNumbers.includes(normalizedTarget)) {
+        res.status(403).json({ error: 'Target phone is not whitelisted' });
+        return;
+      }
+
       const result = await client.sendText(to, text);
       res.json({
         ok: true,
@@ -70,4 +80,3 @@ export function createWhatsAppRouter(client: WhatsAppClient): Router {
 
   return router;
 }
-

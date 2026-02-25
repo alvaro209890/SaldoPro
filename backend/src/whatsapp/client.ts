@@ -45,8 +45,6 @@ export class WhatsAppClient {
   private allowReconnect = true;
   private readonly processedInboundIds = new Set<string>();
   private readonly processedInboundOrder: string[] = [];
-  private allowedNumbersCache = new Set<string>();
-  private allowedNumbersCacheAt = 0;
 
   async start(): Promise<void> {
     await mkdir(env.whatsappAuthDir, { recursive: true });
@@ -282,6 +280,14 @@ export class WhatsAppClient {
   }
 
   private async sendSmartReply(remoteJid: string, inboundText: string): Promise<void> {
+    const remotePhone = jidToPhone(remoteJid);
+    if (!(await this.isAllowedSender(remotePhone))) {
+      logger.info('Reply blocked: sender is no longer whitelisted', {
+        to: remotePhone
+      });
+      return;
+    }
+
     if (env.whatsappAiEnabled && inboundText.trim()) {
       try {
         const aiReply = await processWhatsAppAIMessage(inboundText.trim());
@@ -452,29 +458,16 @@ export class WhatsAppClient {
     const normalized = normalizePhoneNumber(phone);
     if (normalized.length < 10) return false;
 
-    if (Date.now() - this.allowedNumbersCacheAt > 30000) {
-      await this.refreshAllowedNumbers();
-    }
-
-    return this.allowedNumbersCache.has(normalized);
-  }
-
-  private async refreshAllowedNumbers(): Promise<void> {
     const uid = env.whatsappOwnerUid;
-    if (!uid) {
-      this.allowedNumbersCache = new Set();
-      this.allowedNumbersCacheAt = Date.now();
-      return;
-    }
+    if (!uid) return false;
 
     try {
       const numbers = await getAllowedWhatsAppNumbers(uid);
-      this.allowedNumbersCache = new Set(numbers.map((number) => normalizePhoneNumber(number)));
-      this.allowedNumbersCacheAt = Date.now();
+      const normalizedNumbers = new Set(numbers.map((number) => normalizePhoneNumber(number)));
+      return normalizedNumbers.has(normalized);
     } catch (error) {
       logger.error('Failed to refresh WhatsApp allowed numbers', error);
-      this.allowedNumbersCache = new Set();
-      this.allowedNumbersCacheAt = Date.now();
+      return false;
     }
   }
 }
