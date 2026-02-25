@@ -11,6 +11,7 @@ Backend Node.js + TypeScript para integrar WhatsApp (Baileys) com Firestore e ro
 - Modo IA no WhatsApp usando Groq para criar/editar/excluir lancamentos no Firestore.
 - Processamento de imagens recebidas no WhatsApp (sem Cloudinary), usando modelo vision da Groq.
 - Whitelist de numeros autorizados lida de `users/{uid}/settings/profile.whatsappAllowedNumbers`.
+- Vinculacao por codigo unico da conta (`whatsappAccessCode`), exigido no primeiro contato do numero.
 - Persistencia de mensagens na colecao `whatsappMessages` no Firestore.
 - API protegida por Bearer token.
 
@@ -24,7 +25,6 @@ Backend Node.js + TypeScript para integrar WhatsApp (Baileys) com Firestore e ro
 1. Copie `backend/.env.example` para `backend/.env`.
 2. Preencha as variaveis (principalmente Firebase e token da API).
 3. Para IA no WhatsApp, configure tambem:
-- `WHATSAPP_OWNER_UID`: UID do usuario dono dos dados financeiros no Firestore.
 - `GROQ_API_KEY`: chave da API Groq.
 - `WHATSAPP_AI_ENABLED=true`.
 - Ajuste opcional de contexto e imagens:
@@ -80,7 +80,6 @@ Authorization: Bearer <WHATSAPP_API_TOKEN>
 - O disco persistente precisa ser mantido em `/opt/render/project/src/backend/.baileys_auth`.
 - Configure as env vars secretas no painel da Render, incluindo:
   - `WHATSAPP_API_TOKEN`
-  - `WHATSAPP_OWNER_UID`
   - `GROQ_API_KEY`
   - `FIREBASE_PROJECT_ID`
   - `FIREBASE_CLIENT_EMAIL`
@@ -90,6 +89,8 @@ Authorization: Bearer <WHATSAPP_API_TOKEN>
 
 - Cadastre os numeros no frontend em `Configuracoes > WhatsApp Autorizado`.
 - O backend so responde mensagens vindas de numeros listados em `whatsappAllowedNumbers`.
+- No primeiro contato, o numero recebe pedido de codigo e deve enviar o codigo da conta exibido em `Configuracoes`.
+- Depois do vinculo, aquele numero fica associado a conta e nao precisa enviar codigo novamente.
 - Numeros nao cadastrados sao ignorados (sem resposta e sem acao da IA).
 
 ## Observacao importante

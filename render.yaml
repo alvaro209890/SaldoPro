@@ -29,8 +29,6 @@ services:
         value: 50
       - key: WHATSAPP_API_TOKEN
         sync: false
-      - key: WHATSAPP_OWNER_UID
-        sync: false
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_MODEL

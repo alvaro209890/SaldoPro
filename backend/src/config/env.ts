@@ -52,7 +52,6 @@ export const env = {
   firebaseClientEmail: getRequired('FIREBASE_CLIENT_EMAIL'),
   firebasePrivateKey: getRequired('FIREBASE_PRIVATE_KEY'),
   whatsappAiEnabled: parseBoolean(process.env.WHATSAPP_AI_ENABLED, true),
-  whatsappOwnerUid: getOptional('WHATSAPP_OWNER_UID'),
   groqApiKey: getOptional('GROQ_API_KEY'),
   groqModel: process.env.GROQ_MODEL?.trim() || 'llama-3.3-70b-versatile',
   groqVisionModel: process.env.GROQ_VISION_MODEL?.trim() || 'llama-3.2-90b-vision-preview',
@@ -64,14 +63,7 @@ export const env = {
 };
 
 if (env.whatsappAiEnabled) {
-  if (!env.whatsappOwnerUid) {
-    throw new Error('Missing required environment variable: WHATSAPP_OWNER_UID');
-  }
   if (!env.groqApiKey) {
     throw new Error('Missing required environment variable: GROQ_API_KEY');
   }
-}
-
-if ((env.whatsappAiEnabled || env.whatsappAutoReplyEnabled) && !env.whatsappOwnerUid) {
-  throw new Error('Missing required environment variable: WHATSAPP_OWNER_UID');
 }

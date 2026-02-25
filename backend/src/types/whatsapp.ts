@@ -4,6 +4,7 @@ export type MessageStatus = 'received' | 'sent' | 'failed';
 export interface WhatsAppMessageRecord {
   messageId: string;
   direction: MessageDirection;
+  ownerUid?: string;
   from: string;
   to: string;
   text: string;

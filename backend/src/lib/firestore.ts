@@ -6,6 +6,7 @@ import type { WhatsAppMessageRecord } from '../types/whatsapp';
 import { normalizePhoneNumber } from '../whatsapp/events';
 
 const COLLECTION_NAME = 'whatsappMessages';
+const BINDINGS_COLLECTION_NAME = 'whatsappBindings';
 
 function sanitizeDocId(value: string): string {
   return value.replace(/[^\w.-]/g, '_');
@@ -80,6 +81,13 @@ export interface UserTransaction {
 export interface WhatsAppConversationMessage {
   role: 'user' | 'assistant';
   content: string;
+}
+
+export interface WhatsAppPhoneBinding {
+  phone: string;
+  uid: string;
+  linkedAt: string;
+  updatedAt: string;
 }
 
 export interface CreateTransactionInput {
@@ -160,10 +168,125 @@ export async function getAllowedWhatsAppNumbers(uid: string): Promise<string[]> 
     .filter((value) => value.length >= 10))];
 }
 
+function normalizeAccessCode(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function extractUidFromSettingsDoc(doc: FirebaseFirestore.QueryDocumentSnapshot): string | null {
+  return doc.ref.parent.parent?.id ?? null;
+}
+
+export async function isPhoneAllowedForUid(uid: string, phone: string): Promise<boolean> {
+  const normalizedPhone = normalizePhoneNumber(phone);
+  if (normalizedPhone.length < 10) return false;
+
+  const allowed = await getAllowedWhatsAppNumbers(uid);
+  return allowed.includes(normalizedPhone);
+}
+
+export async function isPhoneAllowedForAnyAccount(phone: string): Promise<boolean> {
+  const normalizedPhone = normalizePhoneNumber(phone);
+  if (normalizedPhone.length < 10) return false;
+
+  const snap = await db
+    .collectionGroup('settings')
+    .where('whatsappAllowedNumbers', 'array-contains', normalizedPhone)
+    .limit(1)
+    .get();
+
+  return snap.docs.some((doc) => doc.id === 'profile');
+}
+
+export async function resolveUidFromAccessCode(
+  accessCodeText: string,
+  phone: string
+): Promise<string | null> {
+  const normalizedCode = normalizeAccessCode(accessCodeText);
+  const normalizedPhone = normalizePhoneNumber(phone);
+  if (normalizedCode.length < 6 || normalizedPhone.length < 10) {
+    return null;
+  }
+
+  const snap = await db
+    .collectionGroup('settings')
+    .where('whatsappAccessCodeNormalized', '==', normalizedCode)
+    .limit(5)
+    .get();
+
+  for (const settingsDoc of snap.docs) {
+    if (settingsDoc.id !== 'profile') continue;
+
+    const uid = extractUidFromSettingsDoc(settingsDoc);
+    if (!uid) continue;
+
+    const data = settingsDoc.data() as { whatsappAllowedNumbers?: unknown };
+    const allowed = Array.isArray(data.whatsappAllowedNumbers)
+      ? data.whatsappAllowedNumbers
+          .map((value) => (typeof value === 'string' ? normalizePhoneNumber(value) : ''))
+          .filter((value) => value.length >= 10)
+      : [];
+
+    if (allowed.includes(normalizedPhone)) {
+      return uid;
+    }
+  }
+
+  return null;
+}
+
+export async function getPhoneBinding(phone: string): Promise<WhatsAppPhoneBinding | null> {
+  const normalizedPhone = normalizePhoneNumber(phone);
+  if (normalizedPhone.length < 10) return null;
+
+  const snap = await db.collection(BINDINGS_COLLECTION_NAME).doc(normalizedPhone).get();
+  if (!snap.exists) return null;
+
+  const data = snap.data() as Partial<WhatsAppPhoneBinding>;
+  if (!data.uid || typeof data.uid !== 'string') return null;
+
+  return {
+    phone: normalizedPhone,
+    uid: data.uid,
+    linkedAt: typeof data.linkedAt === 'string' ? data.linkedAt : new Date().toISOString(),
+    updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : new Date().toISOString()
+  };
+}
+
+export async function savePhoneBinding(phone: string, uid: string): Promise<void> {
+  const normalizedPhone = normalizePhoneNumber(phone);
+  if (normalizedPhone.length < 10) {
+    throw new Error('Invalid phone for binding');
+  }
+  if (!uid || uid.trim().length === 0) {
+    throw new Error('Invalid uid for binding');
+  }
+
+  const now = new Date().toISOString();
+  const docRef = db.collection(BINDINGS_COLLECTION_NAME).doc(normalizedPhone);
+  const existing = await docRef.get();
+  const linkedAt =
+    existing.exists && typeof existing.data()?.linkedAt === 'string'
+      ? (existing.data()?.linkedAt as string)
+      : now;
+
+  await docRef.set(
+    {
+      phone: normalizedPhone,
+      uid,
+      linkedAt,
+      updatedAt: now
+    },
+    { merge: true }
+  );
+}
+
 export async function getRecentConversationByPhone(
+  uid: string,
   phone: string,
   limitCount: number
 ): Promise<WhatsAppConversationMessage[]> {
+  if (!uid || uid.trim().length === 0) return [];
+
   const normalizedPhone = normalizePhoneNumber(phone);
   if (normalizedPhone.length < 10) return [];
 
@@ -188,6 +311,7 @@ export async function getRecentConversationByPhone(
       const data = doc.data() as Partial<WhatsAppMessageRecord>;
       if (data.status === 'failed') continue;
       if (typeof data.createdAt !== 'string' || data.createdAt.length === 0) continue;
+      if (data.ownerUid !== uid) continue;
 
       const hasImage = Boolean(data.metadata?.hasImage);
       const text = typeof data.text === 'string' ? data.text.trim() : '';

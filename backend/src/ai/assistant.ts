@@ -42,10 +42,9 @@ function normalizePaymentMethod(method: unknown): PaymentMethod {
   return 'pix';
 }
 
-export async function processWhatsAppAIMessage(messages: GroqChatMessage[]): Promise<string> {
-  const uid = env.whatsappOwnerUid;
-  if (!uid) {
-    return 'Configuracao incompleta do assistente. Defina WHATSAPP_OWNER_UID no backend.';
+export async function processWhatsAppAIMessage(uid: string, messages: GroqChatMessage[]): Promise<string> {
+  if (!uid || uid.trim().length === 0) {
+    return 'Nao foi possivel identificar a conta vinculada para processar a mensagem.';
   }
 
   const sanitizedMessages = messages

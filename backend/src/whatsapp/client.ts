@@ -13,9 +13,13 @@ import { processWhatsAppAIMessage } from '../ai/assistant';
 import type { GroqChatMessage } from '../ai/groq';
 import { env } from '../config/env';
 import {
-  getAllowedWhatsAppNumbers,
+  getPhoneBinding,
+  isPhoneAllowedForAnyAccount,
+  isPhoneAllowedForUid,
   getRecentConversationByPhone,
   inboundMessageExists,
+  resolveUidFromAccessCode,
+  savePhoneBinding,
   saveMessageSafe
 } from '../lib/firestore';
 import { logger } from '../lib/logger';
@@ -47,6 +51,12 @@ interface ConversationEntry {
 }
 
 const IMAGE_ONLY_FALLBACK_TEXT = 'Analise a imagem enviada e registre o lancamento corretamente.';
+const LINK_CODE_PROMPT =
+  'Para ativar seu atendimento por IA, envie o seu codigo da aba Configuracoes do SaldoPro.';
+const LINK_CODE_INVALID =
+  'Codigo invalido para este numero. Confirme o codigo da sua conta e tente novamente.';
+const LINK_CODE_SUCCESS =
+  'Codigo validado com sucesso. Seu numero foi vinculado e agora as mensagens serao processadas pela IA.';
 
 export class WhatsAppClient {
   private socket: WASocket | null = null;
@@ -62,6 +72,7 @@ export class WhatsAppClient {
   private readonly processedInboundIds = new Set<string>();
   private readonly processedInboundOrder: string[] = [];
   private readonly conversationByPhone = new Map<string, ConversationEntry[]>();
+  private readonly requestedLinkCodePhones = new Set<string>();
 
   async start(): Promise<void> {
     await mkdir(env.whatsappAuthDir, { recursive: true });
@@ -111,7 +122,7 @@ export class WhatsAppClient {
     };
   }
 
-  async sendText(to: string, text: string): Promise<{ messageId: string }> {
+  async sendText(to: string, text: string, ownerUid?: string): Promise<{ messageId: string }> {
     const normalizedText = text.trim();
     if (!normalizedText) {
       throw new Error('Message text is required');
@@ -124,11 +135,13 @@ export class WhatsAppClient {
     }
 
     const jid = normalizePhoneToJid(to);
-    const result = await this.sendWithRetry(jid, normalizedText, 'outbound');
-    await this.appendConversationMessage(jidToPhone(jid), {
-      role: 'assistant',
-      content: normalizedText
-    });
+    const result = await this.sendWithRetry(jid, normalizedText, 'outbound', ownerUid);
+    if (ownerUid) {
+      await this.appendConversationMessage(ownerUid, jidToPhone(jid), {
+        role: 'assistant',
+        content: normalizedText
+      });
+    }
     return result;
   }
 
@@ -259,13 +272,6 @@ export class WhatsAppClient {
     if (!remoteJid || isStatusJid(remoteJid) || isGroupJid(remoteJid)) return;
     if (key.fromMe) return;
     const remotePhone = jidToPhone(remoteJid);
-    if (!(await this.isAllowedSender(remotePhone))) {
-      this.rememberInbound(messageId);
-      logger.info('Ignoring WhatsApp message from non-whitelisted number', {
-        from: remotePhone
-      });
-      return;
-    }
 
     const alreadyInFirestore = await inboundMessageExists(messageId);
     if (alreadyInFirestore) {
@@ -279,10 +285,13 @@ export class WhatsAppClient {
     const rawType = extractRawType(message);
     const imageDataUrl = await this.extractInboundImageDataUrl(message);
     const conversationText = text.trim() || (imageDataUrl ? IMAGE_ONLY_FALLBACK_TEXT : '');
+    const binding = await getPhoneBinding(remotePhone);
+    const ownerUid = binding?.uid;
 
     const inboundRecord: WhatsAppMessageRecord = {
       messageId,
       direction: 'inbound',
+      ...(ownerUid ? { ownerUid } : {}),
       from: remotePhone,
       to: this.phone ?? '',
       text,
@@ -300,33 +309,44 @@ export class WhatsAppClient {
 
     await saveMessageSafe(inboundRecord);
     this.rememberInbound(messageId);
+
+    if (!binding) {
+      await this.handleUnlinkedMessage(remoteJid, remotePhone, text);
+      return;
+    }
+
+    this.requestedLinkCodePhones.delete(normalizePhoneNumber(remotePhone));
+
+    const stillAllowed = await isPhoneAllowedForUid(binding.uid, remotePhone);
+    if (!stillAllowed) {
+      logger.info('Ignoring WhatsApp message from number removed from whitelist', {
+        from: remotePhone,
+        uid: binding.uid
+      });
+      return;
+    }
+
     if (conversationText || imageDataUrl) {
-      await this.appendConversationMessage(remotePhone, {
+      await this.appendConversationMessage(binding.uid, remotePhone, {
         role: 'user',
         content: conversationText
       });
     }
 
-    await this.sendSmartReply(remoteJid, remotePhone, conversationText, imageDataUrl);
+    await this.sendSmartReply(binding.uid, remoteJid, remotePhone, conversationText, imageDataUrl);
   }
 
   private async sendSmartReply(
+    ownerUid: string,
     remoteJid: string,
     remotePhone: string,
     inboundText: string,
     imageDataUrl: string | null
   ): Promise<void> {
-    if (!(await this.isAllowedSender(remotePhone))) {
-      logger.info('Reply blocked: sender is no longer whitelisted', {
-        to: remotePhone
-      });
-      return;
-    }
-
     const hasAiInput = inboundText.trim().length > 0 || Boolean(imageDataUrl);
     if (env.whatsappAiEnabled && hasAiInput) {
       try {
-        const conversation = await this.getConversationHistory(remotePhone);
+        const conversation = await this.getConversationHistory(ownerUid, remotePhone);
         const aiMessages: GroqChatMessage[] = conversation.map((entry, index) => ({
           role: entry.role,
           content: entry.content,
@@ -335,10 +355,10 @@ export class WhatsAppClient {
             : {})
         }));
 
-        const aiReply = await processWhatsAppAIMessage(aiMessages);
+        const aiReply = await processWhatsAppAIMessage(ownerUid, aiMessages);
         if (aiReply.trim()) {
-          await this.sendWithRetry(remoteJid, aiReply.trim(), 'auto_reply');
-          await this.appendConversationMessage(remotePhone, {
+          await this.sendWithRetry(remoteJid, aiReply.trim(), 'auto_reply', ownerUid);
+          await this.appendConversationMessage(ownerUid, remotePhone, {
             role: 'assistant',
             content: aiReply.trim()
           });
@@ -350,21 +370,21 @@ export class WhatsAppClient {
     }
 
     if (!env.whatsappAutoReplyEnabled) return;
-    const sent = await this.sendAutoReply(remoteJid);
+    const sent = await this.sendAutoReply(remoteJid, ownerUid);
     if (sent) {
-      await this.appendConversationMessage(remotePhone, {
+      await this.appendConversationMessage(ownerUid, remotePhone, {
         role: 'assistant',
         content: env.whatsappAutoReplyText.trim()
       });
     }
   }
 
-  private async sendAutoReply(remoteJid: string): Promise<boolean> {
+  private async sendAutoReply(remoteJid: string, ownerUid?: string): Promise<boolean> {
     if (!this.socket || !this.connected) return false;
     if (!env.whatsappAutoReplyText.trim()) return false;
 
     try {
-      await this.sendWithRetry(remoteJid, env.whatsappAutoReplyText.trim(), 'auto_reply');
+      await this.sendWithRetry(remoteJid, env.whatsappAutoReplyText.trim(), 'auto_reply', ownerUid);
       return true;
     } catch (error) {
       logger.error('Failed to send WhatsApp auto-reply', error);
@@ -375,7 +395,8 @@ export class WhatsAppClient {
   private async sendWithRetry(
     jid: string,
     text: string,
-    direction: MessageDirection
+    direction: MessageDirection,
+    ownerUid?: string
   ): Promise<{ messageId: string }> {
     if (!this.socket) {
       throw new Error('WhatsApp socket is not available');
@@ -392,6 +413,7 @@ export class WhatsAppClient {
         const sentRecord: WhatsAppMessageRecord = {
           messageId,
           direction,
+          ...(ownerUid ? { ownerUid } : {}),
           from: this.phone ?? '',
           to: jidToPhone(jid),
           text,
@@ -421,6 +443,7 @@ export class WhatsAppClient {
     const failedRecord: WhatsAppMessageRecord = {
       messageId: `failed_${Date.now()}`,
       direction,
+      ...(ownerUid ? { ownerUid } : {}),
       from: this.phone ?? '',
       to: jidToPhone(jid),
       text,
@@ -511,21 +534,38 @@ export class WhatsAppClient {
     }
   }
 
-  private async isAllowedSender(phone: string): Promise<boolean> {
-    const normalized = normalizePhoneNumber(phone);
-    if (normalized.length < 10) return false;
-
-    const uid = env.whatsappOwnerUid;
-    if (!uid) return false;
-
-    try {
-      const numbers = await getAllowedWhatsAppNumbers(uid);
-      const normalizedNumbers = new Set(numbers.map((number) => normalizePhoneNumber(number)));
-      return normalizedNumbers.has(normalized);
-    } catch (error) {
-      logger.error('Failed to refresh WhatsApp allowed numbers', error);
-      return false;
+  private async handleUnlinkedMessage(
+    remoteJid: string,
+    remotePhone: string,
+    inboundText: string
+  ): Promise<void> {
+    const normalizedPhone = normalizePhoneNumber(remotePhone);
+    const allowedForSomeAccount = await isPhoneAllowedForAnyAccount(normalizedPhone);
+    if (!allowedForSomeAccount) {
+      logger.info('Ignoring WhatsApp message from non-authorized number', {
+        from: normalizedPhone
+      });
+      return;
     }
+
+    const trimmed = inboundText.trim();
+    if (!this.looksLikeAccessCode(trimmed)) {
+      if (this.requestedLinkCodePhones.has(normalizedPhone)) {
+        return;
+      }
+      await this.sendWithRetry(remoteJid, LINK_CODE_PROMPT, 'auto_reply');
+      this.requestedLinkCodePhones.add(normalizedPhone);
+      return;
+    }
+
+    const linkedUid = await this.tryBindPhoneWithCode(normalizedPhone, trimmed);
+    if (!linkedUid) {
+      await this.sendWithRetry(remoteJid, LINK_CODE_INVALID, 'auto_reply');
+      return;
+    }
+
+    this.requestedLinkCodePhones.delete(normalizedPhone);
+    await this.sendWithRetry(remoteJid, LINK_CODE_SUCCESS, 'auto_reply', linkedUid);
   }
 
   private async extractInboundImageDataUrl(message: proto.IWebMessageInfo): Promise<string | null> {
@@ -554,34 +594,65 @@ export class WhatsAppClient {
     }
   }
 
-  private async getConversationHistory(phone: string): Promise<ConversationEntry[]> {
+  private async getConversationHistory(uid: string, phone: string): Promise<ConversationEntry[]> {
+    if (!uid || uid.trim().length === 0) return [];
+
     const normalized = normalizePhoneNumber(phone);
     if (normalized.length < 10) return [];
 
-    const cached = this.conversationByPhone.get(normalized);
+    const cacheKey = this.conversationKey(uid, normalized);
+    const cached = this.conversationByPhone.get(cacheKey);
     if (cached) return cached;
 
     try {
-      const loaded = await getRecentConversationByPhone(normalized, env.whatsappAiHistoryLimit);
-      this.conversationByPhone.set(normalized, loaded);
+      const loaded = await getRecentConversationByPhone(uid, normalized, env.whatsappAiHistoryLimit);
+      this.conversationByPhone.set(cacheKey, loaded);
       return loaded;
     } catch (error) {
       logger.error('Failed to load WhatsApp conversation history', error);
       const empty: ConversationEntry[] = [];
-      this.conversationByPhone.set(normalized, empty);
+      this.conversationByPhone.set(cacheKey, empty);
       return empty;
     }
   }
 
-  private async appendConversationMessage(phone: string, message: ConversationEntry): Promise<void> {
+  private async appendConversationMessage(
+    uid: string,
+    phone: string,
+    message: ConversationEntry
+  ): Promise<void> {
+    if (!uid || uid.trim().length === 0) return;
+
     const normalized = normalizePhoneNumber(phone);
     if (normalized.length < 10) return;
 
     const content = message.content.trim().slice(0, 800);
     if (!content) return;
 
-    const current = await this.getConversationHistory(normalized);
+    const current = await this.getConversationHistory(uid, normalized);
     const updated = [...current, { role: message.role, content }].slice(-env.whatsappAiHistoryLimit);
-    this.conversationByPhone.set(normalized, updated);
+    this.conversationByPhone.set(this.conversationKey(uid, normalized), updated);
+  }
+
+  private looksLikeAccessCode(value: string): boolean {
+    const normalized = value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return normalized.length >= 8;
+  }
+
+  private async tryBindPhoneWithCode(phone: string, codeText: string): Promise<string | null> {
+    try {
+      const uid = await resolveUidFromAccessCode(codeText, phone);
+      if (!uid) return null;
+
+      await savePhoneBinding(phone, uid);
+      return uid;
+    } catch (error) {
+      logger.error('Failed to validate WhatsApp access code', error);
+      return null;
+    }
+  }
+
+  private conversationKey(uid: string, phone: string): string {
+    return `${uid}:${phone}`;
   }
 }

@@ -28,14 +28,18 @@ export function useSettings() {
         return () => unsubscribe();
     }, [user]);
 
-    const update = async (data: Partial<UserSettings>) => {
+    const update = async (data: Partial<UserSettings>, options?: { silent?: boolean }) => {
         if (!user) return;
         try {
             await updateSettings(user.uid, data);
-            toast.success('Configurações atualizadas!');
+            if (!options?.silent) {
+                toast.success('Configurações atualizadas!');
+            }
         } catch (error) {
             console.error(error);
-            toast.error('Erro ao atualizar configurações.');
+            if (!options?.silent) {
+                toast.error('Erro ao atualizar configurações.');
+            }
             throw error;
         }
     };
