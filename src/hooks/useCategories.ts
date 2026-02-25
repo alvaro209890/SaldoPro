@@ -18,10 +18,17 @@ export function useCategories() {
         if (!user) return;
 
         setLoading(true);
-        const unsubscribe = onCategoriesSnapshot(user.uid, (data) => {
-            setCategories(data);
-            setLoading(false);
-        });
+        const unsubscribe = onCategoriesSnapshot(
+            user.uid,
+            (data) => {
+                setCategories(data);
+                setLoading(false);
+            },
+            (error) => {
+                console.error(error);
+                setLoading(false);
+            }
+        );
 
         return () => unsubscribe();
     }, [user]);

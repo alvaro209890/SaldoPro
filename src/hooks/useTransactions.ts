@@ -18,10 +18,18 @@ export function useTransactions(monthKey: string) {
         if (!user) return;
 
         setLoading(true);
-        const unsubscribe = onTransactionsSnapshot(user.uid, monthKey, (data) => {
-            setTransactions(data);
-            setLoading(false);
-        });
+        const unsubscribe = onTransactionsSnapshot(
+            user.uid,
+            monthKey,
+            (data) => {
+                setTransactions(data);
+                setLoading(false);
+            },
+            (error) => {
+                console.error(error);
+                setLoading(false);
+            }
+        );
 
         return () => unsubscribe();
     }, [user, monthKey]);

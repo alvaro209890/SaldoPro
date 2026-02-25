@@ -13,10 +13,17 @@ export function useSettings() {
         if (!user) return;
 
         setLoading(true);
-        const unsubscribe = onSettingsSnapshot(user.uid, (data) => {
-            setSettings(data);
-            setLoading(false);
-        });
+        const unsubscribe = onSettingsSnapshot(
+            user.uid,
+            (data) => {
+                setSettings(data);
+                setLoading(false);
+            },
+            (error) => {
+                console.error(error);
+                setLoading(false);
+            }
+        );
 
         return () => unsubscribe();
     }, [user]);

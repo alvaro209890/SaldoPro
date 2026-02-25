@@ -1,4 +1,6 @@
 import type { CategoryFormData } from '@/types';
+import * as Icons from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 
 export const DEFAULT_EXPENSE_CATEGORIES: CategoryFormData[] = [
     { name: 'Alimentação', type: 'expense', color: '#f97316', icon: 'UtensilsCrossed' },
@@ -42,37 +44,37 @@ export const CATEGORY_COLORS = [
     '#14b8a6', '#f59e0b', '#84cc16', '#6b7280',
 ];
 
-export const ICON_MAP = {
-    UtensilsCrossed: 'UtensilsCrossed',
-    Fuel: 'Fuel',
-    Home: 'Home',
-    Wifi: 'Wifi',
-    Gamepad2: 'Gamepad2',
-    Heart: 'Heart',
-    Car: 'Car',
-    GraduationCap: 'GraduationCap',
-    MoreHorizontal: 'MoreHorizontal',
-    Briefcase: 'Briefcase',
-    Laptop: 'Laptop',
-    ShoppingBag: 'ShoppingBag',
-    TrendingUp: 'TrendingUp',
-    Shirt: 'Shirt',
-    Music: 'Music',
-    Plane: 'Plane',
-    Phone: 'Phone',
-    Zap: 'Zap',
-    Gift: 'Gift',
-    Coffee: 'Coffee',
-    Dumbbell: 'Dumbbell',
-    BookOpen: 'BookOpen',
-    ShoppingCart: 'ShoppingCart',
-    CreditCard: 'CreditCard',
-    Building: 'Building',
-    Wrench: 'Wrench',
-    Dog: 'Dog',
-    Baby: 'Baby',
-    Scissors: 'Scissors',
-    Tv: 'Tv',
-} as const;
+export const ICON_MAP: Record<string, LucideIcon> = {
+    UtensilsCrossed: Icons.UtensilsCrossed,
+    Fuel: Icons.Fuel,
+    Home: Icons.Home,
+    Wifi: Icons.Wifi,
+    Gamepad2: Icons.Gamepad2,
+    Heart: Icons.Heart,
+    Car: Icons.Car,
+    GraduationCap: Icons.GraduationCap,
+    MoreHorizontal: Icons.MoreHorizontal,
+    Briefcase: Icons.Briefcase,
+    Laptop: Icons.Laptop,
+    ShoppingBag: Icons.ShoppingBag,
+    TrendingUp: Icons.TrendingUp,
+    Shirt: Icons.Shirt,
+    Music: Icons.Music,
+    Plane: Icons.Plane,
+    Phone: Icons.Phone,
+    Zap: Icons.Zap,
+    Gift: Icons.Gift,
+    Coffee: Icons.Coffee,
+    Dumbbell: Icons.Dumbbell,
+    BookOpen: Icons.BookOpen,
+    ShoppingCart: Icons.ShoppingCart,
+    CreditCard: Icons.CreditCard,
+    Building: Icons.Building,
+    Wrench: Icons.Wrench,
+    Dog: Icons.Dog,
+    Baby: Icons.Baby,
+    Scissors: Icons.Scissors,
+    Tv: Icons.Tv,
+};
 
 export type IconName = keyof typeof ICON_MAP;

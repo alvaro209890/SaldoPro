@@ -135,8 +135,8 @@ export function TransactionForm({
                         type="button"
                         onClick={() => setValue('type', 'expense')}
                         className={`flex items-center justify-center gap-2 py-2 text-sm font-medium rounded-lg transition-all ${type === 'expense'
-                                ? 'bg-red-500 text-white shadow-md'
-                                : 'text-gray-400 hover:text-gray-200'
+                            ? 'bg-red-500 text-white shadow-md'
+                            : 'text-gray-400 hover:text-gray-200'
                             }`}
                     >
                         <ArrowDown className="h-4 w-4" /> Despesa
@@ -145,8 +145,8 @@ export function TransactionForm({
                         type="button"
                         onClick={() => setValue('type', 'income')}
                         className={`flex items-center justify-center gap-2 py-2 text-sm font-medium rounded-lg transition-all ${type === 'income'
-                                ? 'bg-emerald-500 text-white shadow-md'
-                                : 'text-gray-400 hover:text-gray-200'
+                            ? 'bg-emerald-500 text-white shadow-md'
+                            : 'text-gray-400 hover:text-gray-200'
                             }`}
                     >
                         <ArrowUp className="h-4 w-4" /> Receita
@@ -183,15 +183,21 @@ export function TransactionForm({
                         {...register('description')}
                     />
 
-                    <Select
-                        label="Categoria"
-                        icon={Tag}
-                        error={errors.category?.message}
-                        options={[
-                            { value: '', label: 'Selecione...' },
-                            ...filteredCategories.map((c) => ({ value: c.id, label: c.name })),
-                        ]}
-                        {...register('category')}
+                    <Controller
+                        name="category"
+                        control={control}
+                        render={({ field }) => (
+                            <Select
+                                label="Categoria"
+                                icon={Tag}
+                                error={errors.category?.message}
+                                options={[
+                                    { value: '', label: 'Selecione...' },
+                                    ...filteredCategories.map((c) => ({ value: c.id, label: c.name })),
+                                ]}
+                                {...field}
+                            />
+                        )}
                     />
 
                     <Input
@@ -202,15 +208,21 @@ export function TransactionForm({
                         {...register('date')}
                     />
 
-                    <Select
-                        label="Forma de Pagamento"
-                        icon={CreditCard}
-                        error={errors.paymentMethod?.message}
-                        options={Object.entries(PAYMENT_METHOD_LABELS).map(([value, label]) => ({
-                            value,
-                            label,
-                        }))}
-                        {...register('paymentMethod')}
+                    <Controller
+                        name="paymentMethod"
+                        control={control}
+                        render={({ field }) => (
+                            <Select
+                                label="Forma de Pagamento"
+                                icon={CreditCard}
+                                error={errors.paymentMethod?.message}
+                                options={Object.entries(PAYMENT_METHOD_LABELS).map(([value, label]) => ({
+                                    value,
+                                    label,
+                                }))}
+                                {...field}
+                            />
+                        )}
                     />
                 </div>
 

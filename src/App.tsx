@@ -6,13 +6,11 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Login } from '@/pages/Login';
 import { Register } from '@/pages/Register';
 import { ResetPassword } from '@/pages/ResetPassword';
-
-// Placeholders for inner pages
-const Dashboard = () => <div className="p-8 text-white"><h1 className="text-2xl font-bold">Dashboard</h1></div>;
-const Transactions = () => <div className="p-8 text-white"><h1 className="text-2xl font-bold">Transações</h1></div>;
-const Categories = () => <div className="p-8 text-white"><h1 className="text-2xl font-bold">Categorias</h1></div>;
-const Reports = () => <div className="p-8 text-white"><h1 className="text-2xl font-bold">Relatórios</h1></div>;
-const Settings = () => <div className="p-8 text-white"><h1 className="text-2xl font-bold">Configurações</h1></div>;
+import { Dashboard } from '@/pages/Dashboard';
+import { Transactions } from '@/pages/Transactions';
+import { Categories } from '@/pages/Categories';
+import { Reports } from '@/pages/Reports';
+import { Settings } from '@/pages/Settings';
 
 export function App() {
     return (

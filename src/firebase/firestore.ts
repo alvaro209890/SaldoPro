@@ -19,7 +19,8 @@ import { generateMonthKey } from '@/utils/date';
 export function onTransactionsSnapshot(
     uid: string,
     monthKey: string,
-    callback: (transactions: Transaction[]) => void
+    callback: (transactions: Transaction[]) => void,
+    onError?: (error: Error) => void
 ): Unsubscribe {
     const ref = collection(db, 'users', uid, 'transactions');
     const q = query(
@@ -28,13 +29,20 @@ export function onTransactionsSnapshot(
         orderBy('date', 'desc')
     );
 
-    return onSnapshot(q, (snap) => {
-        const transactions = snap.docs.map((d) => ({
-            id: d.id,
-            ...d.data(),
-        })) as Transaction[];
-        callback(transactions);
-    });
+    return onSnapshot(
+        q,
+        (snap) => {
+            const transactions = snap.docs.map((d) => ({
+                id: d.id,
+                ...d.data(),
+            })) as Transaction[];
+            callback(transactions);
+        },
+        (error) => {
+            console.error('Error fetching transactions:', error);
+            if (onError) onError(error);
+        }
+    );
 }
 
 export async function addTransaction(
@@ -76,18 +84,26 @@ export async function deleteTransaction(uid: string, transactionId: string) {
 
 export function onCategoriesSnapshot(
     uid: string,
-    callback: (categories: Category[]) => void
+    callback: (categories: Category[]) => void,
+    onError?: (error: Error) => void
 ): Unsubscribe {
     const ref = collection(db, 'users', uid, 'categories');
     const q = query(ref, orderBy('name', 'asc'));
 
-    return onSnapshot(q, (snap) => {
-        const categories = snap.docs.map((d) => ({
-            id: d.id,
-            ...d.data(),
-        })) as Category[];
-        callback(categories);
-    });
+    return onSnapshot(
+        q,
+        (snap) => {
+            const categories = snap.docs.map((d) => ({
+                id: d.id,
+                ...d.data(),
+            })) as Category[];
+            callback(categories);
+        },
+        (error) => {
+            console.error('Error fetching categories:', error);
+            if (onError) onError(error);
+        }
+    );
 }
 
 export async function addCategory(
@@ -119,16 +135,24 @@ export async function deleteCategory(uid: string, categoryId: string) {
 
 export function onSettingsSnapshot(
     uid: string,
-    callback: (settings: UserSettings | null) => void
+    callback: (settings: UserSettings | null) => void,
+    onError?: (error: Error) => void
 ): Unsubscribe {
     const ref = doc(db, 'users', uid, 'settings', 'profile');
-    return onSnapshot(ref, (snap) => {
-        if (snap.exists()) {
-            callback(snap.data() as UserSettings);
-        } else {
-            callback(null);
+    return onSnapshot(
+        ref,
+        (snap) => {
+            if (snap.exists()) {
+                callback(snap.data() as UserSettings);
+            } else {
+                callback(null);
+            }
+        },
+        (error) => {
+            console.error('Error fetching settings:', error);
+            if (onError) onError(error);
         }
-    });
+    );
 }
 
 export async function updateSettings(
