@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: saldopro-whatsapp-backend
+    runtime: node
+    rootDir: backend
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    healthCheckPath: /healthz
+    disk:
+      name: baileys-auth
+      mountPath: /opt/render/project/src/backend/.baileys_auth
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: WHATSAPP_AUTH_DIR
+        value: /opt/render/project/src/backend/.baileys_auth
+      - key: WHATSAPP_AUTO_REPLY_ENABLED
+        value: true
+      - key: WHATSAPP_AUTO_REPLY_TEXT
+        value: Recebemos sua mensagem. Em breve retornamos.
+      - key: WHATSAPP_AI_ENABLED
+        value: true
+      - key: WHATSAPP_AI_MAX_RECENT_TX
+        value: 50
+      - key: WHATSAPP_API_TOKEN
+        sync: false
+      - key: WHATSAPP_OWNER_UID
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false

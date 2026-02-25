@@ -198,29 +198,37 @@ export function AIAssistant() {
         : [{ id: 'intro', role: 'assistant' as const, content: 'Olá! Sou o SaldoPro AI. Posso te ajudar a analisar seus gastos, lançar novas despesas ou editar antigos lançamentos.\n\nExperimente enviar a foto de um comprovante para lançarmos juntos! Como posso ser útil hoje?' }];
 
     return (
-        <div className="flex h-[calc(100vh-8rem)] gap-6 animate-fade-in max-w-6xl mx-auto">
+        <div className="flex h-full w-full overflow-hidden bg-gray-950 text-gray-100 font-sans">
 
             {/* Sidebar with Sessions */}
-            <div className="w-72 shrink-0 flex flex-col gap-4">
-                <div className="flex items-center gap-3 mb-2 px-2">
-                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0">
-                        <Sparkles className="w-5 h-5 text-white" />
-                    </div>
-                    <div>
-                        <h1 className="text-xl font-bold text-white leading-tight">SaldoPro AI</h1>
-                        <p className="text-xs text-indigo-300">Seu Conselheiro</p>
+            <div className="w-80 shrink-0 flex flex-col border-r border-surface-800 bg-[#0c1216] relative z-10 shadow-2xl">
+                <div className="p-4 border-b border-surface-800/50 flex flex-col gap-4">
+
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0">
+                            <Sparkles className="w-5 h-5 text-white" />
+                        </div>
+                        <div>
+                            <h1 className="text-xl font-bold text-white leading-tight">SaldoPro AI</h1>
+                            <p className="text-xs text-green-400 font-medium flex items-center gap-1.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span> Online
+                            </p>
+                        </div>
                     </div>
                 </div>
 
-                <Button
-                    onClick={handleCreateSession}
-                    className="w-full justify-start gap-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl h-11"
-                >
-                    <MessageSquarePlus className="w-4 h-4" />
-                    Nova Conversa
-                </Button>
+                <div className="px-4 pt-4 pb-2">
 
-                <div className="flex-1 overflow-y-auto custom-scrollbar space-y-1 pr-2">
+                    <Button
+                        onClick={handleCreateSession}
+                        className="w-full justify-start gap-2 bg-surface-800 hover:bg-surface-700 text-gray-200 border border-surface-700 rounded-xl h-11"
+                    >
+                        <MessageSquarePlus className="w-4 h-4" />
+                        Nova Conversa
+                    </Button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto custom-scrollbar space-y-0.5 px-3 pb-4">
                     {sessionsLoading ? (
                         <div className="text-center py-4 text-gray-500 text-sm">Carregando conversas...</div>
                     ) : sessions.length === 0 ? (
@@ -231,12 +239,15 @@ export function AIAssistant() {
                                 key={session.id}
                                 onClick={() => setActiveSessionId(session.id)}
                                 className={`group flex items-center justify-between p-3 rounded-xl cursor-pointer transition-colors ${activeSessionId === session.id
-                                    ? 'bg-surface-800 border-indigo-500/50 border text-white'
-                                    : 'bg-transparent border border-transparent text-gray-400 hover:bg-surface-800/50 hover:text-gray-200'
+                                    ? 'bg-surface-800/80 border border-surface-700/50 text-white relative'
+                                    : 'bg-transparent border border-transparent text-gray-400 hover:bg-surface-800/30 hover:text-gray-200'
                                     }`}
                             >
+                                {activeSessionId === session.id && (
+                                    <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-green-500 rounded-r-full" />
+                                )}
                                 <div className="flex items-center gap-3 overflow-hidden">
-                                    <MessageSquare className={`w-4 h-4 shrink-0 ${activeSessionId === session.id ? 'text-indigo-400' : 'text-gray-500'}`} />
+                                    <MessageSquare className={`w-4 h-4 shrink-0 ${activeSessionId === session.id ? 'text-green-500' : 'text-surface-600'}`} />
                                     <span className="text-sm truncate font-medium">{session.title}</span>
                                 </div>
                                 <button
@@ -253,29 +264,29 @@ export function AIAssistant() {
             </div>
 
             {/* Main Chat Area */}
-            <div className="flex-1 rounded-3xl border border-surface-700/50 bg-surface-900/40 shadow-2xl flex flex-col overflow-hidden min-h-0 relative">
+            <div className="flex-1 bg-[#0f1419] flex flex-col overflow-hidden relative">
 
                 {!activeSessionId ? (
                     <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
-                        <div className="w-20 h-20 rounded-3xl bg-surface-800/80 border border-surface-700/50 shadow-inner flex items-center justify-center mb-6">
-                            <Bot className="w-10 h-10 text-indigo-400/80" />
+                        <div className="w-20 h-20 rounded-3xl bg-surface-800/50 border border-surface-700/30 flex items-center justify-center mb-6 shadow-inner">
+                            <Bot className="w-10 h-10 text-gray-400" />
                         </div>
-                        <h2 className="text-xl font-semibold text-white mb-2">Como posso ajudar?</h2>
+                        <h2 className="text-2xl font-semibold text-white mb-2">Como posso ajudar?</h2>
                         <p className="text-gray-400 max-w-md">Selecione uma conversa ao lado ou crie uma nova para começar a interagir com seu assistente financeiro inteligente.</p>
-                        <Button onClick={handleCreateSession} className="mt-6 gap-2 bg-indigo-600 hover:bg-indigo-700">
+                        <Button onClick={handleCreateSession} className="mt-8 gap-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full px-6 py-5">
                             <MessageSquarePlus className="w-4 h-4" /> Criar Conversa
                         </Button>
                     </div>
                 ) : (
                     <>
                         {/* Chat History View */}
-                        <div className="flex-1 overflow-y-auto px-4 py-6 custom-scrollbar space-y-6">
+                        <div className="flex-1 overflow-y-auto px-6 py-8 custom-scrollbar space-y-8 lg:px-24 xl:px-48">
                             {displayHistory.map((msg, idx) => {
                                 const isUser = msg.role === 'user';
                                 return (
                                     <div key={idx} className={`flex gap-4 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
-                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 shadow-sm border
-                                            ${isUser ? 'bg-indigo-900/30 border-indigo-700/30 text-indigo-300' : 'bg-surface-800 border-surface-700 text-gray-400'}`}>
+                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 border
+                                            ${isUser ? 'bg-surface-800 border-surface-700 text-gray-400' : 'bg-green-900/20 border-green-500/20 text-green-500'}`}>
                                             {isUser ? <User className="w-5 h-5" /> : <Bot className="w-6 h-6" />}
                                         </div>
                                         <div className={`max-w-[75%] space-y-2 ${isUser ? 'items-end flex flex-col' : 'items-start flex flex-col'}`}>
@@ -286,10 +297,10 @@ export function AIAssistant() {
                                                     </a>
                                                 </div>
                                             )}
-                                            <div className={`px-5 py-3.5 shadow-md text-sm whitespace-pre-wrap leading-relaxed
+                                            <div className={`px-5 py-4 text-sm whitespace-pre-wrap leading-relaxed border
                                                 ${isUser
-                                                    ? 'bg-indigo-600 text-white rounded-3xl rounded-tr-md'
-                                                    : 'bg-surface-800/80 border border-surface-700/50 text-gray-100 rounded-3xl rounded-tl-md backdrop-blur-sm'}`}>
+                                                    ? 'bg-surface-800 border-surface-700 text-gray-100 rounded-3xl rounded-tr-md'
+                                                    : 'bg-transparent border-surface-800/60 text-gray-200 rounded-3xl rounded-tl-md'}`}>
                                                 {msg.content}
                                             </div>
                                         </div>
@@ -313,53 +324,58 @@ export function AIAssistant() {
                         </div>
 
                         {/* Input Area */}
-                        <div className="p-4 bg-surface-900/60 backdrop-blur-xl border-t border-surface-700/50 shrink-0">
-                            {imagePreview && (
-                                <div className="relative inline-block mb-3 animate-in fade-in zoom-in duration-200">
-                                    <img src={imagePreview} alt="Preview" className="h-24 w-auto rounded-lg border border-surface-600 object-cover shadow-lg" />
+                        <div className="p-4 lg:px-24 xl:px-48 pb-8 shrink-0 relative bg-gradient-to-t from-[#0f1419] via-[#0f1419] to-transparent">
+                            <div className="max-w-4xl mx-auto">
+                                {imagePreview && (
+                                    <div className="relative inline-block mb-3 animate-in fade-in zoom-in duration-200">
+                                        <img src={imagePreview} alt="Preview" className="h-24 w-auto rounded-xl border border-surface-600 object-cover shadow-lg" />
+                                        <button
+                                            onClick={handleRemoveImage}
+                                            className="absolute -top-2 -right-2 bg-surface-700 hover:bg-red-500 border border-surface-600 rounded-full p-1.5 text-white transition-colors shadow-lg"
+                                        >
+                                            <X className="w-3.5 h-3.5" />
+                                        </button>
+                                    </div>
+                                )}
+                                <div className="relative flex items-end bg-surface-900/80 border border-surface-700/50 rounded-[1.75rem] backdrop-blur-xl shadow-2xl p-1 gap-2 focus-within:border-surface-600 focus-within:ring-1 focus-within:ring-surface-600 transition-all">
                                     <button
-                                        onClick={handleRemoveImage}
-                                        className="absolute -top-2 -right-2 bg-surface-700 hover:bg-red-500 border border-surface-600 rounded-full p-1.5 text-white transition-colors shadow-lg"
-                                    >
-                                        <X className="w-3.5 h-3.5" />
-                                    </button>
-                                </div>
-                            )}
-                            <div className="relative flex items-end gap-3">
-                                <button
-                                    type="button"
-                                    className="shrink-0 h-[52px] w-[52px] flex items-center justify-center rounded-2xl border border-surface-700/50 bg-surface-800/50 text-gray-400 hover:text-indigo-400 hover:border-indigo-500/50 hover:bg-surface-700/80 transition-all focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50 shadow-sm backdrop-blur-sm"
-                                    onClick={() => fileInputRef.current?.click()}
-                                    disabled={isProcessing}
-                                    title="Anexar comprovante"
-                                >
-                                    <ImagePlus className="w-6 h-6" />
-                                </button>
-                                <input
-                                    type="file"
-                                    accept="image/*"
-                                    className="hidden"
-                                    ref={fileInputRef}
-                                    onChange={handleImageChange}
-                                />
-                                <div className="relative flex-1">
-                                    <textarea
-                                        value={input}
-                                        onChange={(e) => setInput(e.target.value)}
-                                        onKeyDown={handleKeyDown}
+                                        type="button"
+                                        className="shrink-0 h-10 w-10 flex items-center justify-center rounded-full text-gray-400 hover:text-white hover:bg-surface-800 transition-all focus:outline-none disabled:opacity-50 mt-auto mb-1 ml-1"
+                                        onClick={() => fileInputRef.current?.click()}
                                         disabled={isProcessing}
-                                        placeholder="Digite sua mensagem ou anexe um comprovante..."
-                                        className="w-full min-h-[52px] max-h-[140px] resize-none rounded-2xl border border-surface-700/50 bg-surface-800/50 p-3.5 pr-14 text-sm text-gray-100 placeholder-gray-500 transition-all focus:border-indigo-500/50 focus:bg-surface-800/80 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 custom-scrollbar disabled:opacity-50 shadow-sm backdrop-blur-sm"
-                                        rows={1}
+                                        title="Anexar comprovante"
+                                    >
+                                        <ImagePlus className="w-5 h-5" />
+                                    </button>
+                                    <input
+                                        type="file"
+                                        accept="image/*"
+                                        className="hidden"
+                                        ref={fileInputRef}
+                                        onChange={handleImageChange}
                                     />
+                                    <div className="relative flex-1">
+                                        <textarea
+                                            value={input}
+                                            onChange={(e) => setInput(e.target.value)}
+                                            onKeyDown={handleKeyDown}
+                                            disabled={isProcessing}
+                                            placeholder="Digite sua mensagem..."
+                                            className="w-full min-h-[52px] max-h-[200px] resize-none bg-transparent py-4 text-sm text-gray-100 placeholder-gray-500 transition-all focus:outline-none custom-scrollbar disabled:opacity-50"
+                                            rows={1}
+                                        />
+                                    </div>
                                     <Button
                                         onClick={handleSend}
                                         disabled={(!input.trim() && !imagePreview) || isProcessing}
                                         isLoading={isProcessing}
-                                        className="absolute right-2 bottom-2 h-9 w-10 p-0 rounded-xl bg-indigo-600 hover:bg-indigo-500 shadow-md text-white flex items-center justify-center disabled:opacity-50 disabled:hover:bg-indigo-600 transition-all duration-200"
+                                        className="shrink-0 h-10 w-10 p-0 rounded-full bg-green-600/20 text-green-500 hover:bg-green-600/30 flex items-center justify-center disabled:opacity-50 transition-all disabled:bg-surface-800 disabled:text-gray-600 mt-auto mb-1 mr-1"
                                     >
                                         {!isProcessing && <Send className="w-4 h-4 ml-0.5" />}
                                     </Button>
+                                </div>
+                                <div className="text-center mt-3 text-xs text-gray-600">
+                                    A IA pode cometer erros. Considere verificar informações importantes.
                                 </div>
                             </div>
                         </div>

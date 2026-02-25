@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
 import { Menu } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 
 export function AppLayout() {
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+    const location = useLocation();
+    const isFullScreenApp = location.pathname.startsWith('/app/ai');
 
     return (
         <div className="flex h-screen overflow-hidden bg-gray-950">
@@ -22,8 +24,8 @@ export function AppLayout() {
                     </button>
                 </header>
 
-                <div className="flex-1 overflow-auto bg-gray-950">
-                    <div className="container mx-auto max-w-7xl p-4 sm:p-6 lg:p-8">
+                <div className={`flex-1 overflow-auto bg-gray-950 ${isFullScreenApp ? '' : 'p-4 sm:p-6 lg:p-8'}`}>
+                    <div className={isFullScreenApp ? 'h-full w-full' : 'container mx-auto max-w-7xl'}>
                         <Outlet />
                     </div>
                 </div>
