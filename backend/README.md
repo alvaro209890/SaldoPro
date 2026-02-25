@@ -9,6 +9,7 @@ Backend Node.js + TypeScript para integrar WhatsApp (Baileys) com Firestore e ro
 - Listener de mensagens recebidas.
 - Auto-resposta simples por variavel de ambiente.
 - Modo IA no WhatsApp usando Groq para criar/editar/excluir lancamentos no Firestore.
+- Processamento de imagens recebidas no WhatsApp (sem Cloudinary), usando modelo vision da Groq.
 - Whitelist de numeros autorizados lida de `users/{uid}/settings/profile.whatsappAllowedNumbers`.
 - Persistencia de mensagens na colecao `whatsappMessages` no Firestore.
 - API protegida por Bearer token.
@@ -26,6 +27,10 @@ Backend Node.js + TypeScript para integrar WhatsApp (Baileys) com Firestore e ro
 - `WHATSAPP_OWNER_UID`: UID do usuario dono dos dados financeiros no Firestore.
 - `GROQ_API_KEY`: chave da API Groq.
 - `WHATSAPP_AI_ENABLED=true`.
+- Ajuste opcional de contexto e imagens:
+  - `WHATSAPP_AI_HISTORY_LIMIT` (padrao: `10`)
+  - `WHATSAPP_AI_IMAGE_MAX_BYTES` (padrao: `5242880`)
+  - `GROQ_VISION_MODEL` (padrao: `llama-3.2-90b-vision-preview`)
 4. Instale dependencias:
 
 ```bash

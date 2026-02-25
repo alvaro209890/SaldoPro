@@ -127,45 +127,61 @@ export function Settings() {
     }
 
     return (
-        <div className="space-y-6 max-w-2xl animate-fade-in">
-            <div>
-                <h1 className="text-2xl font-bold text-white">Configuracoes</h1>
-                <p className="text-sm text-gray-400 mt-1">
-                    Gerencie suas preferencias e perfil.
+        <div className="max-w-4xl mx-auto py-8 px-4 sm:px-6 lg:px-8 animate-fade-in">
+            <div className="mb-10">
+                <h1 className="text-3xl font-bold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">Configurações</h1>
+                <p className="text-sm text-gray-500 mt-2">
+                    Gerencie suas preferências, orçamento, perfil e alertas do WhatsApp.
                 </p>
             </div>
 
             <div className="space-y-8">
-                <section className="rounded-2xl border border-surface-700 bg-surface-900/50 glass-card p-6 sm:p-8">
-                    <div className="flex items-center gap-4 mb-6 pb-6 border-b border-surface-800">
-                        <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center text-2xl font-bold text-white uppercase shadow-lg shadow-indigo-500/20">
-                            {displayName?.charAt(0) || user?.email?.charAt(0) || 'U'}
-                        </div>
-                        <div>
-                            <h2 className="text-lg font-semibold text-white">{displayName || 'Usuario'}</h2>
-                            <p className="text-sm text-gray-400">{user?.email}</p>
-                        </div>
-                    </div>
+                {/* Profile Section */}
+                <section className="relative overflow-hidden rounded-3xl border border-surface-800 bg-[#0c1216] shadow-2xl">
+                    <div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-br from-indigo-900/20 to-purple-900/20 opacity-50" />
 
-                    <div className="text-sm text-gray-400">
-                        <p className="mb-2">Conta criada em: {user?.metadata.creationTime ? new Date(user.metadata.creationTime).toLocaleDateString('pt-BR') : 'Desconhecido'}</p>
-                        <p>Os dados de perfil (nome e email) sao gerenciados na sua conta do Google/Firebase.</p>
+                    <div className="relative p-6 sm:p-10">
+                        <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6 mb-8 text-center sm:text-left">
+                            <div className="relative">
+                                <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center text-4xl font-bold text-white uppercase shadow-xl shadow-indigo-500/20 ring-4 ring-surface-900 ring-offset-2 ring-offset-[#0c1216] z-10">
+                                    {displayName?.charAt(0) || user?.email?.charAt(0) || 'U'}
+                                </div>
+                                <div className="absolute inset-0 rounded-full bg-indigo-500 blur-xl opacity-40 animate-pulse" />
+                            </div>
+
+                            <div className="mt-2 sm:mt-4">
+                                <h2 className="text-2xl font-semibold text-white tracking-tight">{displayName || 'Usuário SaldoPro'}</h2>
+                                <p className="text-indigo-400 font-medium">{user?.email}</p>
+                            </div>
+                        </div>
+
+                        <div className="bg-[#0f1419] rounded-2xl p-5 border border-surface-800/60 inline-block w-full text-sm text-gray-400">
+                            <div className="flex gap-2 items-center mb-2">
+                                <User className="w-4 h-4 text-indigo-400" />
+                                <span className="font-medium text-gray-300">Detalhes da Conta</span>
+                            </div>
+                            <p className="mb-1">Conta criada em: <span className="text-gray-200">{user?.metadata.creationTime ? new Date(user.metadata.creationTime).toLocaleDateString('pt-BR') : 'Desconhecido'}</span></p>
+                            <p>Os dados de perfil (nome e email) são gerenciados com segurança pela sua conta Google/Firebase.</p>
+                        </div>
                     </div>
                 </section>
 
-                <section className="rounded-2xl border border-surface-700 bg-surface-900/50 glass-card overflow-hidden">
-                    <div className="p-6 border-b border-surface-800">
-                        <h2 className="text-lg font-semibold text-white">Preferencias do App</h2>
-                        <p className="text-sm text-gray-400 mt-1">
-                            Personalize como o SaldoPro funciona para voce.
+                {/* Preferences Section */}
+                <section className="rounded-3xl border border-surface-800 bg-[#0c1216] shadow-2xl overflow-hidden relative">
+                    <div className="p-6 sm:p-10 border-b border-surface-800/50 bg-[#0c1216]">
+                        <h2 className="text-xl font-semibold text-white flex items-center gap-2">
+                            Preferências do Aplicativo
+                        </h2>
+                        <p className="text-sm text-gray-500 mt-2 max-w-2xl">
+                            Ajuste como os cálculos são feitos e como seu painel de controle interage com suas metas diárias.
                         </p>
                     </div>
 
-                    <form onSubmit={handleSubmit(onSubmit)} className="p-6 space-y-6">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                            <div className="sm:col-span-2">
+                    <form onSubmit={handleSubmit(onSubmit)} className="p-6 sm:p-10 space-y-8 bg-[#0a0f12]">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                            <div className="md:col-span-2 bg-[#0f1419] p-6 rounded-2xl border border-surface-800/80">
                                 <Input
-                                    label="Orcamento Mensal (Meta de gastos)"
+                                    label="Orçamento Mensal (Meta de gastos)"
                                     type="number"
                                     step="0.01"
                                     min="0"
@@ -173,67 +189,84 @@ export function Settings() {
                                     error={errors.budget?.message}
                                     {...register('budget', { valueAsNumber: true })}
                                 />
-                                <p className="mt-1 text-xs text-gray-500">
-                                    Defina um limite ideal de gastos. Isso habilita o card de acompanhamento no Dashboard. Se for 0, o card nao aparece.
+                                <p className="mt-3 text-sm text-gray-500 flex items-start gap-2">
+                                    <span className="text-indigo-400 mt-0.5">💡</span>
+                                    Defina um limite ideal de gastos mensais. Recomendamos estipular um valor 10% abaixo da sua receita. Isso habilitará o card de acompanhamento no Dashboard principal. Se deixar como 0, o card sumirá.
                                 </p>
                             </div>
 
-                            <Input
-                                label="Dia de fechamento/inicio"
-                                type="number"
-                                min="1"
-                                max="31"
-                                icon={Calendar}
-                                error={errors.startDay?.message}
-                                {...register('startDay', { valueAsNumber: true })}
-                                disabled
-                            />
+                            <div className="bg-[#0f1419] p-6 rounded-2xl border border-surface-800/80">
+                                <Input
+                                    label="Dia de fechamento/início"
+                                    type="number"
+                                    min="1"
+                                    max="31"
+                                    icon={Calendar}
+                                    error={errors.startDay?.message}
+                                    {...register('startDay', { valueAsNumber: true })}
+                                    disabled
+                                />
+                                <p className="mt-2 text-xs text-gray-600">Fixo no dia 1 (MVP)</p>
+                            </div>
 
-                            <Controller
-                                name="currency"
-                                control={control}
-                                render={({ field }) => (
-                                    <Select
-                                        label="Moeda"
-                                        options={[{ value: 'BRL', label: 'BRL - Real Brasileiro' }]}
-                                        error={errors.currency?.message}
-                                        disabled
-                                        {...field}
-                                    />
-                                )}
-                            />
+                            <div className="bg-[#0f1419] p-6 rounded-2xl border border-surface-800/80">
+                                <Controller
+                                    name="currency"
+                                    control={control}
+                                    render={({ field }) => (
+                                        <Select
+                                            label="Moeda Principal"
+                                            options={[{ value: 'BRL', label: 'BRL - Real Brasileiro' }]}
+                                            error={errors.currency?.message}
+                                            disabled
+                                            {...field}
+                                        />
+                                    )}
+                                />
+                                <p className="mt-2 text-xs text-gray-600">Apenas BRL disponível (MVP)</p>
+                            </div>
                         </div>
 
-                        <div className="flex justify-end pt-4 border-t border-surface-800">
-                            <Button type="submit" isLoading={isSaving} disabled={!isDirty}>
-                                <Save className="w-4 h-4 mr-2" />
-                                Salvar alteracoes
+                        <div className="flex justify-end pt-8 border-t border-surface-800/50">
+                            <Button
+                                type="submit"
+                                isLoading={isSaving}
+                                disabled={!isDirty}
+                                className="px-8 py-6 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium shadow-lg shadow-indigo-500/25 transition-all w-full sm:w-auto text-lg"
+                            >
+                                <Save className="w-5 h-5 mr-3" />
+                                Salvar Preferências
                             </Button>
                         </div>
                     </form>
                 </section>
 
-                <section className="rounded-2xl border border-surface-700 bg-surface-900/50 glass-card overflow-hidden">
-                    <div className="p-6 border-b border-surface-800">
-                        <h2 className="text-lg font-semibold text-white">WhatsApp Autorizado</h2>
-                        <p className="text-sm text-gray-400 mt-1">
-                            Apenas numeros cadastrados aqui podem receber resposta da IA no WhatsApp.
+                {/* WhatsApp Section */}
+                <section className="rounded-3xl border border-surface-800 bg-[#0c1216] shadow-2xl overflow-hidden relative">
+                    <div className="p-6 sm:p-10 border-b border-surface-800/50 bg-[#0c1216]">
+                        <h2 className="text-xl font-semibold text-white flex items-center gap-2">
+                            WhatsApp Autorizado
+                        </h2>
+                        <p className="text-sm text-gray-500 mt-2 max-w-2xl">
+                            Apenas números cadastrados aqui podem receber respostas da IA no WhatsApp.
                         </p>
                     </div>
 
-                    <div className="p-6 space-y-4">
-                        <div className="flex flex-col sm:flex-row gap-3">
-                            <Input
-                                label="Numero com DDI"
-                                placeholder="Ex: 5511999999999"
-                                icon={Phone}
-                                value={whatsappInput}
-                                onChange={(event) => setWhatsappInput(event.target.value)}
-                            />
+                    <div className="p-6 sm:p-10 space-y-8 bg-[#0a0f12]">
+                        <div className="bg-[#0f1419] p-6 rounded-2xl border border-surface-800/80 flex flex-col sm:flex-row gap-4 items-end">
+                            <div className="flex-1 w-full">
+                                <Input
+                                    label="Número com DDI (Ex: 5511999999999)"
+                                    placeholder="55..."
+                                    icon={Phone}
+                                    value={whatsappInput}
+                                    onChange={(event) => setWhatsappInput(event.target.value)}
+                                />
+                            </div>
                             <Button
                                 type="button"
                                 onClick={handleAddNumber}
-                                className="sm:self-end"
+                                className="w-full sm:w-auto h-11"
                                 variant="secondary"
                             >
                                 <Plus className="w-4 h-4 mr-2" />
@@ -242,21 +275,28 @@ export function Settings() {
                         </div>
 
                         {whatsappAllowedNumbers.length === 0 ? (
-                            <p className="text-sm text-gray-500">
-                                Nenhum numero autorizado. Mensagens recebidas serao ignoradas.
-                            </p>
+                            <div className="bg-[#0f1419] rounded-2xl p-8 border border-surface-800/60 text-center">
+                                <p className="text-gray-500">
+                                    Nenhum número autorizado ainda. As mensagens recebidas serão ignoradas.
+                                </p>
+                            </div>
                         ) : (
-                            <div className="space-y-2">
+                            <div className="space-y-3">
                                 {whatsappAllowedNumbers.map((phone) => (
                                     <div
                                         key={phone}
-                                        className="flex items-center justify-between rounded-xl border border-surface-700 bg-surface-900/70 px-4 py-2"
+                                        className="flex items-center justify-between rounded-xl border border-surface-800/80 bg-[#0f1419] px-5 py-4 shadow-sm"
                                     >
-                                        <span className="text-sm font-medium text-gray-200">{phone}</span>
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-8 h-8 rounded-full bg-green-500/10 flex items-center justify-center">
+                                                <Phone className="w-4 h-4 text-green-500" />
+                                            </div>
+                                            <span className="text-sm font-medium text-gray-200">{phone}</span>
+                                        </div>
                                         <button
                                             type="button"
                                             onClick={() => handleRemoveNumber(phone)}
-                                            className="rounded-lg p-1.5 text-gray-500 hover:bg-red-500/10 hover:text-red-400 transition-colors"
+                                            className="rounded-lg p-2 text-gray-500 hover:bg-red-500/10 hover:text-red-400 transition-colors focus:outline-none"
                                             aria-label={`Remover ${phone}`}
                                         >
                                             <Trash2 className="w-4 h-4" />
@@ -266,15 +306,16 @@ export function Settings() {
                             </div>
                         )}
 
-                        <div className="flex justify-end pt-2">
+                        <div className="flex justify-end pt-8 border-t border-surface-800/50">
                             <Button
                                 type="button"
                                 isLoading={isSavingNumbers}
                                 disabled={!hasNumbersChanged}
                                 onClick={handleSaveNumbers}
+                                className="px-8 py-6 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium shadow-lg shadow-indigo-500/25 transition-all w-full sm:w-auto text-lg"
                             >
-                                <Save className="w-4 h-4 mr-2" />
-                                Salvar numeros
+                                <Save className="w-5 h-5 mr-3" />
+                                Salvar Números
                             </Button>
                         </div>
                     </div>

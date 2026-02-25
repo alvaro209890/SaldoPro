@@ -1,5 +1,6 @@
 import makeWASocket, {
   DisconnectReason,
+  downloadMediaMessage,
   fetchLatestBaileysVersion,
   useMultiFileAuthState,
   type proto,
@@ -9,14 +10,22 @@ import { mkdir, rm } from 'node:fs/promises';
 import QRCode from 'qrcode';
 import qrcodeTerminal from 'qrcode-terminal';
 import { processWhatsAppAIMessage } from '../ai/assistant';
+import type { GroqChatMessage } from '../ai/groq';
 import { env } from '../config/env';
-import { getAllowedWhatsAppNumbers, inboundMessageExists, saveMessageSafe } from '../lib/firestore';
+import {
+  getAllowedWhatsAppNumbers,
+  getRecentConversationByPhone,
+  inboundMessageExists,
+  saveMessageSafe
+} from '../lib/firestore';
 import { logger } from '../lib/logger';
 import type { MessageDirection, RuntimeStatus, WhatsAppMessageRecord } from '../types/whatsapp';
 import {
   extractMessageText,
   extractRawType,
+  getImageMimeType,
   isGroupJid,
+  isImageMessage,
   isStatusJid,
   jidToPhone,
   normalizePhoneNumber,
@@ -32,6 +41,13 @@ function asDisconnectCode(error: unknown): number | null {
   return typeof code === 'number' ? code : null;
 }
 
+interface ConversationEntry {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+const IMAGE_ONLY_FALLBACK_TEXT = 'Analise a imagem enviada e registre o lancamento corretamente.';
+
 export class WhatsAppClient {
   private socket: WASocket | null = null;
   private state: RuntimeStatus['state'] = 'connecting';
@@ -45,6 +61,7 @@ export class WhatsAppClient {
   private allowReconnect = true;
   private readonly processedInboundIds = new Set<string>();
   private readonly processedInboundOrder: string[] = [];
+  private readonly conversationByPhone = new Map<string, ConversationEntry[]>();
 
   async start(): Promise<void> {
     await mkdir(env.whatsappAuthDir, { recursive: true });
@@ -107,7 +124,12 @@ export class WhatsAppClient {
     }
 
     const jid = normalizePhoneToJid(to);
-    return this.sendWithRetry(jid, normalizedText, 'outbound');
+    const result = await this.sendWithRetry(jid, normalizedText, 'outbound');
+    await this.appendConversationMessage(jidToPhone(jid), {
+      role: 'assistant',
+      content: normalizedText
+    });
+    return result;
   }
 
   async resetSession(): Promise<void> {
@@ -255,6 +277,8 @@ export class WhatsAppClient {
     const timestamp = waTimestamp ? new Date(waTimestamp * 1000).toISOString() : new Date().toISOString();
     const text = extractMessageText(message);
     const rawType = extractRawType(message);
+    const imageDataUrl = await this.extractInboundImageDataUrl(message);
+    const conversationText = text.trim() || (imageDataUrl ? IMAGE_ONLY_FALLBACK_TEXT : '');
 
     const inboundRecord: WhatsAppMessageRecord = {
       messageId,
@@ -269,18 +293,29 @@ export class WhatsAppClient {
       createdAt: new Date().toISOString(),
       metadata: {
         fromMe: false,
-        isGroup: false
+        isGroup: false,
+        hasImage: Boolean(imageDataUrl)
       }
     };
 
     await saveMessageSafe(inboundRecord);
     this.rememberInbound(messageId);
+    if (conversationText || imageDataUrl) {
+      await this.appendConversationMessage(remotePhone, {
+        role: 'user',
+        content: conversationText
+      });
+    }
 
-    await this.sendSmartReply(remoteJid, text);
+    await this.sendSmartReply(remoteJid, remotePhone, conversationText, imageDataUrl);
   }
 
-  private async sendSmartReply(remoteJid: string, inboundText: string): Promise<void> {
-    const remotePhone = jidToPhone(remoteJid);
+  private async sendSmartReply(
+    remoteJid: string,
+    remotePhone: string,
+    inboundText: string,
+    imageDataUrl: string | null
+  ): Promise<void> {
     if (!(await this.isAllowedSender(remotePhone))) {
       logger.info('Reply blocked: sender is no longer whitelisted', {
         to: remotePhone
@@ -288,11 +323,25 @@ export class WhatsAppClient {
       return;
     }
 
-    if (env.whatsappAiEnabled && inboundText.trim()) {
+    const hasAiInput = inboundText.trim().length > 0 || Boolean(imageDataUrl);
+    if (env.whatsappAiEnabled && hasAiInput) {
       try {
-        const aiReply = await processWhatsAppAIMessage(inboundText.trim());
+        const conversation = await this.getConversationHistory(remotePhone);
+        const aiMessages: GroqChatMessage[] = conversation.map((entry, index) => ({
+          role: entry.role,
+          content: entry.content,
+          ...(imageDataUrl && index === conversation.length - 1 && entry.role === 'user'
+            ? { imageDataUrl }
+            : {})
+        }));
+
+        const aiReply = await processWhatsAppAIMessage(aiMessages);
         if (aiReply.trim()) {
           await this.sendWithRetry(remoteJid, aiReply.trim(), 'auto_reply');
+          await this.appendConversationMessage(remotePhone, {
+            role: 'assistant',
+            content: aiReply.trim()
+          });
           return;
         }
       } catch (error) {
@@ -301,17 +350,25 @@ export class WhatsAppClient {
     }
 
     if (!env.whatsappAutoReplyEnabled) return;
-    await this.sendAutoReply(remoteJid);
+    const sent = await this.sendAutoReply(remoteJid);
+    if (sent) {
+      await this.appendConversationMessage(remotePhone, {
+        role: 'assistant',
+        content: env.whatsappAutoReplyText.trim()
+      });
+    }
   }
 
-  private async sendAutoReply(remoteJid: string): Promise<void> {
-    if (!this.socket || !this.connected) return;
-    if (!env.whatsappAutoReplyText.trim()) return;
+  private async sendAutoReply(remoteJid: string): Promise<boolean> {
+    if (!this.socket || !this.connected) return false;
+    if (!env.whatsappAutoReplyText.trim()) return false;
 
     try {
       await this.sendWithRetry(remoteJid, env.whatsappAutoReplyText.trim(), 'auto_reply');
+      return true;
     } catch (error) {
       logger.error('Failed to send WhatsApp auto-reply', error);
+      return false;
     }
   }
 
@@ -469,5 +526,62 @@ export class WhatsAppClient {
       logger.error('Failed to refresh WhatsApp allowed numbers', error);
       return false;
     }
+  }
+
+  private async extractInboundImageDataUrl(message: proto.IWebMessageInfo): Promise<string | null> {
+    if (!isImageMessage(message)) return null;
+
+    const mimeType = getImageMimeType(message) || 'image/jpeg';
+    try {
+      const mediaBuffer = await downloadMediaMessage(message, 'buffer', {});
+      if (!mediaBuffer || mediaBuffer.length === 0) {
+        return null;
+      }
+
+      if (mediaBuffer.length > env.whatsappAiImageMaxBytes) {
+        logger.warn('Ignoring inbound image because it exceeds max size', {
+          size: mediaBuffer.length,
+          maxAllowed: env.whatsappAiImageMaxBytes
+        });
+        return null;
+      }
+
+      const base64 = mediaBuffer.toString('base64');
+      return `data:${mimeType};base64,${base64}`;
+    } catch (error) {
+      logger.error('Failed to download inbound WhatsApp image', error);
+      return null;
+    }
+  }
+
+  private async getConversationHistory(phone: string): Promise<ConversationEntry[]> {
+    const normalized = normalizePhoneNumber(phone);
+    if (normalized.length < 10) return [];
+
+    const cached = this.conversationByPhone.get(normalized);
+    if (cached) return cached;
+
+    try {
+      const loaded = await getRecentConversationByPhone(normalized, env.whatsappAiHistoryLimit);
+      this.conversationByPhone.set(normalized, loaded);
+      return loaded;
+    } catch (error) {
+      logger.error('Failed to load WhatsApp conversation history', error);
+      const empty: ConversationEntry[] = [];
+      this.conversationByPhone.set(normalized, empty);
+      return empty;
+    }
+  }
+
+  private async appendConversationMessage(phone: string, message: ConversationEntry): Promise<void> {
+    const normalized = normalizePhoneNumber(phone);
+    if (normalized.length < 10) return;
+
+    const content = message.content.trim().slice(0, 800);
+    if (!content) return;
+
+    const current = await this.getConversationHistory(normalized);
+    const updated = [...current, { role: message.role, content }].slice(-env.whatsappAiHistoryLimit);
+    this.conversationByPhone.set(normalized, updated);
   }
 }

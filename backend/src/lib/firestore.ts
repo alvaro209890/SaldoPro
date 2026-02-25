@@ -77,6 +77,11 @@ export interface UserTransaction {
   updatedAt: string;
 }
 
+export interface WhatsAppConversationMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface CreateTransactionInput {
   type: 'income' | 'expense';
   amount: number;
@@ -153,4 +158,58 @@ export async function getAllowedWhatsAppNumbers(uid: string): Promise<string[]> 
   return [...new Set(data.whatsappAllowedNumbers
     .map((value) => (typeof value === 'string' ? normalizePhoneNumber(value) : ''))
     .filter((value) => value.length >= 10))];
+}
+
+export async function getRecentConversationByPhone(
+  phone: string,
+  limitCount: number
+): Promise<WhatsAppConversationMessage[]> {
+  const normalizedPhone = normalizePhoneNumber(phone);
+  if (normalizedPhone.length < 10) return [];
+
+  const [inboundSnap, outboundSnap] = await Promise.all([
+    db
+      .collection(COLLECTION_NAME)
+      .where('from', '==', normalizedPhone)
+      .orderBy('createdAt', 'desc')
+      .limit(limitCount)
+      .get(),
+    db
+      .collection(COLLECTION_NAME)
+      .where('to', '==', normalizedPhone)
+      .orderBy('createdAt', 'desc')
+      .limit(limitCount)
+      .get()
+  ]);
+
+  const docsById = new Map<string, { createdAt: string; role: 'user' | 'assistant'; content: string }>();
+  const pushDoc = (snap: FirebaseFirestore.QuerySnapshot): void => {
+    for (const doc of snap.docs) {
+      const data = doc.data() as Partial<WhatsAppMessageRecord>;
+      if (data.status === 'failed') continue;
+      if (typeof data.createdAt !== 'string' || data.createdAt.length === 0) continue;
+
+      const hasImage = Boolean(data.metadata?.hasImage);
+      const text = typeof data.text === 'string' ? data.text.trim() : '';
+      const content = text || (hasImage ? 'Imagem enviada no WhatsApp.' : '');
+      if (!content) continue;
+
+      docsById.set(doc.id, {
+        createdAt: data.createdAt,
+        role: data.direction === 'inbound' ? 'user' : 'assistant',
+        content: content.slice(0, 800)
+      });
+    }
+  };
+
+  pushDoc(inboundSnap);
+  pushDoc(outboundSnap);
+
+  return [...docsById.values()]
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .slice(-limitCount)
+    .map((entry) => ({
+      role: entry.role,
+      content: entry.content
+    }));
 }

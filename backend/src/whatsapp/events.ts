@@ -1,13 +1,18 @@
-import type { proto } from '@whiskeysockets/baileys';
+import { extractMessageContent, type proto } from '@whiskeysockets/baileys';
+
+function getMessageContent(message: proto.IWebMessageInfo): proto.IMessage | undefined {
+  return extractMessageContent(message.message);
+}
 
 export function extractRawType(message: proto.IWebMessageInfo): string | null {
-  if (!message.message) return null;
-  const keys = Object.keys(message.message);
+  const content = getMessageContent(message);
+  if (!content) return null;
+  const keys = Object.keys(content);
   return keys.length > 0 ? keys[0] : null;
 }
 
 export function extractMessageText(message: proto.IWebMessageInfo): string {
-  const payload = message.message;
+  const payload = getMessageContent(message);
   if (!payload) return '';
 
   if (payload.conversation) return payload.conversation;
@@ -24,6 +29,18 @@ export function extractMessageText(message: proto.IWebMessageInfo): string {
   }
 
   return '';
+}
+
+export function isImageMessage(message: proto.IWebMessageInfo): boolean {
+  const payload = getMessageContent(message);
+  return Boolean(payload?.imageMessage);
+}
+
+export function getImageMimeType(message: proto.IWebMessageInfo): string | null {
+  const payload = getMessageContent(message);
+  const mimeType = payload?.imageMessage?.mimetype;
+  if (!mimeType || typeof mimeType !== 'string') return null;
+  return mimeType;
 }
 
 export function isGroupJid(jid: string | null | undefined): boolean {

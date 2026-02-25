@@ -8,7 +8,12 @@ import {
   type CreateTransactionInput
 } from '../lib/firestore';
 import { logger } from '../lib/logger';
-import { queryGroqAssistant, type AIAction, type PaymentMethod } from './groq';
+import {
+  queryGroqAssistant,
+  type AIAction,
+  type GroqChatMessage,
+  type PaymentMethod
+} from './groq';
 
 const VALID_PAYMENT_METHODS: PaymentMethod[] = [
   'pix',
@@ -37,15 +42,28 @@ function normalizePaymentMethod(method: unknown): PaymentMethod {
   return 'pix';
 }
 
-export async function processWhatsAppAIMessage(userText: string): Promise<string> {
+export async function processWhatsAppAIMessage(messages: GroqChatMessage[]): Promise<string> {
   const uid = env.whatsappOwnerUid;
   if (!uid) {
     return 'Configuracao incompleta do assistente. Defina WHATSAPP_OWNER_UID no backend.';
   }
 
+  const sanitizedMessages = messages
+    .slice(-env.whatsappAiHistoryLimit)
+    .map((message) => ({
+      role: message.role,
+      content: (message.content ?? '').toString().slice(0, env.maxMessageLength),
+      ...(message.imageDataUrl ? { imageDataUrl: message.imageDataUrl } : {})
+    }))
+    .filter((message) => message.content.trim() || message.imageDataUrl);
+
+  if (sanitizedMessages.length === 0) {
+    return 'Nao consegui interpretar a mensagem recebida.';
+  }
+
   const categories = await getUserCategories(uid);
   const recentTransactions = await getRecentTransactions(uid, env.whatsappAiRecentTransactions);
-  const ai = await queryGroqAssistant(userText, categories, recentTransactions);
+  const ai = await queryGroqAssistant(sanitizedMessages, categories, recentTransactions);
 
   const actionMessage = await executeAction(uid, ai.actionObject, categories);
   if (!actionMessage) {

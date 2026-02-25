@@ -43,6 +43,12 @@ export interface GroqAssistantResult {
   actionObject: AIAction;
 }
 
+export interface GroqChatMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  imageDataUrl?: string;
+}
+
 function buildSystemPrompt(categories: UserCategory[], recentTransactions: UserTransaction[]): string {
   const categoriesList = categories
     .map((c) => `- ID: "${c.id}", Nome: "${c.name}", Tipo: ${c.type}`)
@@ -58,36 +64,83 @@ function buildSystemPrompt(categories: UserCategory[], recentTransactions: UserT
 
   const today = new Date().toISOString().split('T')[0];
 
-  return `Voce e um assistente financeiro do SaldoPro que conversa por WhatsApp.
-Responda de forma curta, direta e util em portugues.
+  return `Você é o SaldoPro AI, consultor financeiro pessoal do usuário.
+Atue como na aba de IA do site: respostas inteligentes, analíticas e úteis.
 
-Retorne EXATAMENTE um JSON valido com:
-1) "reply": texto para responder no WhatsApp
-2) "actionObject": objeto de acao
+Regras obrigatórias:
+1) A saída final deve ser EXATAMENTE um JSON válido com:
+   - "reply": texto em Markdown (pode usar títulos, listas, negrito e emojis).
+   - "actionObject": objeto de ação.
+2) Não escreva texto fora do JSON.
+3) Se o usuário só fez perguntas/análise, use {"action":"none"}.
 
-Acoes validas:
+Formato aceito para "actionObject":
 - {"action":"none"}
 - {"action":"add_transaction","type":"expense|income","amount":15.5,"description":"Lanche","categoryId":"id","date":"YYYY-MM-DD","paymentMethod":"pix|credit|debit|cash|transfer|boleto"}
 - {"action":"update_transaction","id":"transaction_id","changes":{"amount":20}}
 - {"action":"delete_transaction","id":"transaction_id"}
 
-Categorias disponiveis:
+Diretrizes de qualidade da resposta em "reply":
+- Seja consultivo, claro e direto.
+- Quando possível, traga leitura estratégica dos gastos e sugestões práticas.
+- Ao confirmar operações, indique o que foi entendido.
+
+Categorias disponíveis:
 ${categoriesList || '- (nenhuma categoria)'}
 
-Transacoes recentes:
-${txList || '- (nenhuma transacao)'}
+Transações recentes:
+${txList || '- (nenhuma transação)'}
 
-Data de referencia: ${today}
+Data de referência: ${today}`;
+}
 
-Se o usuario nao pediu alteracao, use action=none.
-Nao use markdown. Nao inclua texto fora do JSON.`;
+function parseAssistantPayload(content: string): Partial<GroqAssistantResult> {
+  try {
+    return JSON.parse(content) as Partial<GroqAssistantResult>;
+  } catch {
+    const start = content.indexOf('{');
+    const end = content.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      return JSON.parse(content.slice(start, end + 1)) as Partial<GroqAssistantResult>;
+    }
+    throw new Error('Groq response is not valid JSON');
+  }
 }
 
 export async function queryGroqAssistant(
-  userText: string,
+  messages: GroqChatMessage[],
   categories: UserCategory[],
   recentTransactions: UserTransaction[]
 ): Promise<GroqAssistantResult> {
+  if (messages.length === 0) {
+    throw new Error('At least one message is required');
+  }
+
+  const lastMessage = messages[messages.length - 1];
+  const targetModel = lastMessage?.imageDataUrl ? env.groqVisionModel : env.groqModel;
+
+  const formattedMessages = messages.map((message) => {
+    if (message.imageDataUrl) {
+      return {
+        role: message.role,
+        content: [
+          {
+            type: 'text',
+            text:
+              message.content.trim() ||
+              'Analise a imagem enviada e extraia os dados financeiros relevantes.'
+          },
+          { type: 'image_url', image_url: { url: message.imageDataUrl } }
+        ]
+      };
+    }
+
+    return {
+      role: message.role,
+      content: message.content
+    };
+  });
+
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -95,7 +148,7 @@ export async function queryGroqAssistant(
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: env.groqModel,
+      model: targetModel,
       temperature: 0.2,
       response_format: { type: 'json_object' },
       messages: [
@@ -103,10 +156,7 @@ export async function queryGroqAssistant(
           role: 'system',
           content: buildSystemPrompt(categories, recentTransactions)
         },
-        {
-          role: 'user',
-          content: userText
-        }
+        ...formattedMessages
       ]
     })
   });
@@ -124,10 +174,9 @@ export async function queryGroqAssistant(
     throw new Error('Groq did not return content');
   }
 
-  const parsed = JSON.parse(content) as Partial<GroqAssistantResult>;
+  const parsed = parseAssistantPayload(content);
   return {
     reply: (parsed.reply ?? '').toString().trim() || 'Nao consegui entender. Pode reformular?',
     actionObject: (parsed.actionObject as AIAction) ?? { action: 'none' }
   };
 }
-

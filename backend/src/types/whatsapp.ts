@@ -15,6 +15,7 @@ export interface WhatsAppMessageRecord {
   metadata: {
     fromMe: boolean;
     isGroup: boolean;
+    hasImage?: boolean;
   };
 }
 
@@ -24,4 +25,3 @@ export interface RuntimeStatus {
   phone: string | null;
   lastDisconnectReason: string | null;
 }
-

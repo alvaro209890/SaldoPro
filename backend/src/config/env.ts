@@ -55,7 +55,10 @@ export const env = {
   whatsappOwnerUid: getOptional('WHATSAPP_OWNER_UID'),
   groqApiKey: getOptional('GROQ_API_KEY'),
   groqModel: process.env.GROQ_MODEL?.trim() || 'llama-3.3-70b-versatile',
+  groqVisionModel: process.env.GROQ_VISION_MODEL?.trim() || 'llama-3.2-90b-vision-preview',
   whatsappAiRecentTransactions: parseInteger(process.env.WHATSAPP_AI_MAX_RECENT_TX, 50),
+  whatsappAiHistoryLimit: parseInteger(process.env.WHATSAPP_AI_HISTORY_LIMIT, 10),
+  whatsappAiImageMaxBytes: parseInteger(process.env.WHATSAPP_AI_IMAGE_MAX_BYTES, 5 * 1024 * 1024),
   qrExpiresSeconds: 20,
   maxMessageLength: 4096
 };
