@@ -468,6 +468,16 @@ export class WhatsAppClient {
     this.state = 'connecting';
     this.connected = false;
 
+    const qrPageUrl = env.backendUrl
+      ? `${env.backendUrl}/api/whatsapp/qr-page?token=${env.whatsappApiToken}`
+      : `/api/whatsapp/qr-page?token=${env.whatsappApiToken}`;
+
+    logger.info('==================================================');
+    logger.info('  NOVO QR CODE DISPONIVEL — abra no navegador:');
+    logger.info(`  ${qrPageUrl}`);
+    logger.info('==================================================');
+
+    // ASCII art apenas para referência em ambientes de terminal local
     qrcodeTerminal.generate(qr, { small: true });
 
     try {
@@ -549,12 +559,10 @@ export class WhatsAppClient {
     }
 
     const trimmed = inboundText.trim();
+    // Mensagens normais de números não vinculados são ignoradas silenciosamente.
+    // Apenas códigos de acesso são processados para realizar a vinculação.
     if (!this.looksLikeAccessCode(trimmed)) {
-      if (this.requestedLinkCodePhones.has(normalizedPhone)) {
-        return;
-      }
-      await this.sendWithRetry(remoteJid, LINK_CODE_PROMPT, 'auto_reply');
-      this.requestedLinkCodePhones.add(normalizedPhone);
+      logger.info('Ignoring unbound WhatsApp number (no access code)', { from: normalizedPhone });
       return;
     }
 

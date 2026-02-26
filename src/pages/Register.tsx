@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Wallet, Mail, Lock, User } from 'lucide-react';
+import { Wallet, Mail, Lock, User, Phone } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { registerUser } from '@/firebase/auth';
@@ -12,6 +12,13 @@ import { toast } from 'sonner';
 const schema = z
     .object({
         displayName: z.string().min(2, 'Nome deve ter no mínimo 2 caracteres'),
+        whatsappPhone: z
+            .string()
+            .min(1, 'Número do WhatsApp é obrigatório')
+            .refine(
+                (val) => val.replace(/\D/g, '').length >= 10,
+                'Digite o número com código do país e DDD (ex: 5511999999999)'
+            ),
         email: z.string().email('Email inválido'),
         password: z.string().min(6, 'Senha deve ter no mínimo 6 caracteres'),
         confirmPassword: z.string(),
@@ -37,7 +44,8 @@ export function Register() {
     const onSubmit = async (data: FormData) => {
         setIsLoading(true);
         try {
-            await registerUser(data.email, data.password, data.displayName);
+            const normalizedPhone = data.whatsappPhone.replace(/\D/g, '');
+            await registerUser(data.email, data.password, data.displayName, normalizedPhone);
             toast.success('Conta criada com sucesso!');
             navigate('/app/dashboard');
         } catch (error: any) {
@@ -75,6 +83,21 @@ export function Register() {
                             error={errors.displayName?.message}
                             {...register('displayName')}
                         />
+
+                        <div>
+                            <Input
+                                label="Número do WhatsApp"
+                                icon={Phone}
+                                placeholder="5511999999999"
+                                autoComplete="tel"
+                                inputMode="numeric"
+                                error={errors.whatsappPhone?.message}
+                                {...register('whatsappPhone')}
+                            />
+                            <p className="mt-1 text-xs text-gray-500">
+                                Código do país + DDD + número (sem espaços ou traços)
+                            </p>
+                        </div>
 
                         <Input
                             label="Email"

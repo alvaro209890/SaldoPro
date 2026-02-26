@@ -52,7 +52,7 @@ export function createWhatsAppRouter(client: WhatsAppClient): Router {
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="refresh" content="5" />
+  <meta http-equiv="refresh" content="3" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>SaldoPro — WhatsApp QR Code</title>
   <style>
