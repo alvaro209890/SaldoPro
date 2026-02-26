@@ -107,7 +107,6 @@ function buildAddedTransactionMessage(receipt, aiReply, currency) {
         '*Transacao registrada com sucesso*',
         '',
         `Numero da transacao: ${receipt.transactionCode}`,
-        `ID interno: ${receipt.transactionId}`,
         `Tipo: ${transactionTypeLabel(receipt.type)}`,
         `Valor: ${formatCurrency(receipt.amount, currency)}`,
         `Categoria: ${receipt.categoryName}`,
