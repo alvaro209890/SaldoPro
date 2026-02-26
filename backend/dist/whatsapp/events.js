@@ -7,6 +7,7 @@ exports.getImageMimeType = getImageMimeType;
 exports.isGroupJid = isGroupJid;
 exports.isStatusJid = isStatusJid;
 exports.normalizePhoneNumber = normalizePhoneNumber;
+exports.brazilianPhoneVariants = brazilianPhoneVariants;
 exports.jidToPhone = jidToPhone;
 exports.normalizePhoneToJid = normalizePhoneToJid;
 const baileys_1 = require("@whiskeysockets/baileys");
@@ -65,6 +66,48 @@ function normalizePhoneNumber(value) {
     if (!value)
         return '';
     return value.replace(/[^\d]/g, '');
+}
+/**
+ * Generates all possible Brazilian phone number variants to handle:
+ * - Country code 55 present or absent
+ * - Mobile "9" digit present or absent (added to BR mobiles but WhatsApp JIDs often omit it)
+ *
+ * Example: user registers "66984396232", WhatsApp JID comes as "556684396232"
+ * This function generates: ["5566984396232","556684396232","66984396232","6684396232"]
+ */
+function brazilianPhoneVariants(phone) {
+    const digits = normalizePhoneNumber(phone);
+    if (!digits || digits.length < 10 || digits.length > 13)
+        return [digits];
+    let areaCode;
+    let localNumber;
+    if (digits.startsWith('55') && digits.length >= 12) {
+        areaCode = digits.slice(2, 4);
+        localNumber = digits.slice(4);
+    }
+    else if (digits.length <= 11) {
+        areaCode = digits.slice(0, 2);
+        localNumber = digits.slice(2);
+    }
+    else {
+        return [digits];
+    }
+    let base8;
+    if (localNumber.length === 9 && localNumber.startsWith('9')) {
+        base8 = localNumber.slice(1);
+    }
+    else if (localNumber.length === 8) {
+        base8 = localNumber;
+    }
+    else {
+        return [digits];
+    }
+    return [
+        `55${areaCode}9${base8}`, // 13 digits — full with 9
+        `55${areaCode}${base8}`, // 12 digits — full without 9 (common in WhatsApp JIDs)
+        `${areaCode}9${base8}`, // 11 digits — no country code, with 9
+        `${areaCode}${base8}` // 10 digits — no country code, no 9
+    ];
 }
 function jidToPhone(jid) {
     if (!jid)

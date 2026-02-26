@@ -223,9 +223,9 @@ export function AIAssistant() {
 
                     <Button
                         onClick={handleCreateSession}
-                        className="w-full justify-start gap-2 bg-surface-800 hover:bg-surface-700 text-gray-200 border border-surface-700 rounded-xl h-11"
+                        className="w-full justify-start gap-2 bg-gradient-to-r from-surface-800 to-surface-700 hover:from-surface-700 hover:to-surface-600 text-gray-100 border border-surface-600/50 hover:border-surface-500 rounded-xl h-11 shadow-sm transition-all"
                     >
-                        <MessageSquarePlus className="w-4 h-4" />
+                        <MessageSquarePlus className="w-4 h-4 text-indigo-400" />
                         Nova Conversa
                     </Button>
                 </div>
@@ -240,16 +240,16 @@ export function AIAssistant() {
                             <div
                                 key={session.id}
                                 onClick={() => setActiveSessionId(session.id)}
-                                className={`group flex items-center justify-between p-3 rounded-xl cursor-pointer transition-colors ${activeSessionId === session.id
-                                    ? 'bg-surface-800/80 border border-surface-700/50 text-white relative'
-                                    : 'bg-transparent border border-transparent text-gray-400 hover:bg-surface-800/30 hover:text-gray-200'
+                                className={`group flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all duration-200 ${activeSessionId === session.id
+                                    ? 'bg-surface-800/80 border border-surface-600/50 text-white relative shadow-sm ring-1 ring-surface-700/50'
+                                    : 'bg-transparent border border-transparent text-gray-400 hover:bg-surface-800/40 hover:text-gray-200 hover:shadow-sm'
                                     }`}
                             >
                                 {activeSessionId === session.id && (
-                                    <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-green-500 rounded-r-full" />
+                                    <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-gradient-to-b from-indigo-500 to-purple-500 rounded-r-full" />
                                 )}
                                 <div className="flex items-center gap-3 overflow-hidden">
-                                    <MessageSquare className={`w-4 h-4 shrink-0 ${activeSessionId === session.id ? 'text-green-500' : 'text-surface-600'}`} />
+                                    <MessageSquare className={`w-4 h-4 shrink-0 transition-colors ${activeSessionId === session.id ? 'text-indigo-400' : 'text-surface-500 group-hover:text-surface-400'}`} />
                                     <span className="text-sm truncate font-medium">{session.title}</span>
                                 </div>
                                 <button
@@ -266,43 +266,50 @@ export function AIAssistant() {
             </div>
 
             {/* Main Chat Area */}
-            <div className="flex-1 bg-[#0f1419] flex flex-col overflow-hidden relative">
+            <div className="flex-1 bg-gradient-to-br from-[#0a0f14] via-[#0f1419] to-[#0c1015] flex flex-col overflow-hidden relative">
+
+                {/* Decorative background gradients */}
+                <div className="absolute top-0 left-0 w-full h-96 bg-indigo-500/5 rounded-full blur-[120px] pointer-events-none" />
+                <div className="absolute bottom-0 right-0 w-[500px] h-[500px] bg-purple-500/5 rounded-full blur-[150px] pointer-events-none" />
 
                 {!activeSessionId ? (
-                    <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
-                        <div className="w-20 h-20 rounded-3xl bg-surface-800/50 border border-surface-700/30 flex items-center justify-center mb-6 shadow-inner">
-                            <Bot className="w-10 h-10 text-gray-400" />
+                    <div className="flex-1 flex flex-col items-center justify-center text-center p-8 relative z-10 animate-in fade-in duration-500">
+                        <div className="relative mb-8">
+                            <div className="absolute inset-0 bg-indigo-500/20 blur-2xl rounded-full animate-pulse" />
+                            <div className="w-24 h-24 rounded-[2rem] bg-surface-800/60 border border-surface-700/50 backdrop-blur-xl flex items-center justify-center shadow-2xl relative z-10 transform transition-transform hover:scale-105 duration-300">
+                                <Sparkles className="w-12 h-12 text-indigo-400" />
+                            </div>
                         </div>
-                        <h2 className="text-2xl font-semibold text-white mb-2">Como posso ajudar?</h2>
-                        <p className="text-gray-400 max-w-md">Selecione uma conversa ao lado ou crie uma nova para começar a interagir com seu assistente financeiro inteligente.</p>
-                        <Button onClick={handleCreateSession} className="mt-8 gap-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full px-6 py-5">
-                            <MessageSquarePlus className="w-4 h-4" /> Criar Conversa
+                        <h2 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-white to-gray-400 mb-3">Como posso ajudar?</h2>
+                        <p className="text-gray-400 max-w-md text-sm leading-relaxed mb-8">Selecione uma conversa ao lado ou crie uma nova para começar a interagir com seu assistente financeiro inteligente.</p>
+                        <Button onClick={handleCreateSession} className="gap-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-full px-8 py-6 shadow-lg shadow-indigo-500/25 border-none transition-all hover:-translate-y-0.5 font-medium text-base">
+                            <MessageSquarePlus className="w-5 h-5" /> Iniciar Nova Conversa
                         </Button>
                     </div>
                 ) : (
                     <>
                         {/* Chat History View */}
-                        <div className="flex-1 overflow-y-auto px-6 py-8 custom-scrollbar space-y-8 lg:px-24 xl:px-48">
+                        <div className="flex-1 overflow-y-auto px-6 py-8 custom-scrollbar space-y-8 lg:px-24 xl:px-48 relative z-10">
                             {displayHistory.map((msg, idx) => {
                                 const isUser = msg.role === 'user';
                                 return (
-                                    <div key={idx} className={`flex gap-4 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
-                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 border
-                                            ${isUser ? 'bg-surface-800 border-surface-700 text-gray-400' : 'bg-green-900/20 border-green-500/20 text-green-500'}`}>
-                                            {isUser ? <User className="w-5 h-5" /> : <Bot className="w-6 h-6" />}
+                                    <div key={idx} className={`flex gap-4 animate-in slide-in-from-bottom-4 duration-500 fade-in ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 border shadow-sm
+                                            ${isUser ? 'bg-surface-800 border-surface-700 text-gray-400' : 'bg-indigo-900/40 border-indigo-500/30 text-indigo-400 backdrop-blur-sm'}`}>
+                                            {isUser ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
                                         </div>
-                                        <div className={`max-w-[75%] space-y-2 ${isUser ? 'items-end flex flex-col' : 'items-start flex flex-col'}`}>
+                                        <div className={`space-y-2 ${isUser ? 'max-w-[80%] items-end flex flex-col' : 'w-[85%] max-w-none items-start flex flex-col'}`}>
                                             {('imageUrl' in msg && msg.imageUrl) && (
-                                                <div className="p-1 rounded-2xl bg-surface-800 border border-surface-700 w-fit shrink-0 overflow-hidden shadow-sm">
+                                                <div className="p-1 rounded-2xl bg-surface-800/80 backdrop-blur-md border border-surface-700 w-fit shrink-0 overflow-hidden shadow-md">
                                                     <a href={msg.imageUrl} target="_blank" rel="noopener noreferrer">
                                                         <img src={msg.imageUrl} alt="Anexo" className="max-h-[240px] w-auto rounded-xl object-contain cursor-pointer hover:opacity-90 transition-opacity" />
                                                     </a>
                                                 </div>
                                             )}
-                                            <div className={`px-5 py-4 text-sm whitespace-pre-wrap leading-relaxed border max-w-full overflow-hidden
+                                            <div className={`px-5 py-4 text-[15px] whitespace-pre-wrap leading-relaxed border shadow-sm w-full
                                                 ${isUser
-                                                    ? 'bg-surface-800 border-surface-700 text-gray-100 rounded-3xl rounded-tr-md'
-                                                    : 'bg-transparent border-surface-800/60 text-gray-200 rounded-3xl rounded-tl-md prose prose-invert prose-p:leading-relaxed prose-pre:bg-surface-800 prose-pre:border prose-pre:border-surface-700 prose-sm hover:prose-a:text-indigo-400'}`}>
+                                                    ? 'bg-gradient-to-br from-indigo-600 to-purple-600 border-indigo-500/30 text-white rounded-[1.5rem] rounded-tr-[0.5rem] shadow-indigo-500/10 w-auto max-w-full'
+                                                    : 'bg-surface-800/60 backdrop-blur-md border-surface-700/60 text-gray-200 rounded-[1.5rem] rounded-tl-[0.5rem] prose prose-invert prose-p:leading-relaxed prose-pre:bg-surface-900/80 prose-pre:border prose-pre:border-surface-700 hover:prose-a:text-indigo-400'}`}>
                                                 {isUser ? (
                                                     msg.content
                                                 ) : (
@@ -332,23 +339,24 @@ export function AIAssistant() {
                         </div>
 
                         {/* Input Area */}
-                        <div className="p-4 lg:px-24 xl:px-48 pb-8 shrink-0 relative bg-gradient-to-t from-[#0f1419] via-[#0f1419] to-transparent">
-                            <div className="max-w-4xl mx-auto">
+                        <div className="p-4 lg:px-24 xl:px-48 pb-8 shrink-0 relative z-20 bg-gradient-to-t from-[#0a0f14] via-[#0a0f14]/90 to-transparent pt-12">
+                            <div className="max-w-4xl mx-auto relative group">
                                 {imagePreview && (
-                                    <div className="relative inline-block mb-3 animate-in fade-in zoom-in duration-200">
-                                        <img src={imagePreview} alt="Preview" className="h-24 w-auto rounded-xl border border-surface-600 object-cover shadow-lg" />
+                                    <div className="absolute bottom-[calc(100%+12px)] left-0 animate-in fade-in zoom-in duration-200">
+                                        <img src={imagePreview} alt="Preview" className="h-24 w-auto rounded-2xl border border-surface-600/50 object-cover shadow-2xl shadow-black/50" />
                                         <button
                                             onClick={handleRemoveImage}
-                                            className="absolute -top-2 -right-2 bg-surface-700 hover:bg-red-500 border border-surface-600 rounded-full p-1.5 text-white transition-colors shadow-lg"
+                                            className="absolute -top-2 -right-2 bg-surface-800 hover:bg-red-500 border border-surface-600 rounded-full p-1.5 text-white transition-colors shadow-lg"
                                         >
                                             <X className="w-3.5 h-3.5" />
                                         </button>
                                     </div>
                                 )}
-                                <div className="relative flex items-end bg-surface-900/80 border border-surface-700/50 rounded-[1.75rem] backdrop-blur-xl shadow-2xl p-1 gap-2 focus-within:border-surface-600 focus-within:ring-1 focus-within:ring-surface-600 transition-all">
+                                <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500/20 to-purple-500/20 rounded-[2rem] blur opacity-0 group-focus-within:opacity-100 transition duration-500" />
+                                <div className="relative flex items-end bg-surface-900/90 border border-surface-700/50 rounded-[2rem] backdrop-blur-xl shadow-2xl p-1.5 gap-2 focus-within:border-indigo-500/50 focus-within:ring-1 focus-within:ring-indigo-500/50 transition-all">
                                     <button
                                         type="button"
-                                        className="shrink-0 h-10 w-10 flex items-center justify-center rounded-full text-gray-400 hover:text-white hover:bg-surface-800 transition-all focus:outline-none disabled:opacity-50 mt-auto mb-1 ml-1"
+                                        className="shrink-0 h-11 w-11 flex items-center justify-center rounded-full text-gray-400 hover:text-indigo-400 hover:bg-indigo-500/10 transition-all focus:outline-none disabled:opacity-50 mt-auto mb-1 ml-1"
                                         onClick={() => fileInputRef.current?.click()}
                                         disabled={isProcessing}
                                         title="Anexar comprovante"
@@ -368,8 +376,8 @@ export function AIAssistant() {
                                             onChange={(e) => setInput(e.target.value)}
                                             onKeyDown={handleKeyDown}
                                             disabled={isProcessing}
-                                            placeholder="Digite sua mensagem..."
-                                            className="w-full min-h-[52px] max-h-[200px] resize-none bg-transparent py-4 text-sm text-gray-100 placeholder-gray-500 transition-all focus:outline-none custom-scrollbar disabled:opacity-50"
+                                            placeholder="Descreva seu lançamento ou peça uma análise..."
+                                            className="w-full min-h-[56px] max-h-[200px] resize-none bg-transparent py-[18px] text-[15px] text-gray-100 placeholder-gray-500 transition-all focus:outline-none custom-scrollbar disabled:opacity-50"
                                             rows={1}
                                         />
                                     </div>
@@ -377,13 +385,16 @@ export function AIAssistant() {
                                         onClick={handleSend}
                                         disabled={(!input.trim() && !imagePreview) || isProcessing}
                                         isLoading={isProcessing}
-                                        className="shrink-0 h-10 w-10 p-0 rounded-full bg-green-600/20 text-green-500 hover:bg-green-600/30 flex items-center justify-center disabled:opacity-50 transition-all disabled:bg-surface-800 disabled:text-gray-600 mt-auto mb-1 mr-1"
+                                        className={`shrink-0 h-11 w-11 p-0 rounded-full flex items-center justify-center disabled:opacity-50 transition-all mt-auto mb-1 mr-1 shadow-md
+                                            ${(input.trim() || imagePreview) && !isProcessing
+                                                ? 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white shadow-indigo-500/25 border-none'
+                                                : 'bg-surface-800 text-gray-500 border border-surface-700'}`}
                                     >
                                         {!isProcessing && <Send className="w-4 h-4 ml-0.5" />}
                                     </Button>
                                 </div>
-                                <div className="text-center mt-3 text-xs text-gray-600">
-                                    A IA pode cometer erros. Considere verificar informações importantes.
+                                <div className="text-center mt-3 text-xs text-surface-500 font-medium tracking-wide">
+                                    IAs podem cometer erros. Revise antes de salvar.
                                 </div>
                             </div>
                         </div>

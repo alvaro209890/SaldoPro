@@ -3,7 +3,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { env } from '../config/env';
 import { logger } from './logger';
 import type { WhatsAppMessageRecord } from '../types/whatsapp';
-import { normalizePhoneNumber } from '../whatsapp/events';
+import { brazilianPhoneVariants, normalizePhoneNumber } from '../whatsapp/events';
 
 const COLLECTION_NAME = 'whatsappMessages';
 const BINDINGS_COLLECTION_NAME = 'whatsappBindings';
@@ -181,36 +181,55 @@ export async function isPhoneAllowedForUid(uid: string, phone: string): Promise<
   if (normalizedPhone.length < 10) return false;
 
   const allowed = await getAllowedWhatsAppNumbers(uid);
-  return allowed.includes(normalizedPhone);
+  const phoneVariants = brazilianPhoneVariants(normalizedPhone);
+  return phoneVariants.some((v) => allowed.includes(v));
 }
 
 export async function isPhoneAllowedForAnyAccount(phone: string): Promise<boolean> {
   const normalizedPhone = normalizePhoneNumber(phone);
   if (normalizedPhone.length < 10) return false;
 
-  const snap = await db
-    .collectionGroup('settings')
-    .where('whatsappAllowedNumbers', 'array-contains', normalizedPhone)
-    .limit(1)
-    .get();
-
-  return snap.docs.some((doc) => doc.id === 'profile');
+  const variants = brazilianPhoneVariants(normalizedPhone);
+  try {
+    const snaps = await Promise.all(
+      variants.map((v) =>
+        db.collectionGroup('settings')
+          .where('whatsappAllowedNumbers', 'array-contains', v)
+          .limit(1)
+          .get()
+      )
+    );
+    return snaps.some((snap) => snap.docs.some((doc) => doc.id === 'profile'));
+  } catch (error) {
+    logger.error('isPhoneAllowedForAnyAccount: collectionGroup query failed (missing Firestore index?)', error);
+    return false;
+  }
 }
 
 export async function resolveUidFromPhone(phone: string): Promise<string | null> {
   const normalizedPhone = normalizePhoneNumber(phone);
   if (normalizedPhone.length < 10) return null;
 
-  const snap = await db
-    .collectionGroup('settings')
-    .where('whatsappAllowedNumbers', 'array-contains', normalizedPhone)
-    .limit(5)
-    .get();
+  const variants = brazilianPhoneVariants(normalizedPhone);
+  try {
+    const snaps = await Promise.all(
+      variants.map((v) =>
+        db.collectionGroup('settings')
+          .where('whatsappAllowedNumbers', 'array-contains', v)
+          .limit(5)
+          .get()
+      )
+    );
 
-  for (const settingsDoc of snap.docs) {
-    if (settingsDoc.id !== 'profile') continue;
-    const uid = extractUidFromSettingsDoc(settingsDoc);
-    if (uid) return uid;
+    for (const snap of snaps) {
+      for (const settingsDoc of snap.docs) {
+        if (settingsDoc.id !== 'profile') continue;
+        const uid = extractUidFromSettingsDoc(settingsDoc);
+        if (uid) return uid;
+      }
+    }
+  } catch (error) {
+    logger.error('resolveUidFromPhone: collectionGroup query failed (missing Firestore index?)', error);
   }
 
   return null;
@@ -227,28 +246,33 @@ export async function resolveUidFromAccessCode(
     return null;
   }
 
-  const snap = await db
-    .collectionGroup('settings')
-    .where('whatsappAccessCodeNormalized', '==', normalizedCode)
-    .limit(5)
-    .get();
+  try {
+    const snap = await db
+      .collectionGroup('settings')
+      .where('whatsappAccessCodeNormalized', '==', normalizedCode)
+      .limit(5)
+      .get();
 
-  for (const settingsDoc of snap.docs) {
-    if (settingsDoc.id !== 'profile') continue;
+    for (const settingsDoc of snap.docs) {
+      if (settingsDoc.id !== 'profile') continue;
 
-    const uid = extractUidFromSettingsDoc(settingsDoc);
-    if (!uid) continue;
+      const uid = extractUidFromSettingsDoc(settingsDoc);
+      if (!uid) continue;
 
-    const data = settingsDoc.data() as { whatsappAllowedNumbers?: unknown };
-    const allowed = Array.isArray(data.whatsappAllowedNumbers)
-      ? data.whatsappAllowedNumbers
-          .map((value) => (typeof value === 'string' ? normalizePhoneNumber(value) : ''))
-          .filter((value) => value.length >= 10)
-      : [];
+      const data = settingsDoc.data() as { whatsappAllowedNumbers?: unknown };
+      const allowed = Array.isArray(data.whatsappAllowedNumbers)
+        ? data.whatsappAllowedNumbers
+            .map((value) => (typeof value === 'string' ? normalizePhoneNumber(value) : ''))
+            .filter((value) => value.length >= 10)
+        : [];
 
-    if (allowed.includes(normalizedPhone)) {
-      return uid;
+      const phoneVariants = brazilianPhoneVariants(normalizedPhone);
+      if (phoneVariants.some((v) => allowed.includes(v))) {
+        return uid;
+      }
     }
+  } catch (error) {
+    logger.error('resolveUidFromAccessCode: collectionGroup query failed (missing Firestore index?)', error);
   }
 
   return null;
@@ -258,18 +282,25 @@ export async function getPhoneBinding(phone: string): Promise<WhatsAppPhoneBindi
   const normalizedPhone = normalizePhoneNumber(phone);
   if (normalizedPhone.length < 10) return null;
 
-  const snap = await db.collection(BINDINGS_COLLECTION_NAME).doc(normalizedPhone).get();
-  if (!snap.exists) return null;
+  const variants = brazilianPhoneVariants(normalizedPhone);
+  const snaps = await Promise.all(
+    variants.map((v) => db.collection(BINDINGS_COLLECTION_NAME).doc(v).get())
+  );
 
-  const data = snap.data() as Partial<WhatsAppPhoneBinding>;
-  if (!data.uid || typeof data.uid !== 'string') return null;
+  for (const snap of snaps) {
+    if (!snap.exists) continue;
+    const data = snap.data() as Partial<WhatsAppPhoneBinding>;
+    if (!data.uid || typeof data.uid !== 'string') continue;
 
-  return {
-    phone: normalizedPhone,
-    uid: data.uid,
-    linkedAt: typeof data.linkedAt === 'string' ? data.linkedAt : new Date().toISOString(),
-    updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : new Date().toISOString()
-  };
+    return {
+      phone: snap.id,
+      uid: data.uid,
+      linkedAt: typeof data.linkedAt === 'string' ? data.linkedAt : new Date().toISOString(),
+      updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : new Date().toISOString()
+    };
+  }
+
+  return null;
 }
 
 export async function savePhoneBinding(phone: string, uid: string): Promise<void> {
@@ -282,22 +313,33 @@ export async function savePhoneBinding(phone: string, uid: string): Promise<void
   }
 
   const now = new Date().toISOString();
-  const docRef = db.collection(BINDINGS_COLLECTION_NAME).doc(normalizedPhone);
-  const existing = await docRef.get();
-  const linkedAt =
-    existing.exists && typeof existing.data()?.linkedAt === 'string'
-      ? (existing.data()?.linkedAt as string)
-      : now;
+  // Save binding under ALL Brazilian variants so lookups work regardless of format
+  const variants = brazilianPhoneVariants(normalizedPhone);
+  const canonicalPhone = variants[0] || normalizedPhone; // 13-digit form
 
-  await docRef.set(
-    {
-      phone: normalizedPhone,
-      uid,
-      linkedAt,
-      updatedAt: now
-    },
-    { merge: true }
-  );
+  // Check any existing binding for linkedAt
+  let linkedAt = now;
+  for (const v of variants) {
+    const existing = await db.collection(BINDINGS_COLLECTION_NAME).doc(v).get();
+    if (existing.exists && typeof existing.data()?.linkedAt === 'string') {
+      linkedAt = existing.data()?.linkedAt as string;
+      break;
+    }
+  }
+
+  const bindingData = {
+    phone: canonicalPhone,
+    uid,
+    linkedAt,
+    updatedAt: now
+  };
+
+  // Write binding under all variants for reliable lookups
+  const batch = db.batch();
+  for (const v of variants) {
+    batch.set(db.collection(BINDINGS_COLLECTION_NAME).doc(v), bindingData, { merge: true });
+  }
+  await batch.commit();
 }
 
 export async function getRecentConversationByPhone(
