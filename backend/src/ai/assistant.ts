@@ -8,7 +8,10 @@ import {
   getUserSettings,
   updateUserTransaction,
   type CreateTransactionInput,
-  type UserCategory
+  type UserCategory,
+  type UserProfileBackend,
+  type UserSettingsBackend,
+  type UserTransaction
 } from '../lib/firestore';
 import { logger } from '../lib/logger';
 import {
@@ -28,6 +31,41 @@ const VALID_PAYMENT_METHODS: PaymentMethod[] = [
   'boleto'
 ];
 
+// ---------------------------------------------------------------------------
+// Financial context cache — avoids repeated Firestore reads for active users.
+// TTL: 2 minutes. Invalidated when a transaction is added/updated/deleted.
+// ---------------------------------------------------------------------------
+const CONTEXT_CACHE_TTL_MS = 2 * 60 * 1000;
+
+interface CachedFinancialContext {
+  categories: UserCategory[];
+  recentTransactions: UserTransaction[];
+  settings: UserSettingsBackend;
+  profile: UserProfileBackend;
+  cachedAt: number;
+}
+
+const financialContextCache = new Map<string, CachedFinancialContext>();
+
+function getCachedContext(uid: string): CachedFinancialContext | null {
+  const entry = financialContextCache.get(uid);
+  if (!entry) return null;
+  if (Date.now() - entry.cachedAt > CONTEXT_CACHE_TTL_MS) {
+    financialContextCache.delete(uid);
+    return null;
+  }
+  return entry;
+}
+
+function setCachedContext(uid: string, ctx: Omit<CachedFinancialContext, 'cachedAt'>): void {
+  financialContextCache.set(uid, { ...ctx, cachedAt: Date.now() });
+}
+
+/** Invalidate cache after a mutation so the next call gets fresh data. */
+function invalidateContextCache(uid: string): void {
+  financialContextCache.delete(uid);
+}
+
 interface AddedTransactionReceipt {
   transactionId: string;
   transactionCode: string;
@@ -40,9 +78,22 @@ interface AddedTransactionReceipt {
   recordedAt: string;
 }
 
+interface UpdatedTransactionReceipt {
+  transactionCode: string;
+  changedFields: string[];
+  updatedAt: string;
+}
+
+interface DeletedTransactionReceipt {
+  transactionCode: string;
+  deletedAt: string;
+}
+
 type ActionExecutionResult =
   | { kind: 'none' }
   | { kind: 'added'; receipt: AddedTransactionReceipt }
+  | { kind: 'updated'; receipt: UpdatedTransactionReceipt }
+  | { kind: 'deleted'; receipt: DeletedTransactionReceipt }
   | { kind: 'error'; message: string };
 
 function todayISO(): string {
@@ -150,6 +201,59 @@ function buildAddedTransactionMessage(
   return lines.join('\n');
 }
 
+function fieldLabel(field: string): string {
+  const labels: Record<string, string> = {
+    amount: 'Valor',
+    description: 'Descricao',
+    category: 'Categoria',
+    date: 'Data',
+    type: 'Tipo',
+    paymentMethod: 'Pagamento'
+  };
+  return labels[field] ?? field;
+}
+
+function buildUpdatedTransactionMessage(
+  receipt: UpdatedTransactionReceipt,
+  aiReply: string
+): string {
+  const lines = [
+    '*Transacao atualizada com sucesso*',
+    '',
+    `Numero da transacao: ${receipt.transactionCode}`,
+    `Campos alterados: ${receipt.changedFields.map(fieldLabel).join(', ')}`,
+    `Atualizado em: ${formatDateTimeBR(receipt.updatedAt)}`,
+    `Status: Salvo no SaldoPro`
+  ];
+
+  const cleanAiReply = aiReply.trim();
+  if (cleanAiReply.length > 0) {
+    lines.push('', `Observacao: ${cleanAiReply}`);
+  }
+
+  return lines.join('\n');
+}
+
+function buildDeletedTransactionMessage(
+  receipt: DeletedTransactionReceipt,
+  aiReply: string
+): string {
+  const lines = [
+    '*Transacao excluida com sucesso*',
+    '',
+    `Numero da transacao: ${receipt.transactionCode}`,
+    `Excluido em: ${formatDateTimeBR(receipt.deletedAt)}`,
+    `Status: Removido do SaldoPro`
+  ];
+
+  const cleanAiReply = aiReply.trim();
+  if (cleanAiReply.length > 0) {
+    lines.push('', `Observacao: ${cleanAiReply}`);
+  }
+
+  return lines.join('\n');
+}
+
 export interface ProcessWhatsAppAIOptions {
   isFirstMessage?: boolean;
   isGreeting?: boolean;
@@ -180,12 +284,25 @@ export async function processWhatsAppAIMessage(
     return 'Nao consegui interpretar a mensagem recebida.';
   }
 
-  const [categories, recentTransactions, settings, profile] = await Promise.all([
-    getUserCategories(uid),
-    getRecentTransactions(uid, env.whatsappAiRecentTransactions),
-    getUserSettings(uid),
-    getUserProfile(uid)
-  ]);
+  // Use cached context if available (TTL 2 min), otherwise fetch from Firestore
+  const cached = getCachedContext(uid);
+  let categories: UserCategory[];
+  let recentTransactions: UserTransaction[];
+  let settings: UserSettingsBackend;
+  let profile: UserProfileBackend;
+
+  if (cached) {
+    logger.info('Using cached financial context', { uid });
+    ({ categories, recentTransactions, settings, profile } = cached);
+  } else {
+    [categories, recentTransactions, settings, profile] = await Promise.all([
+      getUserCategories(uid),
+      getRecentTransactions(uid, env.whatsappAiRecentTransactions),
+      getUserSettings(uid),
+      getUserProfile(uid)
+    ]);
+    setCachedContext(uid, { categories, recentTransactions, settings, profile });
+  }
 
   const context: UserFinancialContext = {
     profile,
@@ -204,6 +321,16 @@ export async function processWhatsAppAIMessage(
 
   if (actionResult.kind === 'added') {
     return buildAddedTransactionMessage(actionResult.receipt, ai.reply, settings.currency)
+      .slice(0, env.maxMessageLength);
+  }
+
+  if (actionResult.kind === 'updated') {
+    return buildUpdatedTransactionMessage(actionResult.receipt, ai.reply)
+      .slice(0, env.maxMessageLength);
+  }
+
+  if (actionResult.kind === 'deleted') {
+    return buildDeletedTransactionMessage(actionResult.receipt, ai.reply)
       .slice(0, env.maxMessageLength);
   }
 
@@ -247,6 +374,7 @@ async function executeAction(
       };
 
       const transactionId = await addUserTransaction(uid, payload);
+      invalidateContextCache(uid);
       const categoryName = categories.find((c) => c.id === category)?.name ?? category;
 
       return {
@@ -308,7 +436,16 @@ async function executeAction(
           updatedAt: string;
         }>
       );
-      return { kind: 'none' };
+      invalidateContextCache(uid);
+
+      return {
+        kind: 'updated',
+        receipt: {
+          transactionCode: toFriendlyTransactionCode(action.id),
+          changedFields: Object.keys(changes),
+          updatedAt: new Date().toISOString()
+        }
+      };
     }
 
     if (action.action === 'delete_transaction') {
@@ -316,7 +453,15 @@ async function executeAction(
         return { kind: 'none' };
       }
       await deleteUserTransaction(uid, action.id);
-      return { kind: 'none' };
+      invalidateContextCache(uid);
+
+      return {
+        kind: 'deleted',
+        receipt: {
+          transactionCode: toFriendlyTransactionCode(action.id),
+          deletedAt: new Date().toISOString()
+        }
+      };
     }
   } catch (error) {
     logger.error('Failed executing AI financial action', error);

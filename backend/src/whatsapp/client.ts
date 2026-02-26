@@ -86,6 +86,9 @@ interface ConversationEntry {
 
 const IMAGE_ONLY_FALLBACK_TEXT = 'Analise a imagem enviada e registre o lancamento corretamente.';
 
+/** Max number of messages processed concurrently by the AI pipeline. */
+const MESSAGE_QUEUE_CONCURRENCY = 3;
+
 export class WhatsAppClient {
   private socket: WASocket | null = null;
   private state: RuntimeStatus['state'] = 'connecting';
@@ -108,6 +111,10 @@ export class WhatsAppClient {
   private lastAuthSnapshotHash: string | null = null;
   private recoveringInvalidSession = false;
   private readonly aiCallTimestamps = new Map<string, number[]>();
+
+  // --- Message processing queue ---
+  private readonly messageQueue: Array<() => Promise<void>> = [];
+  private messageQueueActive = 0;
 
   async start(): Promise<void> {
     await mkdir(env.whatsappAuthDir, { recursive: true });
@@ -331,17 +338,44 @@ export class WhatsAppClient {
     if (upsert.type !== 'notify') return;
 
     for (const message of upsert.messages) {
+      this.enqueueMessage(message);
+    }
+  }
+
+  /**
+   * Enqueue a message for processing with bounded concurrency.
+   * Up to MESSAGE_QUEUE_CONCURRENCY messages are processed in parallel;
+   * the rest wait in the queue until a slot opens.
+   */
+  private enqueueMessage(message: proto.IWebMessageInfo): void {
+    const task = async (): Promise<void> => {
       try {
         await this.handleSingleIncomingMessage(message);
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : '';
-        if (errorMsg.includes('Bad MAC') || errorMsg.includes('Bad MAC')) {
+        if (errorMsg.includes('Bad MAC')) {
           logger.error('Bad MAC decryption error detected, triggering session recovery', error);
           void this.recoverFromInvalidSession();
           return;
         }
         logger.error('Failed processing inbound message', error);
       }
+    };
+
+    this.messageQueue.push(task);
+    void this.drainMessageQueue();
+  }
+
+  private async drainMessageQueue(): Promise<void> {
+    while (this.messageQueue.length > 0 && this.messageQueueActive < MESSAGE_QUEUE_CONCURRENCY) {
+      const task = this.messageQueue.shift();
+      if (!task) break;
+
+      this.messageQueueActive += 1;
+      task().finally(() => {
+        this.messageQueueActive -= 1;
+        void this.drainMessageQueue();
+      });
     }
   }
 
@@ -1010,10 +1044,9 @@ export class WhatsAppClient {
       this.conversationByPhone.set(cacheKey, loaded);
       return loaded;
     } catch (error) {
-      logger.error('Failed to load WhatsApp conversation history', error);
-      const empty: ConversationEntry[] = [];
-      this.conversationByPhone.set(cacheKey, empty);
-      return empty;
+      logger.warn('Failed to load WhatsApp conversation history (will retry next message)', error);
+      // Do NOT cache empty on error — allow retry on next message (e.g. index still building)
+      return [];
     }
   }
 
