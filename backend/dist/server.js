@@ -7,12 +7,14 @@ const express_1 = __importDefault(require("express"));
 const env_1 = require("./config/env");
 const logger_1 = require("./lib/logger");
 const health_1 = require("./routes/health");
+const qr_page_1 = require("./routes/qr-page");
 const whatsapp_1 = require("./routes/whatsapp");
 const client_1 = require("./whatsapp/client");
 const app = (0, express_1.default)();
 const whatsappClient = new client_1.WhatsAppClient();
 app.use(express_1.default.json({ limit: '1mb' }));
 app.use(health_1.healthRouter);
+app.use((0, qr_page_1.createQrPageRouter)(whatsappClient));
 app.use('/api/whatsapp', (0, whatsapp_1.createWhatsAppRouter)(whatsappClient));
 app.use((error, _req, res, _next) => {
     logger_1.logger.error('Unhandled backend error', error);
