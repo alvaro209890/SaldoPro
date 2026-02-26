@@ -221,12 +221,6 @@ export async function processWhatsAppAIMessage(
 
   const ai = await queryGroqAssistant(sanitizedMessages, context);
   const actionResult = await executeAction(uid, ai.actionObject, categories);
-  const shouldForceCapabilitiesIntro = Boolean(
-    options.isGreeting ||
-      options.isConversationRestart ||
-      options.isFirstMessage ||
-      options.isCapabilitiesQuestion
-  );
 
   if (actionResult.kind === 'added') {
     return buildAddedTransactionMessage(actionResult.receipt, ai.reply, settings.currency)
@@ -236,12 +230,6 @@ export async function processWhatsAppAIMessage(
   if (actionResult.kind === 'error') {
     const baseReply = ai.reply.trim() || 'Nao consegui concluir a acao solicitada.';
     return `${baseReply}\n\nAviso: ${actionResult.message}`.slice(0, env.maxMessageLength);
-  }
-
-  if (shouldForceCapabilitiesIntro) {
-    const intro = buildFinancialAssistantIntro(Boolean(options.isCapabilitiesQuestion));
-    const reply = ai.reply.trim();
-    return `${intro}${reply ? `\n\n${reply}` : ''}`.slice(0, env.maxMessageLength);
   }
 
   return `${ai.reply}`.slice(0, env.maxMessageLength);
