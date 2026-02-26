@@ -559,19 +559,15 @@ export class WhatsAppClient {
     }
 
     const trimmed = inboundText.trim();
+    // Mensagens normais de números não vinculados são ignoradas silenciosamente.
+    // Apenas códigos de acesso são processados para realizar a vinculação.
     if (!this.looksLikeAccessCode(trimmed)) {
-      if (this.requestedLinkCodePhones.has(normalizedPhone)) {
-        return;
-      }
-      await this.sendWithRetry(remoteJid, LINK_CODE_PROMPT, 'auto_reply');
-      this.requestedLinkCodePhones.add(normalizedPhone);
+      logger.info('Ignoring unbound WhatsApp number (no access code)', { from: normalizedPhone });
       return;
     }
 
     const linkedUid = await this.tryBindPhoneWithCode(normalizedPhone, trimmed);
     if (!linkedUid) {
-      // Clear the set so the next non-code message re-prompts the user instead of being silently dropped
-      this.requestedLinkCodePhones.delete(normalizedPhone);
       await this.sendWithRetry(remoteJid, LINK_CODE_INVALID, 'auto_reply');
       return;
     }
