@@ -197,14 +197,14 @@ export function AIAssistant() {
     // If chat is entirely empty (first time user), show a greeting manually as a visual stub
     const displayHistory = (chatHistory && chatHistory.length > 0)
         ? chatHistory
-        : [{ id: 'intro', role: 'assistant' as const, content: 'Olá! Sou o SaldoPro AI. Posso te ajudar a analisar seus gastos, lançar novas despesas ou editar antigos lançamentos.\n\nExperimente enviar a foto de um comprovante para lançarmos juntos! Como posso ser útil hoje?' }];
+        : [{ id: 'intro', role: 'assistant' as const, content: 'Olá! Sou o SaldoPro AI. Posso te ajudar a analisar seus gastos, lançar novas despesas ou editar antigos lançamentos.\n\nDescreva seu lançamento em texto para eu adicionar automaticamente!' }];
 
     return (
         <div className="flex h-full w-full overflow-hidden bg-gray-950 text-gray-100 font-sans">
 
             {/* Sidebar with Sessions */}
-            <div className="w-80 shrink-0 flex flex-col border-r border-surface-800 bg-[#0c1216] relative z-10 shadow-2xl">
-                <div className="p-4 border-b border-surface-800/50 flex flex-col gap-4">
+            <div className="w-80 shrink-0 flex flex-col border-r border-surface-800 bg-surface-900/50 relative z-10">
+                <div className="p-4 border-b border-surface-800 flex flex-col gap-4">
 
                     <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
@@ -241,8 +241,8 @@ export function AIAssistant() {
                                 key={session.id}
                                 onClick={() => setActiveSessionId(session.id)}
                                 className={`group flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all duration-200 ${activeSessionId === session.id
-                                    ? 'bg-indigo-500/10 border border-indigo-500/20 text-white relative'
-                                    : 'bg-transparent border border-transparent text-gray-400 hover:bg-surface-800/40 hover:text-gray-200'
+                                    ? 'bg-indigo-500/10 text-indigo-400 relative'
+                                    : 'bg-transparent text-gray-400 hover:bg-surface-800/50 hover:text-gray-200'
                                     }`}
                             >
                                 {activeSessionId === session.id && (
@@ -341,39 +341,7 @@ export function AIAssistant() {
                         {/* Input Area */}
                         <div className="p-4 sm:px-6 md:px-12 pb-6 shrink-0 relative z-20 bg-gradient-to-t from-surface-950 via-surface-950/90 to-transparent pt-12">
                             <div className="max-w-4xl mx-auto relative group">
-                                {imagePreview && (
-                                    <div className="absolute bottom-full mb-4 left-4 animate-in fade-in zoom-in duration-200">
-                                        <div className="relative inline-block border-2 border-surface-800 rounded-xl bg-surface-900 p-1">
-                                            <img src={imagePreview} alt="Preview" className="h-20 w-auto rounded-lg object-cover" />
-                                            <button
-                                                onClick={handleRemoveImage}
-                                                className="absolute -top-3 -right-3 bg-red-500 hover:bg-red-600 text-white rounded-full p-1 shadow-lg transition-colors"
-                                            >
-                                                <X className="w-4 h-4" />
-                                            </button>
-                                        </div>
-                                    </div>
-                                )}
-
-                                <div className="relative flex items-end bg-surface-900 border border-surface-800 rounded-xl shadow-lg focus-within:border-indigo-500/50 focus-within:ring-1 focus-within:ring-indigo-500/50 transition-all">
-                                    <button
-                                        type="button"
-                                        className="shrink-0 h-[52px] w-[52px] flex items-center justify-center text-gray-400 hover:text-indigo-400 transition-colors disabled:opacity-50"
-                                        onClick={() => fileInputRef.current?.click()}
-                                        disabled={isProcessing}
-                                        title="Anexar comprovante"
-                                    >
-                                        <ImagePlus className="w-5 h-5" />
-                                    </button>
-
-                                    <input
-                                        type="file"
-                                        accept="image/*"
-                                        className="hidden"
-                                        ref={fileInputRef}
-                                        onChange={handleImageChange}
-                                    />
-
+                                <div className="relative flex items-end bg-surface-900 border border-surface-800 rounded-xl shadow-lg focus-within:border-indigo-500/50 focus-within:ring-1 focus-within:ring-indigo-500/50 transition-all pl-2">
                                     <div className="relative flex-1 py-[14px]">
                                         <textarea
                                             value={input}
@@ -390,9 +358,9 @@ export function AIAssistant() {
                                     <div className="px-2 py-2 flex items-end">
                                         <button
                                             onClick={handleSend}
-                                            disabled={(!input.trim() && !imagePreview) || isProcessing}
+                                            disabled={!input.trim() || isProcessing}
                                             className={`h-9 w-9 flex items-center justify-center rounded-lg transition-all
-                                                ${(input.trim() || imagePreview) && !isProcessing
+                                                ${input.trim() && !isProcessing
                                                     ? 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-sm'
                                                     : 'bg-surface-800 text-gray-500 cursor-not-allowed'}`}
                                         >

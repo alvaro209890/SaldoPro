@@ -4,41 +4,87 @@ import type { WhatsAppClient } from '../whatsapp/client';
 export function createQrPageRouter(client: WhatsAppClient): Router {
   const router = Router();
 
-  router.get('/', (_req, res) => {
+  router.get('/', async (_req, res) => {
     const status = client.getStatus();
-    const statusText = status.connected
-      ? '<p class="status ok">WhatsApp conectado</p>'
-      : '<p class="status info">WhatsApp desconectado</p>';
+    let bodyContent: string;
+    let refreshSec = 3;
+
+    if (status.connected) {
+      bodyContent = `
+        <div class="connected-box">
+          <div class="check">&#x2713;</div>
+          <p>WhatsApp conectado</p>
+          <p class="phone">${status.phone ?? ''}</p>
+        </div>`;
+      refreshSec = 10;
+    } else {
+      const payload = await client.getQrPayload();
+      if (payload.available) {
+        bodyContent = `
+          <img src="${payload.qrPngBase64}" alt="WhatsApp QR Code" />
+          <p class="expires">Expira em: <strong>${payload.expiresInSec}s</strong></p>
+          <p class="hint">Abra o WhatsApp &rarr; Dispositivos conectados &rarr; Conectar dispositivo</p>`;
+      } else {
+        bodyContent = `
+          <div class="spinner"></div>
+          <p class="hint">Conectando ao WhatsApp, aguarde...</p>`;
+        refreshSec = 2;
+      }
+    }
 
     res.send(`<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
+  <meta http-equiv="refresh" content="${refreshSec}" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SaldoPro Backend</title>
+  <title>SaldoPro — WhatsApp</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: Arial, sans-serif;
       background: #111827;
       color: #f9fafb;
-      display: flex;
-      justify-content: center;
-      align-items: center;
       min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 24px;
     }
-    .container { text-align: center; padding: 2rem; }
-    h1 { font-size: 1.4rem; color: #e5e7eb; margin-bottom: 1rem; }
-    .status { font-size: 1rem; padding: 8px 20px; border-radius: 8px; display: inline-block; }
-    .ok { background: #14532d; color: #bbf7d0; }
-    .info { background: #1e3a5f; color: #bfdbfe; }
+    h1 { font-size: 1.4rem; letter-spacing: 0.02em; color: #e5e7eb; }
+    img {
+      width: 280px; height: 280px;
+      background: #fff; padding: 16px;
+      border-radius: 12px; display: block;
+    }
+    .expires { font-size: 0.9rem; color: #9ca3af; }
+    .hint { font-size: 0.85rem; color: #9ca3af; text-align: center; max-width: 300px; }
+    .connected-box { text-align: center; }
+    .connected-box .check {
+      font-size: 3rem; color: #22c55e;
+      width: 72px; height: 72px; line-height: 72px;
+      border-radius: 50%; background: #14532d;
+      margin: 0 auto 12px;
+    }
+    .connected-box p { font-size: 1.1rem; }
+    .connected-box .phone { font-size: 0.9rem; color: #9ca3af; margin-top: 4px; }
+    .spinner {
+      width: 48px; height: 48px;
+      border: 4px solid #1f2937;
+      border-top-color: #3b82f6;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    footer { font-size: 0.7rem; color: #4b5563; margin-top: 12px; }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>SaldoPro &mdash; Backend</h1>
-    ${statusText}
-  </div>
+  <h1>SaldoPro &mdash; WhatsApp</h1>
+  ${bodyContent}
+  <footer>Atualiza automaticamente</footer>
 </body>
 </html>`);
   });
