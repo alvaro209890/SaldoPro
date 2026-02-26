@@ -273,8 +273,8 @@ async function fallbackResolveUidFromPhone(variants: string[]): Promise<string |
 
 async function fallbackResolveUidFromAccessCode(
   normalizedCode: string,
-  variants: string
-[]): Promise<string | null> {
+  variants: string[]
+): Promise<string | null> {
   const profiles = await scanAllProfileSettings();
   for (const entry of profiles) {
     const code = typeof entry.data.whatsappAccessCodeNormalized === 'string'
