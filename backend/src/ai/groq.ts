@@ -150,7 +150,9 @@ export async function queryGroqAssistant(
     body: JSON.stringify({
       model: targetModel,
       temperature: 0.2,
-      response_format: { type: 'json_object' },
+      // response_format is not supported by vision models (e.g. llama-3.2-90b-vision-preview)
+      // The system prompt already instructs the model to return valid JSON
+      ...(lastMessage?.imageDataUrl ? {} : { response_format: { type: 'json_object' } }),
       messages: [
         {
           role: 'system',

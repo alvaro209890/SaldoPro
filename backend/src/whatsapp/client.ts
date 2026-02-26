@@ -560,6 +560,8 @@ export class WhatsAppClient {
 
     const linkedUid = await this.tryBindPhoneWithCode(normalizedPhone, trimmed);
     if (!linkedUid) {
+      // Clear the set so the next non-code message re-prompts the user instead of being silently dropped
+      this.requestedLinkCodePhones.delete(normalizedPhone);
       await this.sendWithRetry(remoteJid, LINK_CODE_INVALID, 'auto_reply');
       return;
     }

@@ -203,7 +203,8 @@ export async function resolveUidFromAccessCode(
 ): Promise<string | null> {
   const normalizedCode = normalizeAccessCode(accessCodeText);
   const normalizedPhone = normalizePhoneNumber(phone);
-  if (normalizedCode.length < 6 || normalizedPhone.length < 10) {
+  // Minimum 8 chars to match looksLikeAccessCode() in WhatsAppClient
+  if (normalizedCode.length < 8 || normalizedPhone.length < 10) {
     return null;
   }
 
@@ -293,12 +294,14 @@ export async function getRecentConversationByPhone(
   const [inboundSnap, outboundSnap] = await Promise.all([
     db
       .collection(COLLECTION_NAME)
+      .where('ownerUid', '==', uid)
       .where('from', '==', normalizedPhone)
       .orderBy('createdAt', 'desc')
       .limit(limitCount)
       .get(),
     db
       .collection(COLLECTION_NAME)
+      .where('ownerUid', '==', uid)
       .where('to', '==', normalizedPhone)
       .orderBy('createdAt', 'desc')
       .limit(limitCount)
