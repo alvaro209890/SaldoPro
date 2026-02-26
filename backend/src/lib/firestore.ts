@@ -197,6 +197,25 @@ export async function isPhoneAllowedForAnyAccount(phone: string): Promise<boolea
   return snap.docs.some((doc) => doc.id === 'profile');
 }
 
+export async function resolveUidFromPhone(phone: string): Promise<string | null> {
+  const normalizedPhone = normalizePhoneNumber(phone);
+  if (normalizedPhone.length < 10) return null;
+
+  const snap = await db
+    .collectionGroup('settings')
+    .where('whatsappAllowedNumbers', 'array-contains', normalizedPhone)
+    .limit(5)
+    .get();
+
+  for (const settingsDoc of snap.docs) {
+    if (settingsDoc.id !== 'profile') continue;
+    const uid = extractUidFromSettingsDoc(settingsDoc);
+    if (uid) return uid;
+  }
+
+  return null;
+}
+
 export async function resolveUidFromAccessCode(
   accessCodeText: string,
   phone: string

@@ -14,11 +14,11 @@ import type { GroqChatMessage } from '../ai/groq';
 import { env } from '../config/env';
 import {
   getPhoneBinding,
-  isPhoneAllowedForAnyAccount,
   isPhoneAllowedForUid,
   getRecentConversationByPhone,
   inboundMessageExists,
   resolveUidFromAccessCode,
+  resolveUidFromPhone,
   savePhoneBinding,
   saveMessageSafe
 } from '../lib/firestore';
@@ -285,7 +285,26 @@ export class WhatsAppClient {
     const rawType = extractRawType(message);
     const imageDataUrl = await this.extractInboundImageDataUrl(message);
     const conversationText = text.trim() || (imageDataUrl ? IMAGE_ONLY_FALLBACK_TEXT : '');
-    const binding = await getPhoneBinding(remotePhone);
+    let binding = await getPhoneBinding(remotePhone);
+
+    // Se não há binding, tenta auto-vincular pelo número cadastrado na conta
+    if (!binding) {
+      const resolvedUid = await resolveUidFromPhone(remotePhone);
+      if (resolvedUid) {
+        await savePhoneBinding(remotePhone, resolvedUid);
+        binding = {
+          phone: normalizePhoneNumber(remotePhone),
+          uid: resolvedUid,
+          linkedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        logger.info('WhatsApp: numero auto-vinculado pelo cadastro da conta', {
+          phone: remotePhone,
+          uid: resolvedUid
+        });
+      }
+    }
+
     const ownerUid = binding?.uid;
 
     const inboundRecord: WhatsAppMessageRecord = {
@@ -550,19 +569,11 @@ export class WhatsAppClient {
     inboundText: string
   ): Promise<void> {
     const normalizedPhone = normalizePhoneNumber(remotePhone);
-    const allowedForSomeAccount = await isPhoneAllowedForAnyAccount(normalizedPhone);
-    if (!allowedForSomeAccount) {
-      logger.info('Ignoring WhatsApp message from non-authorized number', {
-        from: normalizedPhone
-      });
-      return;
-    }
-
     const trimmed = inboundText.trim();
-    // Mensagens normais de números não vinculados são ignoradas silenciosamente.
-    // Apenas códigos de acesso são processados para realizar a vinculação.
+
+    // Somente processa se parecer um código de acesso manual
     if (!this.looksLikeAccessCode(trimmed)) {
-      logger.info('Ignoring unbound WhatsApp number (no access code)', { from: normalizedPhone });
+      logger.info('Ignoring WhatsApp message from non-authorized number', { from: normalizedPhone });
       return;
     }
 
