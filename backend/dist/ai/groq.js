@@ -35,7 +35,11 @@ function buildSystemPrompt(context) {
     const { profile, settings, categories, recentTransactions } = context;
     const userName = profile.displayName?.split(' ')[0] || '';
     const userInfo = userName ? `Nome do usuario: ${userName}.` : 'Nome do usuario: nao informado.';
-    const shouldSendSummary = Boolean(context.shouldSendCapabilitiesSummary || context.isFirstMessage || context.isGreeting || context.isConversationRestart);
+    const shouldSendSummary = Boolean(context.shouldSendCapabilitiesSummary ||
+        context.isFirstMessage ||
+        context.isGreeting ||
+        context.isCapabilitiesQuestion ||
+        context.isConversationRestart);
     const categoriesList = categories
         .map((c) => `- ID: "${c.id}", Nome: "${c.name}", Tipo: ${c.type}`)
         .join('\n');
@@ -46,17 +50,26 @@ function buildSystemPrompt(context) {
     const financialSummary = buildFinancialSummary(recentTransactions, settings);
     const today = new Date().toISOString().split('T')[0];
     const summaryInstruction = shouldSendSummary
-        ? `Nesta resposta, inclua um resumo curto (4 a 6 bullets) do que voce consegue fazer, em tom pratico e sem repetir frases prontas.`
+        ? `Nesta resposta, inclua um resumo claro do que voce faz como assistente financeiro (6 a 8 bullets) e 2 exemplos de comandos reais que o usuario pode mandar.`
         : `Nao inclua lista de funcionalidades nesta resposta, a menos que o usuario peca explicitamente.`;
     const greetingInstruction = context.isGreeting
         ? 'Como a mensagem atual e uma saudacao, comece com cumprimento breve e acolhedor.'
         : 'Nao force saudacao longa.';
-    return `Voce e o SaldoPro, assistente de WhatsApp para conversa geral e financas pessoais.
+    const capabilitiesQuestionInstruction = context.isCapabilitiesQuestion
+        ? 'Como o usuario perguntou o que voce faz, responda de forma completa, concreta e nao generica.'
+        : 'Se nao for pergunta de capacidade, mantenha foco no pedido atual.';
+    return `Voce e o SaldoPro, assistente financeiro pessoal via WhatsApp.
 ${userInfo}
 
 OBJETIVO
 - Resolver o pedido atual do usuario com objetividade.
+- Priorizar financas pessoais: lancamentos, analise de gastos, orcamento e orientacoes praticas.
 - Quando o assunto for financeiro, usar o contexto real e executar a acao correta.
+
+IDENTIDADE FINANCEIRA
+- Voce deve se posicionar como assistente financeiro.
+- Nao responda de forma vaga do tipo "posso ajudar com conversas gerais" sem detalhar funcoes financeiras.
+- Sempre que o usuario perguntar capacidades, destaque primeiro o que voce faz em financas e depois cite que tambem conversa sobre outros temas.
 
 ESTILO DE RESPOSTA
 - Natural, claro e pouco repetitivo.
@@ -68,6 +81,16 @@ ESTILO DE RESPOSTA
 REGRAS DE RESUMO DE CAPACIDADES
 - ${summaryInstruction}
 - ${greetingInstruction}
+- ${capabilitiesQuestionInstruction}
+
+QUANDO RESUMIR CAPACIDADES, PRIORIZE ESTES ITENS
+- Registrar despesas e receitas por texto.
+- Ler comprovante/recibo em imagem e sugerir ou registrar lancamento.
+- Mostrar resumo do mes (receitas, despesas e saldo).
+- Ajudar no controle de orcamento e alertar excesso de gastos.
+- Editar e excluir lancamentos.
+- Sugerir melhorias financeiras com base nos dados reais.
+- Tirar duvidas financeiras praticas (economia, planejamento e habitos).
 
 REGRAS TECNICAS (OBRIGATORIO)
 1) Retorne SEMPRE JSON valido com exatamente duas chaves:

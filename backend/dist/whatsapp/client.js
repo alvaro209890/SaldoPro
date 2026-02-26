@@ -70,6 +70,15 @@ function isGreetingMessage(text) {
         return false;
     return /^(oi+|ola|opa|bom dia|boa tarde|boa noite|e ai|eae|hello|hey)\b/.test(normalized);
 }
+function isCapabilitiesIntentMessage(text) {
+    const normalized = normalizeForGreeting(text);
+    if (!normalized)
+        return false;
+    return (/\b(o que|oq|o q)\s+(voce|vc)\s+(pode|faz)\b/.test(normalized) ||
+        /\bcomo\s+(voce|vc)\s+pode\s+ajudar\b/.test(normalized) ||
+        /\bquais?\s+(suas\s+)?(funcoes|funcionalidades|capacidades)\b/.test(normalized) ||
+        /\b(o que|oq)\s+faz\b/.test(normalized));
+}
 const IMAGE_ONLY_FALLBACK_TEXT = 'Analise a imagem enviada e registre o lancamento corretamente.';
 class WhatsAppClient {
     socket = null;
@@ -349,11 +358,25 @@ class WhatsAppClient {
                 logger_1.logger.info('MSG_RESOLVE: no account found for phone', { phone: remotePhone });
             }
         }
-        const ownerUid = binding?.uid;
+        if (!binding) {
+            logger_1.logger.info('MSG_UNLINKED: no binding found, ignoring message', { from: remotePhone });
+            this.rememberInbound(messageId);
+            await this.handleUnlinkedMessage(remotePhone);
+            return;
+        }
+        const stillAllowed = await (0, firestore_1.isPhoneAllowedForUid)(binding.uid, remotePhone);
+        if (!stillAllowed) {
+            logger_1.logger.info('MSG_BLOCKED: phone not in whitelist anymore, ignoring message', {
+                from: remotePhone,
+                uid: binding.uid
+            });
+            this.rememberInbound(messageId);
+            return;
+        }
         const inboundRecord = {
             messageId,
             direction: 'inbound',
-            ...(ownerUid ? { ownerUid } : {}),
+            ownerUid: binding.uid,
             from: remotePhone,
             to: this.phone ?? '',
             text,
@@ -371,24 +394,6 @@ class WhatsAppClient {
         };
         await (0, firestore_1.saveMessageSafe)(inboundRecord);
         this.rememberInbound(messageId);
-        if (!binding) {
-            logger_1.logger.info('MSG_UNLINKED: no binding found, ignoring message', { from: remotePhone });
-            await this.handleUnlinkedMessage(remotePhone);
-            return;
-        }
-        const stillAllowed = await (0, firestore_1.isPhoneAllowedForUid)(binding.uid, remotePhone);
-        logger_1.logger.info('MSG_WHITELIST: phone whitelist check', {
-            phone: remotePhone,
-            uid: binding.uid,
-            allowed: stillAllowed
-        });
-        if (!stillAllowed) {
-            logger_1.logger.info('MSG_BLOCKED: phone not in whitelist', {
-                from: remotePhone,
-                uid: binding.uid
-            });
-            return;
-        }
         logger_1.logger.info('MSG_AI: sending to AI for reply', {
             uid: binding.uid,
             phone: remotePhone,
@@ -404,9 +409,10 @@ class WhatsAppClient {
                 const conversation = await this.getConversationHistory(ownerUid, remotePhone);
                 const isFirstMessage = conversation.length === 0;
                 const isGreeting = isGreetingMessage(inboundText);
+                const isCapabilitiesQuestion = isCapabilitiesIntentMessage(inboundText);
                 const lastActivityAt = await (0, firestore_1.getLastConversationActivityByPhone)(ownerUid, remotePhone);
                 const isConversationRestart = this.isConversationRestart(lastActivityAt, isFirstMessage);
-                const shouldSendCapabilitiesSummary = isGreeting || isFirstMessage || isConversationRestart;
+                const shouldSendCapabilitiesSummary = isGreeting || isFirstMessage || isConversationRestart || isCapabilitiesQuestion;
                 if (isFirstMessage) {
                     logger_1.logger.info('MSG_WELCOME: first message detected, AI will introduce itself', {
                         uid: ownerUid,
@@ -429,6 +435,7 @@ class WhatsAppClient {
                     totalMessages: aiMessages.length,
                     hasImage: Boolean(imageDataUrl),
                     isGreeting,
+                    isCapabilitiesQuestion,
                     isConversationRestart,
                     shouldSendCapabilitiesSummary
                 });
@@ -442,6 +449,7 @@ class WhatsAppClient {
                 const aiReply = await (0, assistant_1.processWhatsAppAIMessage)(ownerUid, aiMessages, {
                     isFirstMessage,
                     isGreeting,
+                    isCapabilitiesQuestion,
                     isConversationRestart,
                     shouldSendCapabilitiesSummary
                 });
@@ -509,7 +517,9 @@ class WhatsAppClient {
                         isGroup: (0, events_1.isGroupJid)(jid)
                     }
                 };
-                await (0, firestore_1.saveMessageSafe)(sentRecord);
+                if (ownerUid) {
+                    await (0, firestore_1.saveMessageSafe)(sentRecord);
+                }
                 this.rememberSentByBot(messageId);
                 return { messageId };
             }
@@ -539,7 +549,9 @@ class WhatsAppClient {
                 isGroup: (0, events_1.isGroupJid)(jid)
             }
         };
-        await (0, firestore_1.saveMessageSafe)(failedRecord);
+        if (ownerUid) {
+            await (0, firestore_1.saveMessageSafe)(failedRecord);
+        }
         throw lastError instanceof Error ? lastError : new Error('Failed to send WhatsApp message');
     }
     async setQr(qr) {

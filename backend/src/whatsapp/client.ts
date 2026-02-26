@@ -67,6 +67,18 @@ function isGreetingMessage(text: string): boolean {
   return /^(oi+|ola|opa|bom dia|boa tarde|boa noite|e ai|eae|hello|hey)\b/.test(normalized);
 }
 
+function isCapabilitiesIntentMessage(text: string): boolean {
+  const normalized = normalizeForGreeting(text);
+  if (!normalized) return false;
+
+  return (
+    /\b(o que|oq|o q)\s+(voce|vc)\s+(pode|faz)\b/.test(normalized) ||
+    /\bcomo\s+(voce|vc)\s+pode\s+ajudar\b/.test(normalized) ||
+    /\bquais?\s+(suas\s+)?(funcoes|funcionalidades|capacidades)\b/.test(normalized) ||
+    /\b(o que|oq)\s+faz\b/.test(normalized)
+  );
+}
+
 interface ConversationEntry {
   role: 'user' | 'assistant';
   content: string;
@@ -400,12 +412,27 @@ export class WhatsAppClient {
       }
     }
 
-    const ownerUid = binding?.uid;
+    if (!binding) {
+      logger.info('MSG_UNLINKED: no binding found, ignoring message', { from: remotePhone });
+      this.rememberInbound(messageId);
+      await this.handleUnlinkedMessage(remotePhone);
+      return;
+    }
+
+    const stillAllowed = await isPhoneAllowedForUid(binding.uid, remotePhone);
+    if (!stillAllowed) {
+      logger.info('MSG_BLOCKED: phone not in whitelist anymore, ignoring message', {
+        from: remotePhone,
+        uid: binding.uid
+      });
+      this.rememberInbound(messageId);
+      return;
+    }
 
     const inboundRecord: WhatsAppMessageRecord = {
       messageId,
       direction: 'inbound',
-      ...(ownerUid ? { ownerUid } : {}),
+      ownerUid: binding.uid,
       from: remotePhone,
       to: this.phone ?? '',
       text,
@@ -424,12 +451,6 @@ export class WhatsAppClient {
 
     await saveMessageSafe(inboundRecord);
     this.rememberInbound(messageId);
-
-    if (!binding) {
-      logger.info('MSG_UNLINKED: no binding found, ignoring message', { from: remotePhone });
-      await this.handleUnlinkedMessage(remotePhone);
-      return;
-    }
 
     logger.info('MSG_AI: sending to AI for reply', {
       uid: binding.uid,
@@ -454,9 +475,11 @@ export class WhatsAppClient {
         const conversation = await this.getConversationHistory(ownerUid, remotePhone);
         const isFirstMessage = conversation.length === 0;
         const isGreeting = isGreetingMessage(inboundText);
+        const isCapabilitiesQuestion = isCapabilitiesIntentMessage(inboundText);
         const lastActivityAt = await getLastConversationActivityByPhone(ownerUid, remotePhone);
         const isConversationRestart = this.isConversationRestart(lastActivityAt, isFirstMessage);
-        const shouldSendCapabilitiesSummary = isGreeting || isFirstMessage || isConversationRestart;
+        const shouldSendCapabilitiesSummary =
+          isGreeting || isFirstMessage || isConversationRestart || isCapabilitiesQuestion;
 
         if (isFirstMessage) {
           logger.info('MSG_WELCOME: first message detected, AI will introduce itself', {
@@ -483,6 +506,7 @@ export class WhatsAppClient {
           totalMessages: aiMessages.length,
           hasImage: Boolean(imageDataUrl),
           isGreeting,
+          isCapabilitiesQuestion,
           isConversationRestart,
           shouldSendCapabilitiesSummary
         });
@@ -498,6 +522,7 @@ export class WhatsAppClient {
         const aiReply = await processWhatsAppAIMessage(ownerUid, aiMessages, {
           isFirstMessage,
           isGreeting,
+          isCapabilitiesQuestion,
           isConversationRestart,
           shouldSendCapabilitiesSummary
         });
@@ -573,7 +598,9 @@ export class WhatsAppClient {
           }
         };
 
-        await saveMessageSafe(sentRecord);
+        if (ownerUid) {
+          await saveMessageSafe(sentRecord);
+        }
         this.rememberSentByBot(messageId);
         return { messageId };
       } catch (error) {
@@ -603,7 +630,9 @@ export class WhatsAppClient {
         isGroup: isGroupJid(jid)
       }
     };
-    await saveMessageSafe(failedRecord);
+    if (ownerUid) {
+      await saveMessageSafe(failedRecord);
+    }
 
     throw lastError instanceof Error ? lastError : new Error('Failed to send WhatsApp message');
   }

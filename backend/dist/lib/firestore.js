@@ -276,7 +276,19 @@ async function resolveUidFromPhone(phone) {
         return null;
     const variants = (0, events_1.brazilianPhoneVariants)(normalizedPhone);
     try {
-        return await fallbackResolveUidFromPhone(variants);
+        const result = await fallbackResolveUidFromPhone(variants);
+        if (!result) {
+            // Log all registered numbers for debugging
+            const profiles = await scanAllProfileSettings();
+            const allNumbers = profiles.flatMap((p) => normalizeAllowedNumbers(p.data.whatsappAllowedNumbers));
+            logger_1.logger.info('MSG_RESOLVE_DEBUG: phone not found in any account', {
+                incomingPhone: normalizedPhone,
+                variantsTried: variants,
+                registeredNumbers: allNumbers.slice(0, 20),
+                totalUsers: profiles.length
+            });
+        }
+        return result;
     }
     catch (error) {
         logger_1.logger.error('resolveUidFromPhone: failed to scan profiles', error);
@@ -286,47 +298,23 @@ async function resolveUidFromPhone(phone) {
 async function resolveUidFromAccessCode(accessCodeText, phone) {
     const normalizedCode = normalizeAccessCode(accessCodeText);
     const normalizedPhone = (0, events_1.normalizePhoneNumber)(phone);
-    // Minimum 8 chars to match looksLikeAccessCode() in WhatsAppClient
     if (normalizedCode.length < 8 || normalizedPhone.length < 10) {
         return null;
     }
     try {
-        const snap = await db
-            .collectionGroup('settings')
-            .where('whatsappAccessCodeNormalized', '==', normalizedCode)
-            .limit(5)
-            .get();
-        for (const settingsDoc of snap.docs) {
-            if (settingsDoc.id !== 'profile')
-                continue;
-            const uid = extractUidFromSettingsDoc(settingsDoc);
-            if (!uid)
-                continue;
-            const data = settingsDoc.data();
-            const allowed = Array.isArray(data.whatsappAllowedNumbers)
-                ? data.whatsappAllowedNumbers
-                    .map((value) => (typeof value === 'string' ? (0, events_1.normalizePhoneNumber)(value) : ''))
-                    .filter((value) => value.length >= 10)
-                : [];
-            const phoneVariants = (0, events_1.brazilianPhoneVariants)(normalizedPhone);
-            if (phoneVariants.some((v) => allowed.includes(v))) {
-                return uid;
+        // Scan all profiles and match by access code only
+        const profiles = await scanAllProfileSettings();
+        for (const entry of profiles) {
+            const entryCode = normalizeAccessCode(typeof entry.data.whatsappAccessCodeNormalized === 'string'
+                ? entry.data.whatsappAccessCodeNormalized
+                : '');
+            if (entryCode && entryCode === normalizedCode) {
+                return entry.uid;
             }
         }
     }
     catch (error) {
-        logger_1.logger.error('resolveUidFromAccessCode: collectionGroup query failed (missing Firestore index?)', error);
-        if (!isMissingIndexError(error)) {
-            return null;
-        }
-        logger_1.logger.warn('resolveUidFromAccessCode: falling back to users profile scan');
-        try {
-            const variants = (0, events_1.brazilianPhoneVariants)(normalizedPhone);
-            return await fallbackResolveUidFromAccessCode(normalizedCode, variants);
-        }
-        catch (fallbackError) {
-            logger_1.logger.error('resolveUidFromAccessCode fallback failed', fallbackError);
-        }
+        logger_1.logger.error('resolveUidFromAccessCode failed', error);
     }
     return null;
 }
