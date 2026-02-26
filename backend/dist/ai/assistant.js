@@ -30,7 +30,7 @@ function normalizePaymentMethod(method) {
     }
     return 'pix';
 }
-async function processWhatsAppAIMessage(uid, messages) {
+async function processWhatsAppAIMessage(uid, messages, options = {}) {
     if (!uid || uid.trim().length === 0) {
         return 'Nao foi possivel identificar a conta vinculada para processar a mensagem.';
     }
@@ -45,29 +45,40 @@ async function processWhatsAppAIMessage(uid, messages) {
     if (sanitizedMessages.length === 0) {
         return 'Nao consegui interpretar a mensagem recebida.';
     }
-    const categories = await (0, firestore_1.getUserCategories)(uid);
-    const recentTransactions = await (0, firestore_1.getRecentTransactions)(uid, env_1.env.whatsappAiRecentTransactions);
-    const ai = await (0, groq_1.queryGroqAssistant)(sanitizedMessages, categories, recentTransactions);
-    const actionMessage = await executeAction(uid, ai.actionObject, categories);
-    if (!actionMessage) {
-        return ai.reply;
-    }
-    return `${ai.reply}\n\n${actionMessage}`.slice(0, env_1.env.maxMessageLength);
+    const [categories, recentTransactions, settings, profile] = await Promise.all([
+        (0, firestore_1.getUserCategories)(uid),
+        (0, firestore_1.getRecentTransactions)(uid, env_1.env.whatsappAiRecentTransactions),
+        (0, firestore_1.getUserSettings)(uid),
+        (0, firestore_1.getUserProfile)(uid)
+    ]);
+    const context = {
+        profile,
+        settings,
+        categories,
+        recentTransactions,
+        isFirstMessage: Boolean(options.isFirstMessage),
+        isGreeting: Boolean(options.isGreeting),
+        isConversationRestart: Boolean(options.isConversationRestart),
+        shouldSendCapabilitiesSummary: Boolean(options.shouldSendCapabilitiesSummary)
+    };
+    const ai = await (0, groq_1.queryGroqAssistant)(sanitizedMessages, context);
+    await executeAction(uid, ai.actionObject, categories);
+    return `${ai.reply}`.slice(0, env_1.env.maxMessageLength);
 }
 async function executeAction(uid, action, categories) {
     try {
         if (action.action === 'none') {
-            return null;
+            return;
         }
         if (action.action === 'add_transaction') {
             if (!Number.isFinite(action.amount) || action.amount <= 0) {
-                return 'Nao executei o lancamento porque o valor esta invalido.';
+                return;
             }
             const categoryExists = categories.find((c) => c.id === action.categoryId);
             const fallbackCategory = categories.find((c) => c.type === action.type);
             const category = categoryExists?.id ?? fallbackCategory?.id;
             if (!category) {
-                return 'Nao executei o lancamento porque nao encontrei categoria compativel.';
+                return;
             }
             const payload = {
                 type: action.type,
@@ -77,12 +88,12 @@ async function executeAction(uid, action, categories) {
                 date: normalizeDate(action.date),
                 paymentMethod: normalizePaymentMethod(action.paymentMethod)
             };
-            const transactionId = await (0, firestore_1.addUserTransaction)(uid, payload);
-            return `Lancamento criado com sucesso (ID: ${transactionId}).`;
+            await (0, firestore_1.addUserTransaction)(uid, payload);
+            return;
         }
         if (action.action === 'update_transaction') {
             if (!action.id || typeof action.id !== 'string') {
-                return 'Nao executei a edicao porque o ID da transacao nao foi informado.';
+                return;
             }
             const changes = { ...(action.changes ?? {}) };
             if ('categoryId' in changes && !('category' in changes)) {
@@ -98,27 +109,25 @@ async function executeAction(uid, action, categories) {
             if ('amount' in changes) {
                 const amount = Number(changes.amount);
                 if (!Number.isFinite(amount) || amount <= 0) {
-                    return 'Nao executei a edicao porque o novo valor esta invalido.';
+                    return;
                 }
                 changes.amount = amount;
             }
             if (Object.keys(changes).length === 0) {
-                return 'Nao executei a edicao porque nao houve campos validos para atualizar.';
+                return;
             }
             await (0, firestore_1.updateUserTransaction)(uid, action.id, changes);
-            return `Transacao ${action.id} atualizada com sucesso.`;
+            return;
         }
         if (action.action === 'delete_transaction') {
             if (!action.id || typeof action.id !== 'string') {
-                return 'Nao executei a exclusao porque o ID da transacao nao foi informado.';
+                return;
             }
             await (0, firestore_1.deleteUserTransaction)(uid, action.id);
-            return `Transacao ${action.id} removida com sucesso.`;
+            return;
         }
     }
     catch (error) {
         logger_1.logger.error('Failed executing AI financial action', error);
-        return 'Entendi o pedido, mas ocorreu erro ao salvar no banco.';
     }
-    return null;
 }

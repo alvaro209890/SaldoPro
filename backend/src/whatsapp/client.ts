@@ -16,6 +16,7 @@ import type { GroqChatMessage } from '../ai/groq';
 import { env } from '../config/env';
 import {
   clearWhatsAppAuthSnapshot,
+  getLastConversationActivityByPhone,
   getPhoneBinding,
   isPhoneAllowedForUid,
   getRecentConversationByPhone,
@@ -47,6 +48,23 @@ function sleep(ms: number): Promise<void> {
 function asDisconnectCode(error: unknown): number | null {
   const code = (error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode;
   return typeof code === 'number' ? code : null;
+}
+
+function normalizeForGreeting(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isGreetingMessage(text: string): boolean {
+  const normalized = normalizeForGreeting(text);
+  if (!normalized) return false;
+
+  return /^(oi+|ola|opa|bom dia|boa tarde|boa noite|e ai|eae|hello|hey)\b/.test(normalized);
 }
 
 interface ConversationEntry {
@@ -413,28 +431,6 @@ export class WhatsAppClient {
       return;
     }
 
-    const stillAllowed = await isPhoneAllowedForUid(binding.uid, remotePhone);
-    logger.info('MSG_WHITELIST: phone whitelist check', {
-      phone: remotePhone,
-      uid: binding.uid,
-      allowed: stillAllowed
-    });
-
-    if (!stillAllowed) {
-      logger.info('MSG_BLOCKED: phone not in whitelist', {
-        from: remotePhone,
-        uid: binding.uid
-      });
-      return;
-    }
-
-    if (conversationText || imageDataUrl) {
-      await this.appendConversationMessage(binding.uid, remotePhone, {
-        role: 'user',
-        content: conversationText
-      });
-    }
-
     logger.info('MSG_AI: sending to AI for reply', {
       uid: binding.uid,
       phone: remotePhone,
@@ -457,6 +453,10 @@ export class WhatsAppClient {
       try {
         const conversation = await this.getConversationHistory(ownerUid, remotePhone);
         const isFirstMessage = conversation.length === 0;
+        const isGreeting = isGreetingMessage(inboundText);
+        const lastActivityAt = await getLastConversationActivityByPhone(ownerUid, remotePhone);
+        const isConversationRestart = this.isConversationRestart(lastActivityAt, isFirstMessage);
+        const shouldSendCapabilitiesSummary = isGreeting || isFirstMessage || isConversationRestart;
 
         if (isFirstMessage) {
           logger.info('MSG_WELCOME: first message detected, AI will introduce itself', {
@@ -465,15 +465,42 @@ export class WhatsAppClient {
           });
         }
 
-        const aiMessages: GroqChatMessage[] = conversation.map((entry, index) => ({
+        // Build AI messages from history (text only)
+        const aiMessages: GroqChatMessage[] = conversation.map((entry) => ({
           role: entry.role,
-          content: entry.content,
-          ...(imageDataUrl && index === conversation.length - 1 && entry.role === 'user'
-            ? { imageDataUrl }
-            : {})
+          content: entry.content
         }));
 
-        const aiReply = await processWhatsAppAIMessage(ownerUid, aiMessages, isFirstMessage);
+        // Always add the current message at the end with the image if present
+        aiMessages.push({
+          role: 'user',
+          content: inboundText.trim() || (imageDataUrl ? 'Analise a imagem enviada e registre o lançamento corretamente.' : ''),
+          ...(imageDataUrl ? { imageDataUrl } : {})
+        });
+
+        logger.info('MSG_AI_CONTEXT: sending to Groq', {
+          historyCount: conversation.length,
+          totalMessages: aiMessages.length,
+          hasImage: Boolean(imageDataUrl),
+          isGreeting,
+          isConversationRestart,
+          shouldSendCapabilitiesSummary
+        });
+
+        // Save user message to conversation cache for future context
+        if (inboundText.trim() || imageDataUrl) {
+          await this.appendConversationMessage(ownerUid, remotePhone, {
+            role: 'user',
+            content: inboundText.trim() || 'Imagem enviada no WhatsApp.'
+          });
+        }
+
+        const aiReply = await processWhatsAppAIMessage(ownerUid, aiMessages, {
+          isFirstMessage,
+          isGreeting,
+          isConversationRestart,
+          shouldSendCapabilitiesSummary
+        });
         if (aiReply.trim()) {
           await this.sendWithRetry(remoteJid, aiReply.trim(), 'auto_reply', ownerUid);
           await this.appendConversationMessage(ownerUid, remotePhone, {
@@ -898,6 +925,17 @@ export class WhatsAppClient {
     const current = await this.getConversationHistory(uid, normalized);
     const updated = [...current, { role: message.role, content }].slice(-env.whatsappAiHistoryLimit);
     this.conversationByPhone.set(this.conversationKey(uid, normalized), updated);
+  }
+
+  private isConversationRestart(lastActivityAt: string | null, isFirstMessage: boolean): boolean {
+    if (isFirstMessage) return true;
+    if (!lastActivityAt) return false;
+
+    const parsed = Date.parse(lastActivityAt);
+    if (!Number.isFinite(parsed)) return false;
+
+    const elapsedMinutes = (Date.now() - parsed) / (60 * 1000);
+    return elapsedMinutes >= env.whatsappAiNewConversationMinutes;
   }
 
   private conversationKey(uid: string, phone: string): string {

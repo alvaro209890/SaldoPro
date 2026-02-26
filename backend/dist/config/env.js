@@ -56,6 +56,7 @@ exports.env = {
     groqVisionModel: process.env.GROQ_VISION_MODEL?.trim() || 'meta-llama/llama-4-maverick-17b-128e-instruct',
     whatsappAiRecentTransactions: parseInteger(process.env.WHATSAPP_AI_MAX_RECENT_TX, 50),
     whatsappAiHistoryLimit: parseInteger(process.env.WHATSAPP_AI_HISTORY_LIMIT, 10),
+    whatsappAiNewConversationMinutes: parseInteger(process.env.WHATSAPP_AI_NEW_CONVERSATION_MINUTES, 180),
     whatsappAiImageMaxBytes: parseInteger(process.env.WHATSAPP_AI_IMAGE_MAX_BYTES, 5 * 1024 * 1024),
     backendUrl: process.env.BACKEND_URL?.trim() || '',
     qrExpiresSeconds: 60,

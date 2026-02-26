@@ -2,7 +2,40 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.queryGroqAssistant = queryGroqAssistant;
 const env_1 = require("../config/env");
-function buildSystemPrompt(categories, recentTransactions) {
+function formatCurrency(value, currency) {
+    if (currency === 'BRL')
+        return `R$ ${value.toFixed(2).replace('.', ',')}`;
+    return `${currency} ${value.toFixed(2)}`;
+}
+function buildFinancialSummary(transactions, settings) {
+    if (transactions.length === 0)
+        return 'O usuario ainda nao possui transacoes registradas.';
+    const now = new Date();
+    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const monthTx = transactions.filter((t) => t.monthKey === currentMonth);
+    const totalIncome = monthTx.filter((t) => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
+    const totalExpense = monthTx.filter((t) => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
+    const balance = totalIncome - totalExpense;
+    const lines = [
+        `Mes atual (${currentMonth}):`,
+        `  Receitas: ${formatCurrency(totalIncome, settings.currency)}`,
+        `  Despesas: ${formatCurrency(totalExpense, settings.currency)}`,
+        `  Saldo: ${formatCurrency(balance, settings.currency)}`
+    ];
+    if (settings.budget > 0) {
+        const budgetUsed = totalExpense;
+        const budgetRemaining = settings.budget - budgetUsed;
+        const budgetPct = ((budgetUsed / settings.budget) * 100).toFixed(1);
+        lines.push(`  Orcamento mensal: ${formatCurrency(settings.budget, settings.currency)}`);
+        lines.push(`  Uso do orcamento: ${budgetPct}% (${budgetRemaining >= 0 ? `restam ${formatCurrency(budgetRemaining, settings.currency)}` : `excedido em ${formatCurrency(Math.abs(budgetRemaining), settings.currency)}`})`);
+    }
+    return lines.join('\n');
+}
+function buildSystemPrompt(context) {
+    const { profile, settings, categories, recentTransactions } = context;
+    const userName = profile.displayName?.split(' ')[0] || '';
+    const userInfo = userName ? `Nome do usuario: ${userName}.` : 'Nome do usuario: nao informado.';
+    const shouldSendSummary = Boolean(context.shouldSendCapabilitiesSummary || context.isFirstMessage || context.isGreeting || context.isConversationRestart);
     const categoriesList = categories
         .map((c) => `- ID: "${c.id}", Nome: "${c.name}", Tipo: ${c.type}`)
         .join('\n');
@@ -10,39 +43,59 @@ function buildSystemPrompt(categories, recentTransactions) {
         .slice(0, env_1.env.whatsappAiRecentTransactions)
         .map((t) => `- ID: "${t.id}", Data: ${t.date}, Desc: "${t.description}", Valor: ${t.amount}, Tipo: ${t.type}, CatID: ${t.category}`)
         .join('\n');
+    const financialSummary = buildFinancialSummary(recentTransactions, settings);
     const today = new Date().toISOString().split('T')[0];
-    return `Você é o SaldoPro AI, assistente financeiro pessoal do usuário via WhatsApp.
+    const summaryInstruction = shouldSendSummary
+        ? `Nesta resposta, inclua um resumo curto (4 a 6 bullets) do que voce consegue fazer, em tom pratico e sem repetir frases prontas.`
+        : `Nao inclua lista de funcionalidades nesta resposta, a menos que o usuario peca explicitamente.`;
+    const greetingInstruction = context.isGreeting
+        ? 'Como a mensagem atual e uma saudacao, comece com cumprimento breve e acolhedor.'
+        : 'Nao force saudacao longa.';
+    return `Voce e o SaldoPro, assistente de WhatsApp para conversa geral e financas pessoais.
+${userInfo}
 
-Regras obrigatórias:
-1) Responda SEMPRE com um JSON válido contendo exatamente duas chaves:
-   - "reply": texto em Markdown para o usuário (use emojis, listas e negrito quando útil).
-   - "actionObject": objeto de ação conforme os formatos abaixo.
-2) Não escreva NADA fora do JSON. Nunca use blocos de código ou texto antes/depois do JSON.
-3) Quando o usuário mencionar qualquer gasto, receita, compra, pagamento ou enviar
-   comprovante/recibo — SEMPRE use "add_transaction" com os dados extraídos.
-   - Para imagens de comprovante: leia o valor total pago, a data e a descrição do recibo.
-   - Escolha o "categoryId" mais adequado dentre as categorias disponíveis abaixo.
-   - Se não tiver certeza da categoria, use a que mais se aproxima pelo tipo (expense/income).
-4) Use {"action":"none"} APENAS para perguntas, consultas e análises puras (sem transação).
+OBJETIVO
+- Resolver o pedido atual do usuario com objetividade.
+- Quando o assunto for financeiro, usar o contexto real e executar a acao correta.
 
-Formatos aceitos para "actionObject":
+ESTILO DE RESPOSTA
+- Natural, claro e pouco repetitivo.
+- Evite repetir a mesma abertura entre mensagens consecutivas.
+- Evite repetir palavras e frases identicas de respostas anteriores.
+- Seja direto: priorize 2 a 6 linhas na maioria dos casos.
+- Nunca exiba IDs tecnicos para o usuario.
+
+REGRAS DE RESUMO DE CAPACIDADES
+- ${summaryInstruction}
+- ${greetingInstruction}
+
+REGRAS TECNICAS (OBRIGATORIO)
+1) Retorne SEMPRE JSON valido com exatamente duas chaves:
+   - "reply": texto para WhatsApp em Markdown simples.
+   - "actionObject": objeto com uma das acoes abaixo.
+2) Nao escreva nada fora do JSON.
+3) Para registrar gasto/receita (texto ou imagem): use "add_transaction".
+4) Para conversas gerais, duvidas e orientacoes: use {"action":"none"}.
+5) Se faltar dado essencial para acao financeira, nao invente. Pergunte no "reply" e use action none.
+
+FORMATOS DE ACTIONOBJECT
 - {"action":"none"}
 - {"action":"add_transaction","type":"expense|income","amount":15.5,"description":"Lanche","categoryId":"id","date":"YYYY-MM-DD","paymentMethod":"pix|credit|debit|cash|transfer|boleto"}
 - {"action":"update_transaction","id":"transaction_id","changes":{"amount":20}}
 - {"action":"delete_transaction","id":"transaction_id"}
 
-Diretrizes para o campo "reply":
-- Seja direto e consultivo.
-- Ao confirmar um lançamento, indique o que foi registrado (valor, descrição, categoria).
-- Para análises, traga insights práticos sobre os gastos quando útil.
+CONTEXTO FINANCEIRO
+${financialSummary}
 
-Categorias disponíveis:
-${categoriesList || '- (nenhuma categoria)'}
+Categorias disponiveis:
+${categoriesList || '(nenhuma categoria cadastrada)'}
 
-Transações recentes:
-${txList || '- (nenhuma transação)'}
+Transacoes recentes (referencia interna; nao mostrar IDs):
+${txList || '(nenhuma transacao)'}
 
-Data de referência: ${today}`;
+Data de hoje: ${today}
+Moeda: ${settings.currency}
+${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.budget, settings.currency)}` : 'Sem orcamento mensal definido.'}`;
 }
 function parseAssistantPayload(content) {
     try {
@@ -57,7 +110,7 @@ function parseAssistantPayload(content) {
         throw new Error('Groq response is not valid JSON');
     }
 }
-async function queryGroqAssistant(messages, categories, recentTransactions) {
+async function queryGroqAssistant(messages, context) {
     if (messages.length === 0) {
         throw new Error('At least one message is required');
     }
@@ -70,8 +123,7 @@ async function queryGroqAssistant(messages, categories, recentTransactions) {
                 content: [
                     {
                         type: 'text',
-                        text: message.content.trim() ||
-                            'Analise a imagem enviada e extraia os dados financeiros relevantes.'
+                        text: message.content.trim() || 'Analise a imagem enviada e extraia os dados financeiros relevantes.'
                     },
                     { type: 'image_url', image_url: { url: message.imageDataUrl } }
                 ]
@@ -90,14 +142,12 @@ async function queryGroqAssistant(messages, categories, recentTransactions) {
         },
         body: JSON.stringify({
             model: targetModel,
-            temperature: 0.2,
-            // response_format is not supported by vision models (e.g. llama-3.2-90b-vision-preview)
-            // The system prompt already instructs the model to return valid JSON
+            temperature: 0.35,
             ...(lastMessage?.imageDataUrl ? {} : { response_format: { type: 'json_object' } }),
             messages: [
                 {
                     role: 'system',
-                    content: buildSystemPrompt(categories, recentTransactions)
+                    content: buildSystemPrompt(context)
                 },
                 ...formattedMessages
             ]
@@ -113,8 +163,14 @@ async function queryGroqAssistant(messages, categories, recentTransactions) {
         throw new Error('Groq did not return content');
     }
     const parsed = parseAssistantPayload(content);
+    const rawReply = (parsed.reply ?? '').toString().trim();
+    const cleanReply = rawReply
+        .replace(/\(ID:\s*[A-Za-z0-9_-]+\)/g, '')
+        .replace(/ID:\s*[A-Za-z0-9_-]{15,}/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
     return {
-        reply: (parsed.reply ?? '').toString().trim() || 'Nao consegui entender. Pode reformular?',
+        reply: cleanReply || 'Nao consegui entender. Pode reformular?',
         actionObject: parsed.actionObject ?? { action: 'none' }
     };
 }

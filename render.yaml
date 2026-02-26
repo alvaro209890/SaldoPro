@@ -27,6 +27,8 @@ services:
         value: true
       - key: WHATSAPP_AI_MAX_RECENT_TX
         value: 50
+      - key: WHATSAPP_AI_NEW_CONVERSATION_MINUTES
+        value: 180
       - key: WHATSAPP_API_TOKEN
         sync: false
       - key: GROQ_API_KEY

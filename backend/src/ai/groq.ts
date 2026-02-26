@@ -1,5 +1,5 @@
-import { env } from '../config/env';
-import type { UserCategory, UserTransaction, UserSettingsBackend, UserProfileBackend } from '../lib/firestore';
+﻿import { env } from '../config/env';
+import type { UserCategory, UserProfileBackend, UserSettingsBackend, UserTransaction } from '../lib/firestore';
 
 export type PaymentMethod = 'pix' | 'credit' | 'debit' | 'cash' | 'transfer' | 'boleto';
 
@@ -55,6 +55,9 @@ export interface UserFinancialContext {
   categories: UserCategory[];
   recentTransactions: UserTransaction[];
   isFirstMessage?: boolean;
+  isGreeting?: boolean;
+  isConversationRestart?: boolean;
+  shouldSendCapabilitiesSummary?: boolean;
 }
 
 function formatCurrency(value: number, currency: string): string {
@@ -63,7 +66,7 @@ function formatCurrency(value: number, currency: string): string {
 }
 
 function buildFinancialSummary(transactions: UserTransaction[], settings: UserSettingsBackend): string {
-  if (transactions.length === 0) return 'O usuário ainda não possui transações registradas.';
+  if (transactions.length === 0) return 'O usuario ainda nao possui transacoes registradas.';
 
   const now = new Date();
   const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -74,7 +77,7 @@ function buildFinancialSummary(transactions: UserTransaction[], settings: UserSe
   const balance = totalIncome - totalExpense;
 
   const lines: string[] = [
-    `Mês atual (${currentMonth}):`,
+    `Mes atual (${currentMonth}):`,
     `  Receitas: ${formatCurrency(totalIncome, settings.currency)}`,
     `  Despesas: ${formatCurrency(totalExpense, settings.currency)}`,
     `  Saldo: ${formatCurrency(balance, settings.currency)}`
@@ -84,31 +87,24 @@ function buildFinancialSummary(transactions: UserTransaction[], settings: UserSe
     const budgetUsed = totalExpense;
     const budgetRemaining = settings.budget - budgetUsed;
     const budgetPct = ((budgetUsed / settings.budget) * 100).toFixed(1);
-    lines.push(`  Orçamento mensal: ${formatCurrency(settings.budget, settings.currency)}`);
-    lines.push(`  Gasto do orçamento: ${budgetPct}% (${budgetRemaining >= 0 ? `restam ${formatCurrency(budgetRemaining, settings.currency)}` : `excedido em ${formatCurrency(Math.abs(budgetRemaining), settings.currency)}`})`);
-  }
-
-  // Top spending categories this month
-  const catSpending = new Map<string, number>();
-  for (const t of monthTx.filter((t) => t.type === 'expense')) {
-    catSpending.set(t.category, (catSpending.get(t.category) || 0) + t.amount);
-  }
-  if (catSpending.size > 0) {
-    const topCats = [...catSpending.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([catId, amount]) => `  - ${catId}: ${formatCurrency(amount, settings.currency)}`);
-    lines.push('  Maiores categorias de gasto:', ...topCats);
+    lines.push(`  Orcamento mensal: ${formatCurrency(settings.budget, settings.currency)}`);
+    lines.push(
+      `  Uso do orcamento: ${budgetPct}% (${budgetRemaining >= 0 ? `restam ${formatCurrency(budgetRemaining, settings.currency)}` : `excedido em ${formatCurrency(Math.abs(budgetRemaining), settings.currency)}`})`
+    );
   }
 
   return lines.join('\n');
 }
 
-function buildSystemPrompt(context: UserFinancialContext & { isFirstMessage?: boolean }): string {
+function buildSystemPrompt(context: UserFinancialContext): string {
   const { profile, settings, categories, recentTransactions } = context;
 
   const userName = profile.displayName?.split(' ')[0] || '';
-  const greeting = userName ? `O nome do usuário é *${userName}*.` : '';
+  const userInfo = userName ? `Nome do usuario: ${userName}.` : 'Nome do usuario: nao informado.';
+
+  const shouldSendSummary = Boolean(
+    context.shouldSendCapabilitiesSummary || context.isFirstMessage || context.isGreeting || context.isConversationRestart
+  );
 
   const categoriesList = categories
     .map((c) => `- ID: "${c.id}", Nome: "${c.name}", Tipo: ${c.type}`)
@@ -125,78 +121,59 @@ function buildSystemPrompt(context: UserFinancialContext & { isFirstMessage?: bo
   const financialSummary = buildFinancialSummary(recentTransactions, settings);
   const today = new Date().toISOString().split('T')[0];
 
-  return `Você é o *SaldoPro*, um assistente pessoal inteligente e versátil que conversa via WhatsApp.
-${greeting}
+  const summaryInstruction = shouldSendSummary
+    ? `Nesta resposta, inclua um resumo curto (4 a 6 bullets) do que voce consegue fazer, em tom pratico e sem repetir frases prontas.`
+    : `Nao inclua lista de funcionalidades nesta resposta, a menos que o usuario peca explicitamente.`;
 
-## Sua Personalidade
-- Você é um **companheiro de conversa** — amigável, espirituoso e útil em QUALQUER assunto.
-- Converse naturalmente sobre **qualquer tema**: dicas do dia a dia, receitas, viagens, tecnologia, curiosidades, conselhos, humor, motivação, esportes, cultura e muito mais.
-- Use o primeiro nome do usuário naturalmente quando fizer sentido.
-- Responda com personalidade e carisma — seja engraçado quando apropriado, empático quando necessário, e sempre genuíno.
-- Use emojis de forma equilibrada e natural.
-- **Seu diferencial**: além de ser um ótimo parceiro de conversa, você também é especialista em finanças pessoais. Quando o assunto for dinheiro, gastos, receitas ou economia, use os dados financeiros reais do usuário para dar respostas personalizadas.
-- Ao registrar lançamentos financeiros, confirme de forma **natural e breve** (ex: "Registrei ✅ — R$ 45,00 em Alimentação").
-- **NUNCA** mostre IDs de transação, IDs de categoria ou dados técnicos na resposta.
-- Para saudações simples ("oi", "olá", "bom dia"), responda com uma saudação calorosa e pergunte como pode ajudar — não force assuntos financeiros se o usuário não pediu.
-- Se o usuário quiser conversar sobre algo não-financeiro, converse normalmente! Você NÃO é limitado a finanças.
-- Se o orçamento estiver perto de exceder ou já excedeu, pode mencionar sutilmente em algum momento oportuno, mas sem forçar.
+  const greetingInstruction = context.isGreeting
+    ? 'Como a mensagem atual e uma saudacao, comece com cumprimento breve e acolhedor.'
+    : 'Nao force saudacao longa.';
 
-## O que você sabe fazer (mencione quando relevante)
-- 📊 *Registrar gastos e receitas* — ex: "gastei 50 no mercado", "recebi 3000 de salário"
-- 📸 *Ler comprovantes e recibos* de imagens enviadas e registrar automaticamente
-- 📈 *Resumo financeiro* do mês — receitas, despesas, saldo e orçamento
-- 🏷️ *Categorizar* gastos automaticamente (alimentação, transporte, lazer, etc.)
-- 💡 *Dicas financeiras personalizadas* baseadas nos gastos reais do usuário
-- ✏️ *Editar e excluir* transações registradas
-- 🎯 *Acompanhar orçamento* — quanto já gastou e quanto resta
-- 💬 *Conversar sobre qualquer assunto* — dicas, receitas, curiosidades, humor e mais
-${context.isFirstMessage ? `
-## INSTRUÇÃO ESPECIAL: PRIMEIRA MENSAGEM
-Esta é a primeira mensagem do usuário (ou ele voltou depois de um tempo sem conversar).
-Apresente-se de forma calorosa e breve. Diga seu nome (SaldoPro) e liste de forma visual o que você pode fazer.
-Use uma lista com emojis. Seja acolhedor e convide o usuário a experimentar.` : ''}
+  return `Voce e o SaldoPro, assistente de WhatsApp para conversa geral e financas pessoais.
+${userInfo}
 
-## Regras Técnicas (obrigatório)
-1) Responda SEMPRE com um JSON válido contendo exatamente duas chaves:
-   - "reply": texto em Markdown simples para WhatsApp (negrito com *, listas com •).
-   - "actionObject": objeto de ação conforme os formatos abaixo.
-2) Não escreva NADA fora do JSON. Sem blocos de código, sem texto antes/depois.
-3) Quando o usuário mencionar gasto, receita, compra, pagamento ou enviar comprovante/recibo:
-   - Use "add_transaction" com os dados extraídos.
-   - Escolha o "categoryId" mais adequado das categorias disponíveis.
-   - Se não tiver certeza da categoria, use a mais próxima pelo tipo (expense/income).
-4) Use {"action":"none"} para conversas, perguntas, análises e saudações.
-5) Ao confirmar registro de transação, use este formato organizado:
+OBJETIVO
+- Resolver o pedido atual do usuario com objetividade.
+- Quando o assunto for financeiro, usar o contexto real e executar a acao correta.
 
-   ✅ *Registrado!*
+ESTILO DE RESPOSTA
+- Natural, claro e pouco repetitivo.
+- Evite repetir a mesma abertura entre mensagens consecutivas.
+- Evite repetir palavras e frases identicas de respostas anteriores.
+- Seja direto: priorize 2 a 6 linhas na maioria dos casos.
+- Nunca exiba IDs tecnicos para o usuario.
 
-   📝 *Descrição:* Lanche
-   💰 *Valor:* R$ 50,00
-   🏷️ *Categoria:* Alimentação
-   💳 *Método:* PIX
-   📅 *Data:* 26/02/2026
+REGRAS DE RESUMO DE CAPACIDADES
+- ${summaryInstruction}
+- ${greetingInstruction}
 
-   Depois adicione uma frase curta e personalizada (ex: dica sobre o orçamento ou comentário simpático).
+REGRAS TECNICAS (OBRIGATORIO)
+1) Retorne SEMPRE JSON valido com exatamente duas chaves:
+   - "reply": texto para WhatsApp em Markdown simples.
+   - "actionObject": objeto com uma das acoes abaixo.
+2) Nao escreva nada fora do JSON.
+3) Para registrar gasto/receita (texto ou imagem): use "add_transaction".
+4) Para conversas gerais, duvidas e orientacoes: use {"action":"none"}.
+5) Se faltar dado essencial para acao financeira, nao invente. Pergunte no "reply" e use action none.
 
-Formatos de "actionObject":
+FORMATOS DE ACTIONOBJECT
 - {"action":"none"}
 - {"action":"add_transaction","type":"expense|income","amount":15.5,"description":"Lanche","categoryId":"id","date":"YYYY-MM-DD","paymentMethod":"pix|credit|debit|cash|transfer|boleto"}
 - {"action":"update_transaction","id":"transaction_id","changes":{"amount":20}}
 - {"action":"delete_transaction","id":"transaction_id"}
 
-## Contexto Financeiro do Usuário
-
+CONTEXTO FINANCEIRO
 ${financialSummary}
 
-Categorias disponíveis:
+Categorias disponiveis:
 ${categoriesList || '(nenhuma categoria cadastrada)'}
 
-Transações recentes (para referência interna, NÃO mostre IDs ao usuário):
-${txList || '(nenhuma transação)'}
+Transacoes recentes (referencia interna; nao mostrar IDs):
+${txList || '(nenhuma transacao)'}
 
 Data de hoje: ${today}
 Moeda: ${settings.currency}
-${settings.budget > 0 ? `Orçamento mensal definido: ${formatCurrency(settings.budget, settings.currency)}` : 'Sem orçamento mensal definido.'}`;
+${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.budget, settings.currency)}` : 'Sem orcamento mensal definido.'}`;
 }
 
 function parseAssistantPayload(content: string): Partial<GroqAssistantResult> {
@@ -230,9 +207,7 @@ export async function queryGroqAssistant(
         content: [
           {
             type: 'text',
-            text:
-              message.content.trim() ||
-              'Analise a imagem enviada e extraia os dados financeiros relevantes.'
+            text: message.content.trim() || 'Analise a imagem enviada e extraia os dados financeiros relevantes.'
           },
           { type: 'image_url', image_url: { url: message.imageDataUrl } }
         ]
@@ -253,7 +228,7 @@ export async function queryGroqAssistant(
     },
     body: JSON.stringify({
       model: targetModel,
-      temperature: 0.4,
+      temperature: 0.35,
       ...(lastMessage?.imageDataUrl ? {} : { response_format: { type: 'json_object' } }),
       messages: [
         {
@@ -281,7 +256,6 @@ export async function queryGroqAssistant(
   const parsed = parseAssistantPayload(content);
   const rawReply = (parsed.reply ?? '').toString().trim();
 
-  // Strip any transaction/category IDs that may leak through despite prompt instructions
   const cleanReply = rawReply
     .replace(/\(ID:\s*[A-Za-z0-9_-]+\)/g, '')
     .replace(/ID:\s*[A-Za-z0-9_-]{15,}/g, '')
@@ -289,8 +263,7 @@ export async function queryGroqAssistant(
     .trim();
 
   return {
-    reply: cleanReply || 'Não consegui entender. Pode reformular? 🤔',
+    reply: cleanReply || 'Nao consegui entender. Pode reformular?',
     actionObject: (parsed.actionObject as AIAction) ?? { action: 'none' }
   };
 }
-

@@ -49,3 +49,37 @@ process.on('SIGTERM', () => {
 process.on('SIGINT', () => {
     void shutdown('SIGINT');
 });
+// Prevent Baileys internal errors (Boom, SessionError, etc.) from crashing the process
+process.on('uncaughtException', (error) => {
+    const isBoom = error.isBoom === true;
+    const isSessionError = error.name === 'SessionError' || error.message?.includes('No session record');
+    const isConnectionClosed = error.message?.includes('Connection Closed');
+    if (isBoom || isSessionError || isConnectionClosed) {
+        logger_1.logger.warn('Caught non-fatal Baileys error (process stays alive)', {
+            name: error.name,
+            message: error.message
+        });
+        return;
+    }
+    logger_1.logger.error('Uncaught exception — process will exit', {
+        name: error.name,
+        message: error.message,
+        stack: error.stack
+    });
+    process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    const isBoom = err.isBoom === true;
+    if (isBoom || err.message?.includes('Connection Closed') || err.message?.includes('No session record')) {
+        logger_1.logger.warn('Caught non-fatal unhandled rejection (Baileys)', {
+            message: err.message
+        });
+        return;
+    }
+    logger_1.logger.error('Unhandled rejection', {
+        name: err.name,
+        message: err.message,
+        stack: err.stack
+    });
+});

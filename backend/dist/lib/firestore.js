@@ -3,6 +3,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.saveWhatsAppMessage = saveWhatsAppMessage;
 exports.inboundMessageExists = inboundMessageExists;
 exports.saveMessageSafe = saveMessageSafe;
+exports.getUserSettings = getUserSettings;
+exports.getUserProfile = getUserProfile;
 exports.getUserCategories = getUserCategories;
 exports.getRecentTransactions = getRecentTransactions;
 exports.addUserTransaction = addUserTransaction;
@@ -19,6 +21,7 @@ exports.loadWhatsAppAuthSnapshot = loadWhatsAppAuthSnapshot;
 exports.saveWhatsAppAuthSnapshot = saveWhatsAppAuthSnapshot;
 exports.clearWhatsAppAuthSnapshot = clearWhatsAppAuthSnapshot;
 exports.getRecentConversationByPhone = getRecentConversationByPhone;
+exports.getLastConversationActivityByPhone = getLastConversationActivityByPhone;
 const app_1 = require("firebase-admin/app");
 const firestore_1 = require("firebase-admin/firestore");
 const env_1 = require("../config/env");
@@ -76,6 +79,26 @@ async function saveMessageSafe(record) {
 }
 function monthKeyFromDate(date) {
     return date.slice(0, 7);
+}
+async function getUserSettings(uid) {
+    const snap = await db.collection('users').doc(uid).collection('settings').doc('profile').get();
+    if (!snap.exists)
+        return { budget: 0, startDay: 1, currency: 'BRL' };
+    const data = snap.data();
+    return {
+        budget: typeof data.budget === 'number' ? data.budget : 0,
+        startDay: typeof data.startDay === 'number' ? data.startDay : 1,
+        currency: typeof data.currency === 'string' ? data.currency : 'BRL'
+    };
+}
+async function getUserProfile(uid) {
+    const snap = await db.collection('users').doc(uid).get();
+    if (!snap.exists)
+        return { displayName: '' };
+    const data = snap.data();
+    return {
+        displayName: typeof data.displayName === 'string' ? data.displayName : ''
+    };
 }
 async function getUserCategories(uid) {
     const snap = await db.collection('users').doc(uid).collection('categories').orderBy('name', 'asc').get();
@@ -253,34 +276,12 @@ async function resolveUidFromPhone(phone) {
         return null;
     const variants = (0, events_1.brazilianPhoneVariants)(normalizedPhone);
     try {
-        const snaps = await Promise.all(variants.map((v) => db.collectionGroup('settings')
-            .where('whatsappAllowedNumbers', 'array-contains', v)
-            .limit(5)
-            .get()));
-        for (const snap of snaps) {
-            for (const settingsDoc of snap.docs) {
-                if (settingsDoc.id !== 'profile')
-                    continue;
-                const uid = extractUidFromSettingsDoc(settingsDoc);
-                if (uid)
-                    return uid;
-            }
-        }
+        return await fallbackResolveUidFromPhone(variants);
     }
     catch (error) {
-        logger_1.logger.error('resolveUidFromPhone: collectionGroup query failed (missing Firestore index?)', error);
-        if (!isMissingIndexError(error)) {
-            return null;
-        }
-        logger_1.logger.warn('resolveUidFromPhone: falling back to users profile scan');
-        try {
-            return await fallbackResolveUidFromPhone(variants);
-        }
-        catch (fallbackError) {
-            logger_1.logger.error('resolveUidFromPhone fallback failed', fallbackError);
-        }
+        logger_1.logger.error('resolveUidFromPhone: failed to scan profiles', error);
+        return null;
     }
-    return null;
 }
 async function resolveUidFromAccessCode(accessCodeText, phone) {
     const normalizedCode = normalizeAccessCode(accessCodeText);
@@ -508,4 +509,44 @@ async function getRecentConversationByPhone(uid, phone, limitCount) {
         role: entry.role,
         content: entry.content
     }));
+}
+async function getLastConversationActivityByPhone(uid, phone) {
+    if (!uid || uid.trim().length === 0)
+        return null;
+    const normalizedPhone = (0, events_1.normalizePhoneNumber)(phone);
+    if (normalizedPhone.length < 10)
+        return null;
+    try {
+        const [inboundSnap, outboundSnap] = await Promise.all([
+            db
+                .collection(COLLECTION_NAME)
+                .where('ownerUid', '==', uid)
+                .where('from', '==', normalizedPhone)
+                .orderBy('createdAt', 'desc')
+                .limit(1)
+                .get(),
+            db
+                .collection(COLLECTION_NAME)
+                .where('ownerUid', '==', uid)
+                .where('to', '==', normalizedPhone)
+                .orderBy('createdAt', 'desc')
+                .limit(1)
+                .get()
+        ]);
+        const inboundCreatedAt = inboundSnap.empty ? null : inboundSnap.docs[0].data().createdAt;
+        const outboundCreatedAt = outboundSnap.empty ? null : outboundSnap.docs[0].data().createdAt;
+        const inboundIso = typeof inboundCreatedAt === 'string' ? inboundCreatedAt : null;
+        const outboundIso = typeof outboundCreatedAt === 'string' ? outboundCreatedAt : null;
+        if (!inboundIso && !outboundIso)
+            return null;
+        if (!inboundIso)
+            return outboundIso;
+        if (!outboundIso)
+            return inboundIso;
+        return inboundIso > outboundIso ? inboundIso : outboundIso;
+    }
+    catch (error) {
+        logger_1.logger.error('getLastConversationActivityByPhone failed', error);
+        return null;
+    }
 }

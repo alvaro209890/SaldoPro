@@ -365,38 +365,13 @@ export async function resolveUidFromPhone(phone: string): Promise<string | null>
   if (normalizedPhone.length < 10) return null;
 
   const variants = brazilianPhoneVariants(normalizedPhone);
+
   try {
-    const snaps = await Promise.all(
-      variants.map((v) =>
-        db.collectionGroup('settings')
-          .where('whatsappAllowedNumbers', 'array-contains', v)
-          .limit(5)
-          .get()
-      )
-    );
-
-    for (const snap of snaps) {
-      for (const settingsDoc of snap.docs) {
-        if (settingsDoc.id !== 'profile') continue;
-        const uid = extractUidFromSettingsDoc(settingsDoc);
-        if (uid) return uid;
-      }
-    }
+    return await fallbackResolveUidFromPhone(variants);
   } catch (error) {
-    logger.error('resolveUidFromPhone: collectionGroup query failed (missing Firestore index?)', error);
-    if (!isMissingIndexError(error)) {
-      return null;
-    }
-
-    logger.warn('resolveUidFromPhone: falling back to users profile scan');
-    try {
-      return await fallbackResolveUidFromPhone(variants);
-    } catch (fallbackError) {
-      logger.error('resolveUidFromPhone fallback failed', fallbackError);
-    }
+    logger.error('resolveUidFromPhone: failed to scan profiles', error);
+    return null;
   }
-
-  return null;
 }
 
 export async function resolveUidFromAccessCode(
@@ -405,49 +380,25 @@ export async function resolveUidFromAccessCode(
 ): Promise<string | null> {
   const normalizedCode = normalizeAccessCode(accessCodeText);
   const normalizedPhone = normalizePhoneNumber(phone);
-  // Minimum 8 chars to match looksLikeAccessCode() in WhatsAppClient
   if (normalizedCode.length < 8 || normalizedPhone.length < 10) {
     return null;
   }
 
   try {
-    const snap = await db
-      .collectionGroup('settings')
-      .where('whatsappAccessCodeNormalized', '==', normalizedCode)
-      .limit(5)
-      .get();
-
-    for (const settingsDoc of snap.docs) {
-      if (settingsDoc.id !== 'profile') continue;
-
-      const uid = extractUidFromSettingsDoc(settingsDoc);
-      if (!uid) continue;
-
-      const data = settingsDoc.data() as { whatsappAllowedNumbers?: unknown };
-      const allowed = Array.isArray(data.whatsappAllowedNumbers)
-        ? data.whatsappAllowedNumbers
-          .map((value) => (typeof value === 'string' ? normalizePhoneNumber(value) : ''))
-          .filter((value) => value.length >= 10)
-        : [];
-
-      const phoneVariants = brazilianPhoneVariants(normalizedPhone);
-      if (phoneVariants.some((v) => allowed.includes(v))) {
-        return uid;
+    // Scan all profiles and match by access code only
+    const profiles = await scanAllProfileSettings();
+    for (const entry of profiles) {
+      const entryCode = normalizeAccessCode(
+        typeof entry.data.whatsappAccessCodeNormalized === 'string'
+          ? entry.data.whatsappAccessCodeNormalized
+          : ''
+      );
+      if (entryCode && entryCode === normalizedCode) {
+        return entry.uid;
       }
     }
   } catch (error) {
-    logger.error('resolveUidFromAccessCode: collectionGroup query failed (missing Firestore index?)', error);
-    if (!isMissingIndexError(error)) {
-      return null;
-    }
-
-    logger.warn('resolveUidFromAccessCode: falling back to users profile scan');
-    try {
-      const variants = brazilianPhoneVariants(normalizedPhone);
-      return await fallbackResolveUidFromAccessCode(normalizedCode, variants);
-    } catch (fallbackError) {
-      logger.error('resolveUidFromAccessCode fallback failed', fallbackError);
-    }
+    logger.error('resolveUidFromAccessCode failed', error);
   }
 
   return null;
@@ -673,4 +624,50 @@ export async function getRecentConversationByPhone(
       role: entry.role,
       content: entry.content
     }));
+}
+
+export async function getLastConversationActivityByPhone(
+  uid: string,
+  phone: string
+): Promise<string | null> {
+  if (!uid || uid.trim().length === 0) return null;
+
+  const normalizedPhone = normalizePhoneNumber(phone);
+  if (normalizedPhone.length < 10) return null;
+
+  try {
+    const [inboundSnap, outboundSnap] = await Promise.all([
+      db
+        .collection(COLLECTION_NAME)
+        .where('ownerUid', '==', uid)
+        .where('from', '==', normalizedPhone)
+        .orderBy('createdAt', 'desc')
+        .limit(1)
+        .get(),
+      db
+        .collection(COLLECTION_NAME)
+        .where('ownerUid', '==', uid)
+        .where('to', '==', normalizedPhone)
+        .orderBy('createdAt', 'desc')
+        .limit(1)
+        .get()
+    ]);
+
+    const inboundCreatedAt =
+      inboundSnap.empty ? null : (inboundSnap.docs[0].data() as Partial<WhatsAppMessageRecord>).createdAt;
+    const outboundCreatedAt =
+      outboundSnap.empty ? null : (outboundSnap.docs[0].data() as Partial<WhatsAppMessageRecord>).createdAt;
+
+    const inboundIso = typeof inboundCreatedAt === 'string' ? inboundCreatedAt : null;
+    const outboundIso = typeof outboundCreatedAt === 'string' ? outboundCreatedAt : null;
+
+    if (!inboundIso && !outboundIso) return null;
+    if (!inboundIso) return outboundIso;
+    if (!outboundIso) return inboundIso;
+
+    return inboundIso > outboundIso ? inboundIso : outboundIso;
+  } catch (error) {
+    logger.error('getLastConversationActivityByPhone failed', error);
+    return null;
+  }
 }

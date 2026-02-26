@@ -55,6 +55,21 @@ function asDisconnectCode(error) {
     const code = error?.output?.statusCode;
     return typeof code === 'number' ? code : null;
 }
+function normalizeForGreeting(value) {
+    return value
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+function isGreetingMessage(text) {
+    const normalized = normalizeForGreeting(text);
+    if (!normalized)
+        return false;
+    return /^(oi+|ola|opa|bom dia|boa tarde|boa noite|e ai|eae|hello|hey)\b/.test(normalized);
+}
 const IMAGE_ONLY_FALLBACK_TEXT = 'Analise a imagem enviada e registre o lancamento corretamente.';
 class WhatsAppClient {
     socket = null;
@@ -271,17 +286,34 @@ class WhatsAppClient {
         const remoteJid = key.remoteJid ?? '';
         if (!remoteJid || (0, events_1.isStatusJid)(remoteJid) || (0, events_1.isGroupJid)(remoteJid))
             return;
+        const isSelfChat = (0, events_1.jidToPhone)(remoteJid) === this.phone;
         if (key.fromMe) {
-            // Allow self-messages (user typing on phone to their own number)
-            // but block messages sent by the bot itself to prevent infinite loops
-            const isSelfChat = (0, events_1.jidToPhone)(remoteJid) === this.phone;
-            if (!isSelfChat || this.sentByBotIds.has(messageId))
+            if (!isSelfChat || this.sentByBotIds.has(messageId)) {
+                logger_1.logger.info('MSG_SKIP: fromMe message blocked', {
+                    messageId,
+                    reason: this.sentByBotIds.has(messageId) ? 'sent_by_bot' : 'not_self_chat',
+                    remoteJid
+                });
                 return;
+            }
+            logger_1.logger.info('MSG_SELF: processing self-chat message for AI testing', {
+                messageId,
+                phone: this.phone
+            });
         }
-        const remotePhone = (0, events_1.jidToPhone)(remoteJid);
+        const remotePhone = isSelfChat ? (this.phone ?? (0, events_1.jidToPhone)(remoteJid)) : (0, events_1.jidToPhone)(remoteJid);
+        logger_1.logger.info('MSG_RECV: new inbound message', {
+            messageId,
+            from: remotePhone,
+            fromMe: Boolean(key.fromMe),
+            isSelfChat,
+            rawType: (0, events_1.extractRawType)(message),
+            textPreview: (0, events_1.extractMessageText)(message).slice(0, 50)
+        });
         const alreadyInFirestore = await (0, firestore_1.inboundMessageExists)(messageId);
         if (alreadyInFirestore) {
             this.rememberInbound(messageId);
+            logger_1.logger.info('MSG_SKIP: already in Firestore', { messageId });
             return;
         }
         const waTimestamp = message.messageTimestamp ? Number(message.messageTimestamp) : null;
@@ -291,8 +323,14 @@ class WhatsAppClient {
         const imageDataUrl = await this.extractInboundImageDataUrl(message);
         const conversationText = text.trim() || (imageDataUrl ? IMAGE_ONLY_FALLBACK_TEXT : '');
         let binding = await (0, firestore_1.getPhoneBinding)(remotePhone);
-        // Se nÃ£o hÃ¡ binding, tenta auto-vincular pelo nÃºmero cadastrado na conta
+        logger_1.logger.info('MSG_BIND: phone binding lookup', {
+            phone: remotePhone,
+            found: Boolean(binding),
+            uid: binding?.uid ?? null
+        });
+        // Se não há binding, tenta auto-vincular pelo número cadastrado na conta
         if (!binding) {
+            logger_1.logger.info('MSG_RESOLVE: attempting resolveUidFromPhone', { phone: remotePhone });
             const resolvedUid = await (0, firestore_1.resolveUidFromPhone)(remotePhone);
             if (resolvedUid) {
                 await (0, firestore_1.savePhoneBinding)(remotePhone, resolvedUid);
@@ -302,10 +340,13 @@ class WhatsAppClient {
                     linkedAt: new Date().toISOString(),
                     updatedAt: new Date().toISOString()
                 };
-                logger_1.logger.info('WhatsApp: numero auto-vinculado pelo cadastro da conta', {
+                logger_1.logger.info('MSG_RESOLVE: auto-linked phone to account', {
                     phone: remotePhone,
                     uid: resolvedUid
                 });
+            }
+            else {
+                logger_1.logger.info('MSG_RESOLVE: no account found for phone', { phone: remotePhone });
             }
         }
         const ownerUid = binding?.uid;
@@ -322,31 +363,38 @@ class WhatsAppClient {
             rawType,
             createdAt: new Date().toISOString(),
             metadata: {
-                fromMe: false,
+                fromMe: Boolean(key.fromMe),
                 isGroup: false,
+                isSelfChat,
                 hasImage: Boolean(imageDataUrl)
             }
         };
         await (0, firestore_1.saveMessageSafe)(inboundRecord);
         this.rememberInbound(messageId);
         if (!binding) {
+            logger_1.logger.info('MSG_UNLINKED: no binding found, ignoring message', { from: remotePhone });
             await this.handleUnlinkedMessage(remotePhone);
             return;
         }
         const stillAllowed = await (0, firestore_1.isPhoneAllowedForUid)(binding.uid, remotePhone);
+        logger_1.logger.info('MSG_WHITELIST: phone whitelist check', {
+            phone: remotePhone,
+            uid: binding.uid,
+            allowed: stillAllowed
+        });
         if (!stillAllowed) {
-            logger_1.logger.info('Ignoring WhatsApp message from number removed from whitelist', {
+            logger_1.logger.info('MSG_BLOCKED: phone not in whitelist', {
                 from: remotePhone,
                 uid: binding.uid
             });
             return;
         }
-        if (conversationText || imageDataUrl) {
-            await this.appendConversationMessage(binding.uid, remotePhone, {
-                role: 'user',
-                content: conversationText
-            });
-        }
+        logger_1.logger.info('MSG_AI: sending to AI for reply', {
+            uid: binding.uid,
+            phone: remotePhone,
+            textLength: conversationText.length,
+            hasImage: Boolean(imageDataUrl)
+        });
         await this.sendSmartReply(binding.uid, remoteJid, remotePhone, conversationText, imageDataUrl);
     }
     async sendSmartReply(ownerUid, remoteJid, remotePhone, inboundText, imageDataUrl) {
@@ -354,14 +402,49 @@ class WhatsAppClient {
         if (env_1.env.whatsappAiEnabled && hasAiInput) {
             try {
                 const conversation = await this.getConversationHistory(ownerUid, remotePhone);
-                const aiMessages = conversation.map((entry, index) => ({
+                const isFirstMessage = conversation.length === 0;
+                const isGreeting = isGreetingMessage(inboundText);
+                const lastActivityAt = await (0, firestore_1.getLastConversationActivityByPhone)(ownerUid, remotePhone);
+                const isConversationRestart = this.isConversationRestart(lastActivityAt, isFirstMessage);
+                const shouldSendCapabilitiesSummary = isGreeting || isFirstMessage || isConversationRestart;
+                if (isFirstMessage) {
+                    logger_1.logger.info('MSG_WELCOME: first message detected, AI will introduce itself', {
+                        uid: ownerUid,
+                        phone: remotePhone
+                    });
+                }
+                // Build AI messages from history (text only)
+                const aiMessages = conversation.map((entry) => ({
                     role: entry.role,
-                    content: entry.content,
-                    ...(imageDataUrl && index === conversation.length - 1 && entry.role === 'user'
-                        ? { imageDataUrl }
-                        : {})
+                    content: entry.content
                 }));
-                const aiReply = await (0, assistant_1.processWhatsAppAIMessage)(ownerUid, aiMessages);
+                // Always add the current message at the end with the image if present
+                aiMessages.push({
+                    role: 'user',
+                    content: inboundText.trim() || (imageDataUrl ? 'Analise a imagem enviada e registre o lançamento corretamente.' : ''),
+                    ...(imageDataUrl ? { imageDataUrl } : {})
+                });
+                logger_1.logger.info('MSG_AI_CONTEXT: sending to Groq', {
+                    historyCount: conversation.length,
+                    totalMessages: aiMessages.length,
+                    hasImage: Boolean(imageDataUrl),
+                    isGreeting,
+                    isConversationRestart,
+                    shouldSendCapabilitiesSummary
+                });
+                // Save user message to conversation cache for future context
+                if (inboundText.trim() || imageDataUrl) {
+                    await this.appendConversationMessage(ownerUid, remotePhone, {
+                        role: 'user',
+                        content: inboundText.trim() || 'Imagem enviada no WhatsApp.'
+                    });
+                }
+                const aiReply = await (0, assistant_1.processWhatsAppAIMessage)(ownerUid, aiMessages, {
+                    isFirstMessage,
+                    isGreeting,
+                    isConversationRestart,
+                    shouldSendCapabilitiesSummary
+                });
                 if (aiReply.trim()) {
                     await this.sendWithRetry(remoteJid, aiReply.trim(), 'auto_reply', ownerUid);
                     await this.appendConversationMessage(ownerUid, remotePhone, {
@@ -757,6 +840,17 @@ class WhatsAppClient {
         const current = await this.getConversationHistory(uid, normalized);
         const updated = [...current, { role: message.role, content }].slice(-env_1.env.whatsappAiHistoryLimit);
         this.conversationByPhone.set(this.conversationKey(uid, normalized), updated);
+    }
+    isConversationRestart(lastActivityAt, isFirstMessage) {
+        if (isFirstMessage)
+            return true;
+        if (!lastActivityAt)
+            return false;
+        const parsed = Date.parse(lastActivityAt);
+        if (!Number.isFinite(parsed))
+            return false;
+        const elapsedMinutes = (Date.now() - parsed) / (60 * 1000);
+        return elapsedMinutes >= env_1.env.whatsappAiNewConversationMinutes;
     }
     conversationKey(uid, phone) {
         return `${uid}:${phone}`;
