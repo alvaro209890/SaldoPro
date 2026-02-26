@@ -197,7 +197,7 @@ async function fallbackResolveUidFromPhone(variants) {
     }
     return null;
 }
-async function fallbackResolveUidFromAccessCode(normalizedCode, variants, []) {
+async function fallbackResolveUidFromAccessCode(normalizedCode, variants) {
     const profiles = await scanAllProfileSettings();
     for (const entry of profiles) {
         const code = typeof entry.data.whatsappAccessCodeNormalized === 'string'
