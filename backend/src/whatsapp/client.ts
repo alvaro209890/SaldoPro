@@ -308,10 +308,18 @@ export class WhatsAppClient {
       }
 
       const shouldReconnect =
-        this.allowReconnect && code !== DisconnectReason.loggedOut && code !== DisconnectReason.forbidden;
+        this.allowReconnect &&
+        code !== DisconnectReason.loggedOut &&
+        code !== DisconnectReason.forbidden &&
+        code !== DisconnectReason.connectionReplaced;
 
       if (shouldReconnect) {
         this.scheduleReconnect();
+      } else if (code === DisconnectReason.connectionReplaced) {
+        logger.warn(
+          'Connection was replaced by another session. Not reconnecting to avoid loop. ' +
+            'If this is unexpected, check for multiple server instances or use /api/whatsapp/session/reset.'
+        );
       }
     }
   }
@@ -390,6 +398,18 @@ export class WhatsAppClient {
     const rawType = extractRawType(message);
     const imageDataUrl = await this.extractInboundImageDataUrl(message);
     const conversationText = text.trim() || (imageDataUrl ? IMAGE_ONLY_FALLBACK_TEXT : '');
+
+    // Skip messages with no usable content (e.g. decryption failures)
+    if (!conversationText && !imageDataUrl) {
+      this.rememberInbound(messageId);
+      logger.info('MSG_SKIP: empty message (likely decryption failure), ignoring', {
+        messageId,
+        rawType,
+        from: remotePhone
+      });
+      return;
+    }
+
     let binding = await getPhoneBinding(remotePhone);
 
     logger.info('MSG_BIND: phone binding lookup', {

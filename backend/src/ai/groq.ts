@@ -168,12 +168,18 @@ ESTILO DE RESPOSTA
 
 COMPREENSAO DE LINGUAGEM NATURAL
 - O usuario pode escrever de forma informal, com erros de digitacao ou abreviacoes. Interprete com boa vontade.
-- "gastei 50 no mercado" = despesa de R$50 no supermercado
-- "recebi 1500" = receita de R$1500
-- "minhas despesas sao de 800 reais" = o usuario esta INFORMANDO que suas despesas totalizam 800. NAO registre como transacao. Responda com analise e orientacao financeira.
-- "meu salario e 3000" = informacao contextual, NAO transacao. Responda reconhecendo.
-- Se o usuario diz valores sem pedir para registrar, trate como conversa/informacao e use action "none".
-- Diferenca entre REGISTRAR ('gastei', 'paguei', 'comprei', 'recebi') e INFORMAR ('minhas despesas sao', 'meu gasto e', 'tenho de conta').
+- VERBOS DE ACAO = REGISTRAR AUTOMATICAMENTE (use add_transaction, NAO pergunte se quer registrar):
+  - "gastei 50 no mercado" = registrar despesa de R$50 em supermercado
+  - "recebi 1500" = registrar receita de R$1500
+  - "paguei 200 de luz" = registrar despesa de R$200 em conta de luz
+  - "comprei um lanche por 25" = registrar despesa de R$25 em alimentacao
+  - "recebi meu salario de 2100" = registrar receita de R$2100 (salario)
+  - "ganhei 500 de freelance" = registrar receita de R$500
+- FRASES INFORMATIVAS = NAO registrar (use action "none"):
+  - "minhas despesas sao de 800 reais" = informacao, responda com analise
+  - "meu salario e 3000" = informacao contextual, NAO transacao
+  - "quanto gastei esse mes?" = pergunta, responda com resumo
+- REGRA: quando o usuario usa verbos no passado (gastei, paguei, comprei, recebi, ganhei) com um valor, SEMPRE registre automaticamente. Nao pergunte "quer registrar?". Apenas registre e confirme.
 
 REGRAS DE RESUMO DE CAPACIDADES
 - ${summaryInstruction}
@@ -194,10 +200,10 @@ REGRAS TECNICAS (OBRIGATORIO)
    - "reply": string com texto para WhatsApp.
    - "actionObject": objeto com uma das acoes abaixo.
 2) Nao escreva nada antes nem depois do JSON. A resposta inteira deve ser o JSON.
-3) Para registrar gasto/receita (quando o usuario PEDE para registrar): use "add_transaction".
+3) Para registrar gasto/receita: use "add_transaction". Quando o usuario usa verbos de acao no passado (gastei, paguei, comprei, recebi, ganhei) com valor, REGISTRE AUTOMATICAMENTE sem perguntar.
 4) Para conversas gerais, duvidas, orientacoes e informacoes: use {"action":"none"}.
-5) Se faltar dado essencial para acao financeira, pergunte no "reply" e use action none.
-6) NUNCA registre transacao quando o usuario esta apenas INFORMANDO ou PERGUNTANDO sobre valores.
+5) Se faltar o VALOR (nao a categoria ou data), pergunte no "reply" e use action none. Se faltar categoria, escolha a mais adequada. Se faltar data, use hoje.
+6) NUNCA registre transacao quando o usuario usa frases descritivas/informativas ('minhas despesas sao', 'meu gasto mensal e', 'tenho de conta').
 
 FORMATOS DE ACTIONOBJECT
 - {"action":"none"}
@@ -287,9 +293,123 @@ function validateAction(raw: unknown): AIAction {
   return { action: 'none' };
 }
 
-/** Determines if the HTTP status code is retryable (429 or 5xx). */
-function isRetryableStatus(status: number): boolean {
-  return status === 429 || status >= 500;
+/**
+ * Ordered list of Groq models to try. When one hits rate limit (429),
+ * the next model in the chain is attempted automatically.
+ * Vision-capable models are marked with `vision: true`.
+ */
+const GROQ_MODEL_CHAIN = [
+  { id: 'llama-3.3-70b-versatile', vision: false },
+  { id: 'meta-llama/llama-4-scout-17b-16e-instruct', vision: true },
+  { id: 'qwen/qwen3-32b', vision: false },
+  { id: 'moonshotai/kimi-k2-instruct-0905', vision: false },
+  { id: 'openai/gpt-oss-20b', vision: false }
+];
+
+/**
+ * Strip thinking/reasoning blocks that some models emit (e.g. Qwen 3, DeepSeek).
+ * These appear as <think>...</think> tags wrapping internal chain-of-thought.
+ */
+function stripThinkingBlocks(text: string): string {
+  return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+}
+
+/** Determines if the HTTP status code means we should try the next model (429) or retry same (5xx). */
+function isRateLimitStatus(status: number): boolean {
+  return status === 429;
+}
+
+function isServerErrorStatus(status: number): boolean {
+  return status >= 500;
+}
+
+/**
+ * Attempt a single Groq model call. Returns the result or throws.
+ */
+async function callGroqModel(
+  modelId: string,
+  systemPrompt: string,
+  formattedMessages: Array<Record<string, unknown>>,
+  isVisionRequest: boolean
+): Promise<GroqAssistantResult> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), env.groqTimeoutMs);
+
+  try {
+    const requestBody = JSON.stringify({
+      model: modelId,
+      temperature: 0.5,
+      ...(isVisionRequest ? {} : { response_format: { type: 'json_object' } }),
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...formattedMessages
+      ]
+    });
+
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.groqApiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: requestBody,
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const detail = await response.text();
+      const err = new Error(`Groq request failed: ${response.status} ${detail.slice(0, 300)}`);
+      (err as Error & { statusCode: number }).statusCode = response.status;
+      throw err;
+    }
+
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const rawContent = data.choices?.[0]?.message?.content;
+    if (!rawContent) {
+      throw new Error('Groq did not return content');
+    }
+
+    // Strip thinking blocks from models that use chain-of-thought
+    const content = stripThinkingBlocks(rawContent);
+
+    // --- Parse response (with vision fallback) ---
+    let parsed: Partial<GroqAssistantResult>;
+    try {
+      parsed = parseAssistantPayload(content);
+    } catch {
+      if (isVisionRequest) {
+        logger.warn('Groq vision response is not valid JSON, using raw content as reply', {
+          model: modelId,
+          contentPreview: content.slice(0, 100)
+        });
+        return {
+          reply: content.trim().slice(0, env.maxMessageLength),
+          actionObject: { action: 'none' }
+        };
+      }
+      throw new Error('Groq response is not valid JSON');
+    }
+
+    const rawReply = (parsed.reply ?? '').toString().trim();
+
+    const cleanReply = rawReply
+      .replace(/\(ID:\s*[A-Za-z0-9_-]+\)/g, '')
+      .replace(/ID:\s*[A-Za-z0-9_-]{15,}/g, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    return {
+      reply: cleanReply || 'Nao consegui entender. Pode reformular?',
+      actionObject: validateAction(parsed.actionObject)
+    };
+  } catch (error) {
+    clearTimeout(timeoutId);
+    throw error;
+  }
 }
 
 export async function queryGroqAssistant(
@@ -311,10 +431,9 @@ export async function queryGroqAssistant(
     }
   }
 
-  // --- FALLBACK: Groq ---
+  // --- FALLBACK: Groq model chain ---
   const lastMessage = messages[messages.length - 1];
   const isVisionRequest = Boolean(lastMessage?.imageDataUrl);
-  const targetModel = isVisionRequest ? env.groqVisionModel : env.groqModel;
 
   const formattedMessages = messages.map((message) => {
     if (message.imageDataUrl) {
@@ -329,126 +448,65 @@ export async function queryGroqAssistant(
         ]
       };
     }
-
-    return {
-      role: message.role,
-      content: message.content
-    };
+    return { role: message.role, content: message.content };
   });
 
-  const requestBody = JSON.stringify({
-    model: targetModel,
-    temperature: 0.5,
-    ...(isVisionRequest ? {} : { response_format: { type: 'json_object' } }),
-    messages: [
-      {
-        role: 'system',
-        content: buildSystemPrompt(context)
-      },
-      ...formattedMessages
-    ]
-  });
+  const systemPrompt = buildSystemPrompt(context);
 
-  // --- Retry loop with timeout ---
+  // Filter models: for vision requests, only use vision-capable models
+  const modelsToTry = isVisionRequest
+    ? GROQ_MODEL_CHAIN.filter((m) => m.vision)
+    : GROQ_MODEL_CHAIN;
+
   let lastError: unknown;
 
-  for (let attempt = 1; attempt <= env.groqMaxRetries; attempt += 1) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), env.groqTimeoutMs);
-
+  for (const model of modelsToTry) {
     try {
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${env.groqApiKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: requestBody,
-        signal: controller.signal
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const detail = await response.text();
-
-        if (isRetryableStatus(response.status) && attempt < env.groqMaxRetries) {
-          const backoffMs = Math.min(1000 * Math.pow(2, attempt - 1), 4000);
-          logger.warn('Groq request failed, retrying', {
-            status: response.status,
-            attempt,
-            backoffMs,
-            detail: detail.slice(0, 200)
-          });
-          await new Promise((resolve) => setTimeout(resolve, backoffMs));
-          continue;
-        }
-
-        throw new Error(`Groq request failed: ${response.status} ${detail}`);
-      }
-
-      const data = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-      const content = data.choices?.[0]?.message?.content;
-      if (!content) {
-        throw new Error('Groq did not return content');
-      }
-
-      // --- Parse response (with vision fallback) ---
-      let parsed: Partial<GroqAssistantResult>;
-      try {
-        parsed = parseAssistantPayload(content);
-      } catch {
-        if (isVisionRequest) {
-          // Vision model may return plain text instead of JSON — use it as the reply
-          logger.warn('Groq vision response is not valid JSON, using raw content as reply', {
-            contentPreview: content.slice(0, 100)
-          });
-          return {
-            reply: content.trim().slice(0, env.maxMessageLength),
-            actionObject: { action: 'none' }
-          };
-        }
-        throw new Error('Groq response is not valid JSON');
-      }
-
-      const rawReply = (parsed.reply ?? '').toString().trim();
-
-      const cleanReply = rawReply
-        .replace(/\(ID:\s*[A-Za-z0-9_-]+\)/g, '')
-        .replace(/ID:\s*[A-Za-z0-9_-]{15,}/g, '')
-        .replace(/\n{3,}/g, '\n\n')
-        .trim();
-
-      return {
-        reply: cleanReply || 'Nao consegui entender. Pode reformular?',
-        actionObject: validateAction(parsed.actionObject)
-      };
+      logger.info('Groq: trying model', { model: model.id, isVisionRequest });
+      const result = await callGroqModel(model.id, systemPrompt, formattedMessages, isVisionRequest);
+      logger.info('Groq: model succeeded', { model: model.id });
+      return result;
     } catch (error) {
-      clearTimeout(timeoutId);
       lastError = error;
+      const statusCode = (error as Error & { statusCode?: number }).statusCode;
+      const errorMsg = error instanceof Error ? error.message : 'unknown';
 
-      const isAbort = error instanceof Error && error.name === 'AbortError';
-
-      if (isAbort) {
-        logger.warn('Groq request timed out', { attempt, timeoutMs: env.groqTimeoutMs });
-      }
-
-      if (attempt < env.groqMaxRetries) {
-        const backoffMs = Math.min(1000 * Math.pow(2, attempt - 1), 4000);
-        logger.warn('Groq request error, retrying', {
-          attempt,
-          backoffMs,
-          error: error instanceof Error ? error.message : 'unknown'
+      if (isRateLimitStatus(statusCode ?? 0)) {
+        logger.warn('Groq: model rate-limited (429), trying next model', {
+          model: model.id,
+          detail: errorMsg.slice(0, 200)
         });
-        await new Promise((resolve) => setTimeout(resolve, backoffMs));
         continue;
       }
+
+      if (isServerErrorStatus(statusCode ?? 0)) {
+        logger.warn('Groq: model server error, trying next model', {
+          model: model.id,
+          status: statusCode,
+          detail: errorMsg.slice(0, 200)
+        });
+        continue;
+      }
+
+      const isAbort = error instanceof Error && error.name === 'AbortError';
+      if (isAbort) {
+        logger.warn('Groq: model timed out, trying next model', {
+          model: model.id,
+          timeoutMs: env.groqTimeoutMs
+        });
+        continue;
+      }
+
+      // Non-retryable error (e.g. invalid JSON) — try next model too
+      logger.warn('Groq: model failed with non-retryable error, trying next model', {
+        model: model.id,
+        error: errorMsg.slice(0, 200)
+      });
+      continue;
     }
   }
 
-  throw lastError instanceof Error ? lastError : new Error('AI request failed after all attempts');
+  throw lastError instanceof Error ? lastError : new Error('AI request failed: all Groq models exhausted');
 }
 
 /**
@@ -519,12 +577,15 @@ async function queryGeminiAssistant(
     const data = (await response.json()) as {
       candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
     };
-    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!content) {
+    const rawContent = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawContent) {
       throw new Error('Gemini did not return content');
     }
 
-    logger.info('Gemini fallback succeeded', { contentLength: content.length });
+    // Strip any thinking blocks
+    const content = stripThinkingBlocks(rawContent);
+
+    logger.info('Gemini primary succeeded', { contentLength: content.length });
 
     // Parse response (same logic as Groq)
     let parsed: Partial<GroqAssistantResult>;

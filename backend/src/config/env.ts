@@ -66,7 +66,7 @@ export const env = {
   groqMaxRetries: parseInteger(process.env.GROQ_MAX_RETRIES, 2),
   whatsappAiRateLimitPerMinute: parseInteger(process.env.WHATSAPP_AI_RATE_LIMIT_PER_MINUTE, 10),
   geminiApiKey: getOptional('GEMINI_API_KEY'),
-  geminiModel: process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash-preview-05-20'
+  geminiModel: process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash'
 };
 
 if (env.whatsappAiEnabled) {

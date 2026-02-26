@@ -683,7 +683,7 @@ export async function getLastConversationActivityByPhone(
 
     return inboundIso > outboundIso ? inboundIso : outboundIso;
   } catch (error) {
-    logger.error('getLastConversationActivityByPhone failed', error);
+    logger.warn('getLastConversationActivityByPhone failed (index may still be building)', error);
     return null;
   }
 }
