@@ -1,18 +1,22 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
+import cors from 'cors';
 import { env } from './config/env';
 import { logger } from './lib/logger';
 import { healthRouter } from './routes/health';
 import { createQrPageRouter } from './routes/qr-page';
 import { createWhatsAppRouter } from './routes/whatsapp';
+import { createAiChatRouter } from './routes/ai-chat';
 import { WhatsAppClient } from './whatsapp/client';
 
 const app = express();
 const whatsappClient = new WhatsAppClient();
 
-app.use(express.json({ limit: '1mb' }));
+app.use(cors());
+app.use(express.json({ limit: '2mb' }));
 app.use(healthRouter);
 app.use(createQrPageRouter(whatsappClient));
 app.use('/api/whatsapp', createWhatsAppRouter(whatsappClient));
+app.use('/api/ai', createAiChatRouter());
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   logger.error('Unhandled backend error', error);
