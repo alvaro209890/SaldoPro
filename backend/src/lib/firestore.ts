@@ -111,6 +111,36 @@ function monthKeyFromDate(date: string): string {
   return date.slice(0, 7);
 }
 
+export interface UserSettingsBackend {
+  budget: number;
+  startDay: number;
+  currency: string;
+}
+
+export interface UserProfileBackend {
+  displayName: string;
+}
+
+export async function getUserSettings(uid: string): Promise<UserSettingsBackend> {
+  const snap = await db.collection('users').doc(uid).collection('settings').doc('profile').get();
+  if (!snap.exists) return { budget: 0, startDay: 1, currency: 'BRL' };
+  const data = snap.data() as Partial<UserSettingsBackend>;
+  return {
+    budget: typeof data.budget === 'number' ? data.budget : 0,
+    startDay: typeof data.startDay === 'number' ? data.startDay : 1,
+    currency: typeof data.currency === 'string' ? data.currency : 'BRL'
+  };
+}
+
+export async function getUserProfile(uid: string): Promise<UserProfileBackend> {
+  const snap = await db.collection('users').doc(uid).get();
+  if (!snap.exists) return { displayName: '' };
+  const data = snap.data() as Partial<{ displayName: string }>;
+  return {
+    displayName: typeof data.displayName === 'string' ? data.displayName : ''
+  };
+}
+
 export async function getUserCategories(uid: string): Promise<UserCategory[]> {
   const snap = await db.collection('users').doc(uid).collection('categories').orderBy('name', 'asc').get();
   return snap.docs.map((doc) => ({
@@ -396,8 +426,8 @@ export async function resolveUidFromAccessCode(
       const data = settingsDoc.data() as { whatsappAllowedNumbers?: unknown };
       const allowed = Array.isArray(data.whatsappAllowedNumbers)
         ? data.whatsappAllowedNumbers
-            .map((value) => (typeof value === 'string' ? normalizePhoneNumber(value) : ''))
-            .filter((value) => value.length >= 10)
+          .map((value) => (typeof value === 'string' ? normalizePhoneNumber(value) : ''))
+          .filter((value) => value.length >= 10)
         : [];
 
       const phoneVariants = brazilianPhoneVariants(normalizedPhone);

@@ -1,5 +1,5 @@
 import { env } from '../config/env';
-import type { UserCategory, UserTransaction } from '../lib/firestore';
+import type { UserCategory, UserTransaction, UserSettingsBackend, UserProfileBackend } from '../lib/firestore';
 
 export type PaymentMethod = 'pix' | 'credit' | 'debit' | 'cash' | 'transfer' | 'boleto';
 
@@ -49,7 +49,66 @@ export interface GroqChatMessage {
   imageDataUrl?: string;
 }
 
-function buildSystemPrompt(categories: UserCategory[], recentTransactions: UserTransaction[]): string {
+export interface UserFinancialContext {
+  profile: UserProfileBackend;
+  settings: UserSettingsBackend;
+  categories: UserCategory[];
+  recentTransactions: UserTransaction[];
+}
+
+function formatCurrency(value: number, currency: string): string {
+  if (currency === 'BRL') return `R$ ${value.toFixed(2).replace('.', ',')}`;
+  return `${currency} ${value.toFixed(2)}`;
+}
+
+function buildFinancialSummary(transactions: UserTransaction[], settings: UserSettingsBackend): string {
+  if (transactions.length === 0) return 'O usuário ainda não possui transações registradas.';
+
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+  const monthTx = transactions.filter((t) => t.monthKey === currentMonth);
+  const totalIncome = monthTx.filter((t) => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
+  const totalExpense = monthTx.filter((t) => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
+  const balance = totalIncome - totalExpense;
+
+  const lines: string[] = [
+    `Mês atual (${currentMonth}):`,
+    `  Receitas: ${formatCurrency(totalIncome, settings.currency)}`,
+    `  Despesas: ${formatCurrency(totalExpense, settings.currency)}`,
+    `  Saldo: ${formatCurrency(balance, settings.currency)}`
+  ];
+
+  if (settings.budget > 0) {
+    const budgetUsed = totalExpense;
+    const budgetRemaining = settings.budget - budgetUsed;
+    const budgetPct = ((budgetUsed / settings.budget) * 100).toFixed(1);
+    lines.push(`  Orçamento mensal: ${formatCurrency(settings.budget, settings.currency)}`);
+    lines.push(`  Gasto do orçamento: ${budgetPct}% (${budgetRemaining >= 0 ? `restam ${formatCurrency(budgetRemaining, settings.currency)}` : `excedido em ${formatCurrency(Math.abs(budgetRemaining), settings.currency)}`})`);
+  }
+
+  // Top spending categories this month
+  const catSpending = new Map<string, number>();
+  for (const t of monthTx.filter((t) => t.type === 'expense')) {
+    catSpending.set(t.category, (catSpending.get(t.category) || 0) + t.amount);
+  }
+  if (catSpending.size > 0) {
+    const topCats = [...catSpending.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([catId, amount]) => `  - ${catId}: ${formatCurrency(amount, settings.currency)}`);
+    lines.push('  Maiores categorias de gasto:', ...topCats);
+  }
+
+  return lines.join('\n');
+}
+
+function buildSystemPrompt(context: UserFinancialContext): string {
+  const { profile, settings, categories, recentTransactions } = context;
+
+  const userName = profile.displayName?.split(' ')[0] || '';
+  const greeting = userName ? `O nome do usuário é *${userName}*.` : '';
+
   const categoriesList = categories
     .map((c) => `- ID: "${c.id}", Nome: "${c.name}", Tipo: ${c.type}`)
     .join('\n');
@@ -62,40 +121,54 @@ function buildSystemPrompt(categories: UserCategory[], recentTransactions: UserT
     )
     .join('\n');
 
+  const financialSummary = buildFinancialSummary(recentTransactions, settings);
   const today = new Date().toISOString().split('T')[0];
 
-  return `Você é o SaldoPro AI, assistente financeiro pessoal do usuário via WhatsApp.
+  return `Você é o *SaldoPro*, um assistente financeiro pessoal inteligente que conversa via WhatsApp.
+${greeting}
 
-Regras obrigatórias:
+## Sua Personalidade
+- Seja **caloroso, amigável e empático** — como um consultor financeiro de confiança, não um robô.
+- Use o primeiro nome do usuário naturalmente na conversa quando fizer sentido.
+- Dê respostas que mostram que você **entende o contexto financeiro** do usuário.
+- Quando o usuário mencionar metas como "quero economizar", "preciso guardar", etc., conecte com o orçamento e gastos reais dele.
+- Ao registrar lançamentos, confirme de forma **natural e breve** (ex: "Registrei ✅ — R$ 45,00 em Alimentação").
+- **NUNCA** mostre IDs de transação, IDs de categoria ou dados técnicos na resposta ao usuário.
+- Use emojis de forma equilibrada e natural, sem exagero.
+- Para saudações simples ("oi", "olá", "bom dia"), responda com uma saudação amigável e ofereça um **resumo rápido** da situação financeira atual do mês.
+- Quando o usuário perguntar sobre metas, economia ou planejamento, use os dados reais abaixo para dar dicas personalizadas.
+- Se o orçamento estiver perto de exceder ou já excedeu, mencione isso proativamente com tom de cuidado (não alarmista).
+
+## Regras Técnicas (obrigatório)
 1) Responda SEMPRE com um JSON válido contendo exatamente duas chaves:
-   - "reply": texto em Markdown para o usuário (use emojis, listas e negrito quando útil).
+   - "reply": texto em Markdown simples para WhatsApp (negrito com *, listas com •).
    - "actionObject": objeto de ação conforme os formatos abaixo.
-2) Não escreva NADA fora do JSON. Nunca use blocos de código ou texto antes/depois do JSON.
-3) Quando o usuário mencionar qualquer gasto, receita, compra, pagamento ou enviar
-   comprovante/recibo — SEMPRE use "add_transaction" com os dados extraídos.
-   - Para imagens de comprovante: leia o valor total pago, a data e a descrição do recibo.
-   - Escolha o "categoryId" mais adequado dentre as categorias disponíveis abaixo.
-   - Se não tiver certeza da categoria, use a que mais se aproxima pelo tipo (expense/income).
-4) Use {"action":"none"} APENAS para perguntas, consultas e análises puras (sem transação).
+2) Não escreva NADA fora do JSON. Sem blocos de código, sem texto antes/depois.
+3) Quando o usuário mencionar gasto, receita, compra, pagamento ou enviar comprovante/recibo:
+   - Use "add_transaction" com os dados extraídos.
+   - Escolha o "categoryId" mais adequado das categorias disponíveis.
+   - Se não tiver certeza da categoria, use a mais próxima pelo tipo (expense/income).
+4) Use {"action":"none"} para conversas, perguntas, análises e saudações.
 
-Formatos aceitos para "actionObject":
+Formatos de "actionObject":
 - {"action":"none"}
 - {"action":"add_transaction","type":"expense|income","amount":15.5,"description":"Lanche","categoryId":"id","date":"YYYY-MM-DD","paymentMethod":"pix|credit|debit|cash|transfer|boleto"}
 - {"action":"update_transaction","id":"transaction_id","changes":{"amount":20}}
 - {"action":"delete_transaction","id":"transaction_id"}
 
-Diretrizes para o campo "reply":
-- Seja direto e consultivo.
-- Ao confirmar um lançamento, indique o que foi registrado (valor, descrição, categoria).
-- Para análises, traga insights práticos sobre os gastos quando útil.
+## Contexto Financeiro do Usuário
+
+${financialSummary}
 
 Categorias disponíveis:
-${categoriesList || '- (nenhuma categoria)'}
+${categoriesList || '(nenhuma categoria cadastrada)'}
 
-Transações recentes:
-${txList || '- (nenhuma transação)'}
+Transações recentes (para referência interna, NÃO mostre IDs ao usuário):
+${txList || '(nenhuma transação)'}
 
-Data de referência: ${today}`;
+Data de hoje: ${today}
+Moeda: ${settings.currency}
+${settings.budget > 0 ? `Orçamento mensal definido: ${formatCurrency(settings.budget, settings.currency)}` : 'Sem orçamento mensal definido.'}`;
 }
 
 function parseAssistantPayload(content: string): Partial<GroqAssistantResult> {
@@ -113,8 +186,7 @@ function parseAssistantPayload(content: string): Partial<GroqAssistantResult> {
 
 export async function queryGroqAssistant(
   messages: GroqChatMessage[],
-  categories: UserCategory[],
-  recentTransactions: UserTransaction[]
+  context: UserFinancialContext
 ): Promise<GroqAssistantResult> {
   if (messages.length === 0) {
     throw new Error('At least one message is required');
@@ -153,14 +225,12 @@ export async function queryGroqAssistant(
     },
     body: JSON.stringify({
       model: targetModel,
-      temperature: 0.2,
-      // response_format is not supported by vision models (e.g. llama-3.2-90b-vision-preview)
-      // The system prompt already instructs the model to return valid JSON
+      temperature: 0.4,
       ...(lastMessage?.imageDataUrl ? {} : { response_format: { type: 'json_object' } }),
       messages: [
         {
           role: 'system',
-          content: buildSystemPrompt(categories, recentTransactions)
+          content: buildSystemPrompt(context)
         },
         ...formattedMessages
       ]
@@ -181,8 +251,18 @@ export async function queryGroqAssistant(
   }
 
   const parsed = parseAssistantPayload(content);
+  const rawReply = (parsed.reply ?? '').toString().trim();
+
+  // Strip any transaction/category IDs that may leak through despite prompt instructions
+  const cleanReply = rawReply
+    .replace(/\(ID:\s*[A-Za-z0-9_-]+\)/g, '')
+    .replace(/ID:\s*[A-Za-z0-9_-]{15,}/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
   return {
-    reply: (parsed.reply ?? '').toString().trim() || 'Nao consegui entender. Pode reformular?',
+    reply: cleanReply || 'Não consegui entender. Pode reformular? 🤔',
     actionObject: (parsed.actionObject as AIAction) ?? { action: 'none' }
   };
 }
+

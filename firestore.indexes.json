@@ -1,0 +1,41 @@
+{
+    "indexes": [],
+    "fieldOverrides": [
+        {
+            "collectionGroup": "settings",
+            "fieldPath": "whatsappAllowedNumbers",
+            "indexes": [
+                {
+                    "order": "ASCENDING",
+                    "queryScope": "COLLECTION"
+                },
+                {
+                    "arrayConfig": "CONTAINS",
+                    "queryScope": "COLLECTION"
+                },
+                {
+                    "order": "ASCENDING",
+                    "queryScope": "COLLECTION_GROUP"
+                },
+                {
+                    "arrayConfig": "CONTAINS",
+                    "queryScope": "COLLECTION_GROUP"
+                }
+            ]
+        },
+        {
+            "collectionGroup": "settings",
+            "fieldPath": "whatsappAccessCodeNormalized",
+            "indexes": [
+                {
+                    "order": "ASCENDING",
+                    "queryScope": "COLLECTION"
+                },
+                {
+                    "order": "ASCENDING",
+                    "queryScope": "COLLECTION_GROUP"
+                }
+            ]
+        }
+    ]
+}

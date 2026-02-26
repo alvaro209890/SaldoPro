@@ -312,18 +312,38 @@ export class WhatsAppClient {
     const remoteJid = key.remoteJid ?? '';
     if (!remoteJid || isStatusJid(remoteJid) || isGroupJid(remoteJid)) return;
 
+    const isSelfChat = jidToPhone(remoteJid) === this.phone;
+
     if (key.fromMe) {
-      // Allow self-messages (user typing on phone to their own number)
-      // but block messages sent by the bot itself to prevent infinite loops
-      const isSelfChat = jidToPhone(remoteJid) === this.phone;
-      if (!isSelfChat || this.sentByBotIds.has(messageId)) return;
+      if (!isSelfChat || this.sentByBotIds.has(messageId)) {
+        logger.info('MSG_SKIP: fromMe message blocked', {
+          messageId,
+          reason: this.sentByBotIds.has(messageId) ? 'sent_by_bot' : 'not_self_chat',
+          remoteJid
+        });
+        return;
+      }
+      logger.info('MSG_SELF: processing self-chat message for AI testing', {
+        messageId,
+        phone: this.phone
+      });
     }
 
-    const remotePhone = jidToPhone(remoteJid);
+    const remotePhone = isSelfChat ? (this.phone ?? jidToPhone(remoteJid)) : jidToPhone(remoteJid);
+
+    logger.info('MSG_RECV: new inbound message', {
+      messageId,
+      from: remotePhone,
+      fromMe: Boolean(key.fromMe),
+      isSelfChat,
+      rawType: extractRawType(message),
+      textPreview: extractMessageText(message).slice(0, 50)
+    });
 
     const alreadyInFirestore = await inboundMessageExists(messageId);
     if (alreadyInFirestore) {
       this.rememberInbound(messageId);
+      logger.info('MSG_SKIP: already in Firestore', { messageId });
       return;
     }
 
@@ -335,8 +355,15 @@ export class WhatsAppClient {
     const conversationText = text.trim() || (imageDataUrl ? IMAGE_ONLY_FALLBACK_TEXT : '');
     let binding = await getPhoneBinding(remotePhone);
 
-    // Se nÃ£o hÃ¡ binding, tenta auto-vincular pelo nÃºmero cadastrado na conta
+    logger.info('MSG_BIND: phone binding lookup', {
+      phone: remotePhone,
+      found: Boolean(binding),
+      uid: binding?.uid ?? null
+    });
+
+    // Se não há binding, tenta auto-vincular pelo número cadastrado na conta
     if (!binding) {
+      logger.info('MSG_RESOLVE: attempting resolveUidFromPhone', { phone: remotePhone });
       const resolvedUid = await resolveUidFromPhone(remotePhone);
       if (resolvedUid) {
         await savePhoneBinding(remotePhone, resolvedUid);
@@ -346,10 +373,12 @@ export class WhatsAppClient {
           linkedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         };
-        logger.info('WhatsApp: numero auto-vinculado pelo cadastro da conta', {
+        logger.info('MSG_RESOLVE: auto-linked phone to account', {
           phone: remotePhone,
           uid: resolvedUid
         });
+      } else {
+        logger.info('MSG_RESOLVE: no account found for phone', { phone: remotePhone });
       }
     }
 
@@ -368,8 +397,9 @@ export class WhatsAppClient {
       rawType,
       createdAt: new Date().toISOString(),
       metadata: {
-        fromMe: false,
+        fromMe: Boolean(key.fromMe),
         isGroup: false,
+        isSelfChat,
         hasImage: Boolean(imageDataUrl)
       }
     };
@@ -378,13 +408,20 @@ export class WhatsAppClient {
     this.rememberInbound(messageId);
 
     if (!binding) {
+      logger.info('MSG_UNLINKED: no binding found, ignoring message', { from: remotePhone });
       await this.handleUnlinkedMessage(remotePhone);
       return;
     }
 
     const stillAllowed = await isPhoneAllowedForUid(binding.uid, remotePhone);
+    logger.info('MSG_WHITELIST: phone whitelist check', {
+      phone: remotePhone,
+      uid: binding.uid,
+      allowed: stillAllowed
+    });
+
     if (!stillAllowed) {
-      logger.info('Ignoring WhatsApp message from number removed from whitelist', {
+      logger.info('MSG_BLOCKED: phone not in whitelist', {
         from: remotePhone,
         uid: binding.uid
       });
@@ -397,6 +434,13 @@ export class WhatsAppClient {
         content: conversationText
       });
     }
+
+    logger.info('MSG_AI: sending to AI for reply', {
+      uid: binding.uid,
+      phone: remotePhone,
+      textLength: conversationText.length,
+      hasImage: Boolean(imageDataUrl)
+    });
 
     await this.sendSmartReply(binding.uid, remoteJid, remotePhone, conversationText, imageDataUrl);
   }

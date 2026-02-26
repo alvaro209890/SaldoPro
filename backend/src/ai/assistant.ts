@@ -4,15 +4,19 @@ import {
   deleteUserTransaction,
   getRecentTransactions,
   getUserCategories,
+  getUserProfile,
+  getUserSettings,
   updateUserTransaction,
-  type CreateTransactionInput
+  type CreateTransactionInput,
+  type UserCategory
 } from '../lib/firestore';
 import { logger } from '../lib/logger';
 import {
   queryGroqAssistant,
   type AIAction,
   type GroqChatMessage,
-  type PaymentMethod
+  type PaymentMethod,
+  type UserFinancialContext
 } from './groq';
 
 const VALID_PAYMENT_METHODS: PaymentMethod[] = [
@@ -42,9 +46,18 @@ function normalizePaymentMethod(method: unknown): PaymentMethod {
   return 'pix';
 }
 
+function findCategoryName(categories: UserCategory[], categoryId: string): string {
+  const cat = categories.find((c) => c.id === categoryId);
+  return cat?.name || categoryId;
+}
+
+function formatBRL(value: number): string {
+  return `R$ ${value.toFixed(2).replace('.', ',')}`;
+}
+
 export async function processWhatsAppAIMessage(uid: string, messages: GroqChatMessage[]): Promise<string> {
   if (!uid || uid.trim().length === 0) {
-    return 'Nao foi possivel identificar a conta vinculada para processar a mensagem.';
+    return 'Não foi possível identificar a conta vinculada para processar a mensagem.';
   }
 
   const sanitizedMessages = messages
@@ -57,25 +70,39 @@ export async function processWhatsAppAIMessage(uid: string, messages: GroqChatMe
     .filter((message) => message.content.trim() || message.imageDataUrl);
 
   if (sanitizedMessages.length === 0) {
-    return 'Nao consegui interpretar a mensagem recebida.';
+    return 'Não consegui interpretar a mensagem recebida.';
   }
 
-  const categories = await getUserCategories(uid);
-  const recentTransactions = await getRecentTransactions(uid, env.whatsappAiRecentTransactions);
-  const ai = await queryGroqAssistant(sanitizedMessages, categories, recentTransactions);
+  const [categories, recentTransactions, settings, profile] = await Promise.all([
+    getUserCategories(uid),
+    getRecentTransactions(uid, env.whatsappAiRecentTransactions),
+    getUserSettings(uid),
+    getUserProfile(uid)
+  ]);
+
+  const context: UserFinancialContext = {
+    profile,
+    settings,
+    categories,
+    recentTransactions
+  };
+
+  const ai = await queryGroqAssistant(sanitizedMessages, context);
 
   const actionMessage = await executeAction(uid, ai.actionObject, categories);
   if (!actionMessage) {
     return ai.reply;
   }
 
-  return `${ai.reply}\n\n${actionMessage}`.slice(0, env.maxMessageLength);
+  // If the AI reply already contains a confirmation (based on the prompt),
+  // only append the action status if the action needed extra info
+  return `${ai.reply}`.slice(0, env.maxMessageLength);
 }
 
 async function executeAction(
   uid: string,
   action: AIAction,
-  categories: Array<{ id: string; type: 'income' | 'expense' }>
+  categories: UserCategory[]
 ): Promise<string | null> {
   try {
     if (action.action === 'none') {
@@ -84,32 +111,33 @@ async function executeAction(
 
     if (action.action === 'add_transaction') {
       if (!Number.isFinite(action.amount) || action.amount <= 0) {
-        return 'Nao executei o lancamento porque o valor esta invalido.';
+        return null; // Silent — let the AI handle the reply
       }
 
       const categoryExists = categories.find((c) => c.id === action.categoryId);
       const fallbackCategory = categories.find((c) => c.type === action.type);
       const category = categoryExists?.id ?? fallbackCategory?.id;
       if (!category) {
-        return 'Nao executei o lancamento porque nao encontrei categoria compativel.';
+        return null;
       }
 
       const payload: CreateTransactionInput = {
         type: action.type,
         amount: Number(action.amount),
-        description: (action.description || 'Lancamento via WhatsApp').toString().slice(0, 120),
+        description: (action.description || 'Lançamento via WhatsApp').toString().slice(0, 120),
         category,
         date: normalizeDate(action.date),
         paymentMethod: normalizePaymentMethod(action.paymentMethod)
       };
 
-      const transactionId = await addUserTransaction(uid, payload);
-      return `Lancamento criado com sucesso (ID: ${transactionId}).`;
+      await addUserTransaction(uid, payload);
+      // Don't return anything — the AI reply already confirms the transaction
+      return null;
     }
 
     if (action.action === 'update_transaction') {
       if (!action.id || typeof action.id !== 'string') {
-        return 'Nao executei a edicao porque o ID da transacao nao foi informado.';
+        return null;
       }
 
       const changes: Record<string, unknown> = { ...(action.changes ?? {}) };
@@ -127,13 +155,13 @@ async function executeAction(
       if ('amount' in changes) {
         const amount = Number(changes.amount);
         if (!Number.isFinite(amount) || amount <= 0) {
-          return 'Nao executei a edicao porque o novo valor esta invalido.';
+          return null;
         }
         changes.amount = amount;
       }
 
       if (Object.keys(changes).length === 0) {
-        return 'Nao executei a edicao porque nao houve campos validos para atualizar.';
+        return null;
       }
 
       await updateUserTransaction(
@@ -150,20 +178,21 @@ async function executeAction(
           updatedAt: string;
         }>
       );
-      return `Transacao ${action.id} atualizada com sucesso.`;
+      return null;
     }
 
     if (action.action === 'delete_transaction') {
       if (!action.id || typeof action.id !== 'string') {
-        return 'Nao executei a exclusao porque o ID da transacao nao foi informado.';
+        return null;
       }
       await deleteUserTransaction(uid, action.id);
-      return `Transacao ${action.id} removida com sucesso.`;
+      return null;
     }
   } catch (error) {
     logger.error('Failed executing AI financial action', error);
-    return 'Entendi o pedido, mas ocorreu erro ao salvar no banco.';
+    return '⚠️ Entendi o pedido, mas ocorreu um erro ao salvar. Tente novamente em instantes.';
   }
 
   return null;
 }
+

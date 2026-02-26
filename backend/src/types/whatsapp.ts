@@ -16,6 +16,7 @@ export interface WhatsAppMessageRecord {
   metadata: {
     fromMe: boolean;
     isGroup: boolean;
+    isSelfChat?: boolean;
     hasImage?: boolean;
   };
 }
