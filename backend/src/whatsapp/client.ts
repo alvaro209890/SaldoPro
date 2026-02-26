@@ -303,30 +303,32 @@ export class WhatsAppClient {
 
       const shouldForceRelogin =
         this.allowReconnect &&
-        (code === DisconnectReason.loggedOut || code === DisconnectReason.badSession);
+        (code === DisconnectReason.loggedOut ||
+          code === DisconnectReason.badSession ||
+          code === DisconnectReason.connectionReplaced);
 
       if (shouldForceRelogin) {
-        logger.warn('Invalid WhatsApp session detected, forcing fresh login to generate new QR', {
+        const delayMs = code === DisconnectReason.connectionReplaced ? 5000 : 0;
+        logger.warn('Invalid/replaced WhatsApp session detected, forcing fresh login to generate new QR', {
           code,
-          reason
+          reason,
+          delayMs
         });
-        void this.recoverFromInvalidSession();
+        if (delayMs > 0) {
+          setTimeout(() => void this.recoverFromInvalidSession(), delayMs);
+        } else {
+          void this.recoverFromInvalidSession();
+        }
         return;
       }
 
       const shouldReconnect =
         this.allowReconnect &&
         code !== DisconnectReason.loggedOut &&
-        code !== DisconnectReason.forbidden &&
-        code !== DisconnectReason.connectionReplaced;
+        code !== DisconnectReason.forbidden;
 
       if (shouldReconnect) {
         this.scheduleReconnect();
-      } else if (code === DisconnectReason.connectionReplaced) {
-        logger.warn(
-          'Connection was replaced by another session. Not reconnecting to avoid loop. ' +
-            'If this is unexpected, check for multiple server instances or use /api/whatsapp/session/reset.'
-        );
       }
     }
   }

@@ -101,37 +101,32 @@ function buildFinancialSummary(transactions: UserTransaction[], settings: UserSe
 /** Max transactions to embed in the system prompt (keeps token usage reasonable). */
 const PROMPT_TX_LIMIT = 15;
 
+/**
+ * Determines whether the current message is a simple conversational turn
+ * (greeting, capabilities question, first message, conversation restart)
+ * that does NOT need the full transaction list or detailed categories.
+ * This keeps token usage low for lightweight interactions.
+ */
+function isLightweightContext(context: UserFinancialContext): boolean {
+  return Boolean(
+    context.isGreeting ||
+    context.isFirstMessage ||
+    context.isCapabilitiesQuestion ||
+    context.isConversationRestart ||
+    context.shouldSendCapabilitiesSummary
+  );
+}
+
 function buildSystemPrompt(context: UserFinancialContext): string {
   const { profile, settings, categories, recentTransactions } = context;
 
   const userName = profile.displayName?.split(' ')[0] || '';
   const userInfo = userName ? `Nome do usuario: ${userName}.` : 'Nome do usuario: nao informado.';
 
-  const shouldSendSummary = Boolean(
-    context.shouldSendCapabilitiesSummary ||
-    context.isFirstMessage ||
-    context.isGreeting ||
-    context.isCapabilitiesQuestion ||
-    context.isConversationRestart
-  );
+  const lightweight = isLightweightContext(context);
 
-  const categoriesList = categories
-    .map((c) => `- ID: "${c.id}", Nome: "${c.name}", Tipo: ${c.type}`)
-    .join('\n');
+  const shouldSendSummary = lightweight;
 
-  const txList = recentTransactions
-    .slice(0, PROMPT_TX_LIMIT)
-    .map(
-      (t) =>
-        `- ID: "${t.id}", Data: ${t.date}, Desc: "${t.description}", Valor: ${t.amount}, Tipo: ${t.type}, CatID: ${t.category}`
-    )
-    .join('\n');
-
-  const txNote = recentTransactions.length > PROMPT_TX_LIMIT
-    ? `\n(mostrando ${PROMPT_TX_LIMIT} de ${recentTransactions.length} transacoes recentes)`
-    : '';
-
-  const financialSummary = buildFinancialSummary(recentTransactions, settings);
   const today = new Date().toISOString().split('T')[0];
 
   const summaryInstruction = shouldSendSummary
@@ -145,6 +140,56 @@ function buildSystemPrompt(context: UserFinancialContext): string {
   const capabilitiesQuestionInstruction = context.isCapabilitiesQuestion
     ? 'Como o usuario perguntou o que voce faz, responda de forma completa, concreta e nao generica.'
     : 'Se nao for pergunta de capacidade, mantenha foco no pedido atual.';
+
+  // --- Financial context section (lightweight vs full) ---
+  let financialContextBlock: string;
+
+  if (lightweight) {
+    // For greetings / capability questions: only include a brief summary, no tx list
+    const financialSummary = buildFinancialSummary(recentTransactions, settings);
+    const categoryNames = categories.map((c) => c.name).join(', ');
+
+    financialContextBlock = `CONTEXTO FINANCEIRO (resumido)
+${financialSummary}
+
+Categorias disponiveis: ${categoryNames || '(nenhuma)'}
+
+Data de hoje: ${today}
+Moeda: ${settings.currency}
+${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.budget, settings.currency)}` : 'Sem orcamento mensal definido.'}`;
+  } else {
+    // Full context: categories with IDs + recent transactions for edit/delete operations
+    const financialSummary = buildFinancialSummary(recentTransactions, settings);
+
+    const categoriesList = categories
+      .map((c) => `- ID: "${c.id}", Nome: "${c.name}", Tipo: ${c.type}`)
+      .join('\n');
+
+    const txList = recentTransactions
+      .slice(0, PROMPT_TX_LIMIT)
+      .map(
+        (t) =>
+          `- ID: "${t.id}", Data: ${t.date}, Desc: "${t.description}", Valor: ${t.amount}, Tipo: ${t.type}, CatID: ${t.category}`
+      )
+      .join('\n');
+
+    const txNote = recentTransactions.length > PROMPT_TX_LIMIT
+      ? `\n(mostrando ${PROMPT_TX_LIMIT} de ${recentTransactions.length} transacoes recentes)`
+      : '';
+
+    financialContextBlock = `CONTEXTO FINANCEIRO
+${financialSummary}
+
+Categorias disponiveis:
+${categoriesList || '(nenhuma categoria cadastrada)'}
+
+Transacoes recentes (referencia interna; nao mostrar IDs):
+${txList || '(nenhuma transacao)'}${txNote}
+
+Data de hoje: ${today}
+Moeda: ${settings.currency}
+${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.budget, settings.currency)}` : 'Sem orcamento mensal definido.'}`;
+  }
 
   return `Voce e o SaldoPro, assistente financeiro pessoal via WhatsApp.
 ${userInfo}
@@ -214,18 +259,7 @@ FORMATOS DE ACTIONOBJECT
 EXEMPLO DE RESPOSTA (formato exato):
 {"reply":"Lancamento registrado! Despesa de R$ 50,00 em Alimentacao.","actionObject":{"action":"add_transaction","type":"expense","amount":50,"description":"Mercado","categoryId":"alimentacao","date":"${today}","paymentMethod":"pix"}}
 
-CONTEXTO FINANCEIRO
-${financialSummary}
-
-Categorias disponiveis:
-${categoriesList || '(nenhuma categoria cadastrada)'}
-
-Transacoes recentes (referencia interna; nao mostrar IDs):
-${txList || '(nenhuma transacao)'}${txNote}
-
-Data de hoje: ${today}
-Moeda: ${settings.currency}
-${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.budget, settings.currency)}` : 'Sem orcamento mensal definido.'}`;
+${financialContextBlock}`;
 }
 
 function parseAssistantPayload(content: string): Partial<GroqAssistantResult> {
@@ -314,6 +348,15 @@ function stripThinkingBlocks(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 }
 
+/** Remove internal IDs and excess whitespace from AI replies before sending to user. */
+function cleanAiReply(raw: string): string {
+  return raw
+    .replace(/\(ID:\s*[A-Za-z0-9_-]+\)/g, '')
+    .replace(/ID:\s*[A-Za-z0-9_-]{15,}/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 /** Determines if the HTTP status code means we should try the next model (429) or retry same (5xx). */
 function isRateLimitStatus(status: number): boolean {
   return status === 429;
@@ -394,16 +437,10 @@ async function callGroqModel(
       throw new Error('Groq response is not valid JSON');
     }
 
-    const rawReply = (parsed.reply ?? '').toString().trim();
-
-    const cleanReply = rawReply
-      .replace(/\(ID:\s*[A-Za-z0-9_-]+\)/g, '')
-      .replace(/ID:\s*[A-Za-z0-9_-]{15,}/g, '')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
+    const reply = cleanAiReply((parsed.reply ?? '').toString());
 
     return {
-      reply: cleanReply || 'Nao consegui entender. Pode reformular?',
+      reply: reply || 'Nao consegui entender. Pode reformular?',
       actionObject: validateAction(parsed.actionObject)
     };
   } catch (error) {
@@ -605,15 +642,10 @@ async function queryGeminiAssistant(
       };
     }
 
-    const rawReply = (parsed.reply ?? '').toString().trim();
-    const cleanReply = rawReply
-      .replace(/\(ID:\s*[A-Za-z0-9_-]+\)/g, '')
-      .replace(/ID:\s*[A-Za-z0-9_-]{15,}/g, '')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
+    const reply = cleanAiReply((parsed.reply ?? '').toString());
 
     return {
-      reply: cleanReply || 'Nao consegui entender. Pode reformular?',
+      reply: reply || 'Nao consegui entender. Pode reformular?',
       actionObject: validateAction(parsed.actionObject)
     };
   } catch (error) {
