@@ -71,6 +71,8 @@ export class WhatsAppClient {
   private allowReconnect = true;
   private readonly processedInboundIds = new Set<string>();
   private readonly processedInboundOrder: string[] = [];
+  private readonly sentByBotIds = new Set<string>();
+  private readonly sentByBotOrder: string[] = [];
   private readonly conversationByPhone = new Map<string, ConversationEntry[]>();
   private readonly requestedLinkCodePhones = new Set<string>();
 
@@ -277,7 +279,14 @@ export class WhatsAppClient {
 
     const remoteJid = key.remoteJid ?? '';
     if (!remoteJid || isStatusJid(remoteJid) || isGroupJid(remoteJid)) return;
-    if (key.fromMe) return;
+
+    if (key.fromMe) {
+      // Allow self-messages (user typing on phone to their own number)
+      // but block messages sent by the bot itself to prevent infinite loops
+      const isSelfChat = jidToPhone(remoteJid) === this.phone;
+      if (!isSelfChat || this.sentByBotIds.has(messageId)) return;
+    }
+
     const remotePhone = jidToPhone(remoteJid);
 
     const alreadyInFirestore = await inboundMessageExists(messageId);
@@ -455,6 +464,7 @@ export class WhatsAppClient {
         };
 
         await saveMessageSafe(sentRecord);
+        this.rememberSentByBot(messageId);
         return { messageId };
       } catch (error) {
         lastError = error;
@@ -567,6 +577,18 @@ export class WhatsAppClient {
     if (this.processedInboundOrder.length > 5000) {
       const oldest = this.processedInboundOrder.shift();
       if (oldest) this.processedInboundIds.delete(oldest);
+    }
+  }
+
+  private rememberSentByBot(messageId: string): void {
+    if (this.sentByBotIds.has(messageId)) return;
+
+    this.sentByBotIds.add(messageId);
+    this.sentByBotOrder.push(messageId);
+
+    if (this.sentByBotOrder.length > 5000) {
+      const oldest = this.sentByBotOrder.shift();
+      if (oldest) this.sentByBotIds.delete(oldest);
     }
   }
 
