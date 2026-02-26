@@ -447,6 +447,7 @@ export class WhatsAppClient {
     }
 
     let binding = await getPhoneBinding(remotePhone);
+    let bindingJustVerified = false;
 
     logger.info('MSG_BIND: phone binding lookup', {
       phone: remotePhone,
@@ -469,6 +470,7 @@ export class WhatsAppClient {
             linkedAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           };
+          bindingJustVerified = true;
           logger.info('MSG_RESOLVE: auto-linked phone to account', {
             phone: remotePhone,
             uid: resolvedUid
@@ -490,14 +492,17 @@ export class WhatsAppClient {
       return;
     }
 
-    const stillAllowed = await isPhoneAllowedForUid(binding.uid, remotePhone);
-    if (!stillAllowed) {
-      logger.info('MSG_BLOCKED: phone not in whitelist anymore, ignoring message', {
-        from: remotePhone,
-        uid: binding.uid
-      });
-      this.rememberInbound(messageId);
-      return;
+    // Skip re-check if we just verified the phone during auto-binding above
+    if (!bindingJustVerified) {
+      const stillAllowed = await isPhoneAllowedForUid(binding.uid, remotePhone);
+      if (!stillAllowed) {
+        logger.info('MSG_BLOCKED: phone not in whitelist anymore, ignoring message', {
+          from: remotePhone,
+          uid: binding.uid
+        });
+        this.rememberInbound(messageId);
+        return;
+      }
     }
 
     const inboundRecord: WhatsAppMessageRecord = {

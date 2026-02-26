@@ -39,21 +39,22 @@ export function TransactionRow({
     }, []);
 
     return (
-        <div className="group flex items-center justify-between gap-4 rounded-xl border border-transparent p-3 transition-colors hover:border-surface-700 hover:bg-surface-800/50">
+        <div className="group flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-xl border border-white/5 bg-surface-900/30 p-3.5 transition-all duration-300 hover:border-white/10 hover:bg-surface-800/60 hover:shadow-lg">
             <div className="flex items-center gap-4 min-w-0">
                 <div
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl shadow-inner border border-white/5"
                     style={{
                         backgroundColor: category ? `${category.color}20` : '#33415520',
                         color: category?.color || '#94a3b8',
+                        boxShadow: `inset 0 0 10px ${category ? category.color : '#334155'}10`
                     }}
                 >
                     {IconComponent && <IconComponent className="h-5 w-5" />}
                 </div>
 
                 <div className="min-w-0 flex-1">
-                    <p className="truncate font-medium text-gray-200">{transaction.description}</p>
-                    <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <p className="truncate font-semibold text-gray-100">{transaction.description}</p>
+                    <div className="flex items-center gap-2 text-xs text-gray-400 font-medium mt-0.5">
                         <span className="truncate">{category?.name || 'Sem categoria'}</span>
                         {showDate && (
                             <>
@@ -67,15 +68,15 @@ export function TransactionRow({
                 </div>
             </div>
 
-            <div className="flex items-center gap-4 shrink-0">
-                <div className="text-right">
+            <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0 sm:w-auto w-full pl-15 sm:pl-0">
+                <div className="text-right flex flex-row sm:flex-col items-center sm:items-end gap-3 sm:gap-1">
                     <p
-                        className={`font-semibold ${isIncome ? 'text-emerald-400' : 'text-gray-200'
+                        className={`font-extrabold tracking-tight ${isIncome ? 'text-emerald-400 drop-shadow-[0_0_8px_rgba(16,185,129,0.3)]' : 'text-gray-100'
                             }`}
                     >
                         {isIncome ? '+' : '-'}{formatBRL(transaction.amount)}
                     </p>
-                    <Badge variant="default" className="mt-1 hidden sm:inline-flex text-[10px] px-2">
+                    <Badge variant="default" className="sm:mt-1 border border-white/5 bg-surface-800/80 text-[10px] px-2 py-0.5 shadow-sm">
                         {PAYMENT_METHOD_LABELS[transaction.paymentMethod] || 'Outro'}
                     </Badge>
                 </div>
@@ -83,19 +84,19 @@ export function TransactionRow({
                 <div className="relative" ref={menuRef}>
                     <button
                         onClick={() => setShowMenu(!showMenu)}
-                        className="rounded-lg p-1.5 text-gray-500 opacity-0 transition-all hover:bg-surface-700 hover:text-white group-hover:opacity-100 focus:opacity-100"
+                        className="rounded-lg p-1.5 text-gray-500 opacity-100 sm:opacity-0 sm:transition-all sm:hover:bg-surface-700 sm:hover:text-white sm:group-hover:opacity-100"
                     >
                         <MoreVertical className="h-5 w-5" />
                     </button>
 
                     {showMenu && (
-                        <div className="absolute right-0 top-full mt-1 z-10 w-36 rounded-xl border border-surface-700 bg-surface-900 shadow-xl overflow-hidden animate-scale-in">
+                        <div className="absolute right-0 top-full mt-1 z-20 w-36 rounded-xl border border-white/10 bg-surface-800/95 backdrop-blur-md shadow-2xl overflow-hidden animate-scale-in">
                             <button
                                 onClick={() => {
                                     setShowMenu(false);
                                     onEdit();
                                 }}
-                                className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-300 hover:bg-surface-800 transition-colors"
+                                className="flex w-full items-center gap-2 px-4 py-2.5 text-sm font-medium text-gray-200 hover:bg-surface-700/80 transition-colors"
                             >
                                 <Edit2 className="h-4 w-4" />
                                 Editar
@@ -106,7 +107,7 @@ export function TransactionRow({
                                         setShowMenu(false);
                                         onDelete();
                                     }}
-                                    className="flex w-full items-center gap-2 px-4 py-2 text-sm text-red-400 hover:bg-red-500/10 transition-colors"
+                                    className="flex w-full items-center gap-2 px-4 py-2.5 text-sm font-medium text-rose-400 hover:bg-rose-500/10 transition-colors"
                                 >
                                     <Trash2 className="h-4 w-4" />
                                     Excluir

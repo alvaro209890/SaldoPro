@@ -7,14 +7,10 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
-import { User, DollarSign, Calendar, Save, Phone, Plus, Trash2, KeyRound, Copy } from 'lucide-react';
+import { User, DollarSign, Calendar, Save, Phone, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import {
-    generateWhatsAppAccessCode,
-    normalizePhoneNumber,
-    normalizeWhatsAppAccessCode,
-} from '@/utils/whatsapp';
+import { normalizePhoneNumber } from '@/utils/whatsapp';
 
 const settingsSchema = z.object({
     budget: z.number().min(0, 'O orcamento nao pode ser negativo'),
@@ -52,19 +48,6 @@ export function Settings() {
         },
     });
 
-    const generatedAccessCode = useMemo(() => {
-        if (!user?.uid) return '';
-        return generateWhatsAppAccessCode(user.uid);
-    }, [user?.uid]);
-
-    const whatsappAccessCode = useMemo(() => {
-        return settings?.whatsappAccessCode || generatedAccessCode;
-    }, [settings?.whatsappAccessCode, generatedAccessCode]);
-
-    const whatsappAccessCodeNormalized = useMemo(() => {
-        return normalizeWhatsAppAccessCode(whatsappAccessCode);
-    }, [whatsappAccessCode]);
-
     const persistedNumbers = useMemo(() => {
         return (settings?.whatsappAllowedNumbers || [])
             .map(normalizePhoneNumber)
@@ -89,34 +72,6 @@ export function Settings() {
             );
         }
     }, [settings, reset]);
-
-    useEffect(() => {
-        if (!settings || !user?.uid) return;
-        if (!whatsappAccessCode) return;
-
-        const currentDisplay = settings.whatsappAccessCode || '';
-        const currentNormalized = settings.whatsappAccessCodeNormalized || '';
-        if (
-            currentDisplay === whatsappAccessCode &&
-            currentNormalized === whatsappAccessCodeNormalized
-        ) {
-            return;
-        }
-
-        void update(
-            {
-                whatsappAccessCode,
-                whatsappAccessCodeNormalized,
-            },
-            { silent: true }
-        );
-    }, [
-        settings,
-        user?.uid,
-        whatsappAccessCode,
-        whatsappAccessCodeNormalized,
-        update,
-    ]);
 
     const onSubmit = async (data: SettingsFormData) => {
         setIsSaving(true);
@@ -151,23 +106,9 @@ export function Settings() {
     const handleSaveNumbers = async () => {
         setIsSavingNumbers(true);
         try {
-            await update({
-                whatsappAllowedNumbers,
-                whatsappAccessCode,
-                whatsappAccessCodeNormalized,
-            });
+            await update({ whatsappAllowedNumbers });
         } finally {
             setIsSavingNumbers(false);
-        }
-    };
-
-    const handleCopyAccessCode = async () => {
-        if (!whatsappAccessCode) return;
-        try {
-            await navigator.clipboard.writeText(whatsappAccessCode);
-            toast.success('Codigo copiado!');
-        } catch (error) {
-            toast.error('Nao foi possivel copiar o codigo.');
         }
     };
 
@@ -307,34 +248,6 @@ export function Settings() {
                     </div>
 
                     <div className="p-6 sm:p-10 space-y-8 bg-[#0a0f12]">
-                        <div className="bg-[#0f1419] p-6 rounded-2xl border border-surface-800/80">
-                            <div className="flex items-start justify-between gap-4">
-                                <div className="space-y-2">
-                                    <p className="text-sm text-gray-400 flex items-center gap-2">
-                                        <KeyRound className="w-4 h-4 text-indigo-400" />
-                                        Codigo de Vinculacao WhatsApp
-                                    </p>
-                                    <p className="text-2xl font-semibold tracking-wider text-white">
-                                        {whatsappAccessCode || 'Gerando...'}
-                                    </p>
-                                </div>
-                                <Button
-                                    type="button"
-                                    variant="secondary"
-                                    className="h-10"
-                                    onClick={handleCopyAccessCode}
-                                    disabled={!whatsappAccessCode}
-                                >
-                                    <Copy className="w-4 h-4 mr-2" />
-                                    Copiar
-                                </Button>
-                            </div>
-                            <p className="text-sm text-gray-500 mt-4">
-                                No primeiro contato pelo WhatsApp, este numero cadastrado precisa enviar
-                                esse codigo para vincular a conta. Depois do vinculo, nao sera pedido de novo.
-                            </p>
-                        </div>
-
                         <div className="bg-[#0f1419] p-6 rounded-2xl border border-surface-800/80 flex flex-col sm:flex-row gap-4 items-end">
                             <div className="flex-1 w-full">
                                 <Input

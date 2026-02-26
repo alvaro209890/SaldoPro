@@ -59,20 +59,6 @@
                     "queryScope": "COLLECTION_GROUP"
                 }
             ]
-        },
-        {
-            "collectionGroup": "settings",
-            "fieldPath": "whatsappAccessCodeNormalized",
-            "indexes": [
-                {
-                    "order": "ASCENDING",
-                    "queryScope": "COLLECTION"
-                },
-                {
-                    "order": "ASCENDING",
-                    "queryScope": "COLLECTION_GROUP"
-                }
-            ]
         }
     ]
 }

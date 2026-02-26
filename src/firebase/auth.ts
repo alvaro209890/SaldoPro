@@ -8,7 +8,7 @@ import {
 import { doc, setDoc, collection, writeBatch } from 'firebase/firestore';
 import { auth, db } from './config';
 import { DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES } from '@/utils/constants';
-import { generateWhatsAppAccessCode, normalizeWhatsAppAccessCode, normalizePhoneNumber } from '@/utils/whatsapp';
+import { normalizePhoneNumber } from '@/utils/whatsapp';
 
 function generateSlug(name: string): string {
     return name
@@ -21,7 +21,6 @@ function generateSlug(name: string): string {
 export async function registerUser(email: string, password: string, displayName: string, phone: string) {
     const cred = await createUserWithEmailAndPassword(auth, email, password);
     const { uid } = cred.user;
-    const whatsappAccessCode = generateWhatsAppAccessCode(uid);
 
     await updateProfile(cred.user, { displayName });
 
@@ -39,8 +38,6 @@ export async function registerUser(email: string, password: string, displayName:
         startDay: 1,
         currency: 'BRL',
         whatsappAllowedNumbers: [normalizePhoneNumber(phone)],
-        whatsappAccessCode,
-        whatsappAccessCodeNormalized: normalizeWhatsAppAccessCode(whatsappAccessCode),
         updatedAt: new Date().toISOString(),
     });
 

@@ -10,7 +10,9 @@ const BINDINGS_COLLECTION_NAME = 'whatsappBindings';
 const AUTH_STATE_COLLECTION_NAME = 'whatsappRuntime';
 const AUTH_STATE_DOC_ID = 'authState';
 const AUTH_STATE_FILES_SUBCOLLECTION = 'files';
-const PROFILE_SCAN_CACHE_TTL_MS = 30_000;
+const PROFILE_SCAN_CACHE_TTL_MS = 15_000; // reduced to 15s so newly registered phones are picked up quickly
+const BINDING_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const LAST_ACTIVITY_CACHE_TTL_MS = 60 * 1000; // 1 minute
 
 function sanitizeDocId(value: string): string {
   return value.replace(/[^\w.-]/g, '_');
@@ -199,24 +201,12 @@ export async function getAllowedWhatsAppNumbers(uid: string): Promise<string[]> 
   if (!snap.exists) return [];
 
   const data = snap.data() as { whatsappAllowedNumbers?: unknown };
-  if (!Array.isArray(data.whatsappAllowedNumbers)) return [];
-
-  return [...new Set(data.whatsappAllowedNumbers
-    .map((value) => (typeof value === 'string' ? normalizePhoneNumber(value) : ''))
-    .filter((value) => value.length >= 10))];
-}
-
-function normalizeAccessCode(value: string): string {
-  return value.toUpperCase().replace(/[^A-Z0-9]/g, '');
-}
-
-function extractUidFromSettingsDoc(doc: FirebaseFirestore.QueryDocumentSnapshot): string | null {
-  return doc.ref.parent.parent?.id ?? null;
+  // Use normalizeAllowedNumbers to expand each registered number into all Brazilian variants
+  return normalizeAllowedNumbers(data.whatsappAllowedNumbers);
 }
 
 interface ProfileSettingsData {
   whatsappAllowedNumbers?: unknown;
-  whatsappAccessCodeNormalized?: unknown;
 }
 
 interface ProfileSettingsEntry {
@@ -234,11 +224,17 @@ let profileScanCache: ProfileScanCache | null = null;
 function normalizeAllowedNumbers(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
 
-  return [...new Set(
-    value
-      .map((item) => (typeof item === 'string' ? normalizePhoneNumber(item) : ''))
-      .filter((item) => item.length >= 10)
-  )];
+  // Expand each stored number into all its Brazilian variants so any format matches
+  const allVariants = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const digits = normalizePhoneNumber(item);
+    if (digits.length < 10) continue;
+    for (const variant of brazilianPhoneVariants(digits)) {
+      allVariants.add(variant);
+    }
+  }
+  return [...allVariants];
 }
 
 function isMissingIndexError(error: unknown): boolean {
@@ -293,25 +289,6 @@ async function fallbackIsPhoneAllowedForAnyAccount(variants: string[]): Promise<
 async function fallbackResolveUidFromPhone(variants: string[]): Promise<string | null> {
   const profiles = await scanAllProfileSettings();
   for (const entry of profiles) {
-    const allowed = normalizeAllowedNumbers(entry.data.whatsappAllowedNumbers);
-    if (variants.some((variant) => allowed.includes(variant))) {
-      return entry.uid;
-    }
-  }
-  return null;
-}
-
-async function fallbackResolveUidFromAccessCode(
-  normalizedCode: string,
-  variants: string[]
-): Promise<string | null> {
-  const profiles = await scanAllProfileSettings();
-  for (const entry of profiles) {
-    const code = typeof entry.data.whatsappAccessCodeNormalized === 'string'
-      ? entry.data.whatsappAccessCodeNormalized
-      : '';
-    if (code !== normalizedCode) continue;
-
     const allowed = normalizeAllowedNumbers(entry.data.whatsappAllowedNumbers);
     if (variants.some((variant) => allowed.includes(variant))) {
       return entry.uid;
@@ -390,39 +367,31 @@ export async function resolveUidFromPhone(phone: string): Promise<string | null>
   }
 }
 
-export async function resolveUidFromAccessCode(
-  accessCodeText: string,
-  phone: string
-): Promise<string | null> {
-  const normalizedCode = normalizeAccessCode(accessCodeText);
-  const normalizedPhone = normalizePhoneNumber(phone);
-  if (normalizedCode.length < 8 || normalizedPhone.length < 10) {
-    return null;
-  }
+// ---------------------------------------------------------------------------
+// Phone binding cache — avoids repeated Firestore lookups for the same phone.
+// ---------------------------------------------------------------------------
+const bindingCache = new Map<string, { binding: WhatsAppPhoneBinding | null; cachedAt: number }>();
 
-  try {
-    // Scan all profiles and match by access code only
-    const profiles = await scanAllProfileSettings();
-    for (const entry of profiles) {
-      const entryCode = normalizeAccessCode(
-        typeof entry.data.whatsappAccessCodeNormalized === 'string'
-          ? entry.data.whatsappAccessCodeNormalized
-          : ''
-      );
-      if (entryCode && entryCode === normalizedCode) {
-        return entry.uid;
-      }
-    }
-  } catch (error) {
-    logger.error('resolveUidFromAccessCode failed', error);
+function getCachedBinding(phone: string): WhatsAppPhoneBinding | null | undefined {
+  const entry = bindingCache.get(phone);
+  if (!entry) return undefined;
+  if (Date.now() - entry.cachedAt > BINDING_CACHE_TTL_MS) {
+    bindingCache.delete(phone);
+    return undefined;
   }
+  return entry.binding;
+}
 
-  return null;
+function setCachedBinding(phone: string, binding: WhatsAppPhoneBinding | null): void {
+  bindingCache.set(phone, { binding, cachedAt: Date.now() });
 }
 
 export async function getPhoneBinding(phone: string): Promise<WhatsAppPhoneBinding | null> {
   const normalizedPhone = normalizePhoneNumber(phone);
   if (normalizedPhone.length < 10) return null;
+
+  const cached = getCachedBinding(normalizedPhone);
+  if (cached !== undefined) return cached;
 
   const variants = brazilianPhoneVariants(normalizedPhone);
   const snaps = await Promise.all(
@@ -434,14 +403,17 @@ export async function getPhoneBinding(phone: string): Promise<WhatsAppPhoneBindi
     const data = snap.data() as Partial<WhatsAppPhoneBinding>;
     if (!data.uid || typeof data.uid !== 'string') continue;
 
-    return {
+    const result: WhatsAppPhoneBinding = {
       phone: snap.id,
       uid: data.uid,
       linkedAt: typeof data.linkedAt === 'string' ? data.linkedAt : new Date().toISOString(),
       updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : new Date().toISOString()
     };
+    setCachedBinding(normalizedPhone, result);
+    return result;
   }
 
+  setCachedBinding(normalizedPhone, null);
   return null;
 }
 
@@ -482,6 +454,12 @@ export async function savePhoneBinding(phone: string, uid: string): Promise<void
     batch.set(db.collection(BINDINGS_COLLECTION_NAME).doc(v), bindingData, { merge: true });
   }
   await batch.commit();
+
+  // Invalidate binding cache for all variants
+  for (const v of variants) {
+    bindingCache.delete(v);
+  }
+  bindingCache.delete(normalizedPhone);
 }
 
 export interface WhatsAppAuthSnapshotFile {
@@ -642,6 +620,15 @@ export async function getRecentConversationByPhone(
     }));
 }
 
+// ---------------------------------------------------------------------------
+// Last conversation activity cache — avoids 2 Firestore queries per message.
+// ---------------------------------------------------------------------------
+const lastActivityCache = new Map<string, { activity: string | null; cachedAt: number }>();
+
+function lastActivityCacheKey(uid: string, phone: string): string {
+  return `${uid}:${phone}`;
+}
+
 export async function getLastConversationActivityByPhone(
   uid: string,
   phone: string
@@ -650,6 +637,12 @@ export async function getLastConversationActivityByPhone(
 
   const normalizedPhone = normalizePhoneNumber(phone);
   if (normalizedPhone.length < 10) return null;
+
+  const cacheKey = lastActivityCacheKey(uid, normalizedPhone);
+  const cached = lastActivityCache.get(cacheKey);
+  if (cached && Date.now() - cached.cachedAt <= LAST_ACTIVITY_CACHE_TTL_MS) {
+    return cached.activity;
+  }
 
   try {
     const [inboundSnap, outboundSnap] = await Promise.all([
@@ -677,11 +670,14 @@ export async function getLastConversationActivityByPhone(
     const inboundIso = typeof inboundCreatedAt === 'string' ? inboundCreatedAt : null;
     const outboundIso = typeof outboundCreatedAt === 'string' ? outboundCreatedAt : null;
 
-    if (!inboundIso && !outboundIso) return null;
-    if (!inboundIso) return outboundIso;
-    if (!outboundIso) return inboundIso;
+    let result: string | null = null;
+    if (!inboundIso && !outboundIso) result = null;
+    else if (!inboundIso) result = outboundIso;
+    else if (!outboundIso) result = inboundIso;
+    else result = inboundIso > outboundIso ? inboundIso : outboundIso;
 
-    return inboundIso > outboundIso ? inboundIso : outboundIso;
+    lastActivityCache.set(cacheKey, { activity: result, cachedAt: Date.now() });
+    return result;
   } catch (error) {
     logger.warn('getLastConversationActivityByPhone failed (index may still be building)', error);
     return null;

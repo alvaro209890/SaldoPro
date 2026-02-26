@@ -11,6 +11,9 @@ interface ExpensePieChartProps {
     categories: Category[];
 }
 
+// Beautiful standard fallback palette if a category has no color (or dull color)
+const VIBRANT_PALETTE = ['#f43f5e', '#a855f7', '#3b82f6', '#10b981', '#f59e0b', '#ec4899', '#06b6d4'];
+
 export function ExpensePieChart({ transactions, categories }: ExpensePieChartProps) {
     const data = useMemo(() => {
         const expenses = transactions.filter((t) => t.type === 'expense');
@@ -21,12 +24,16 @@ export function ExpensePieChart({ transactions, categories }: ExpensePieChartPro
         }, {} as Record<string, number>);
 
         return Object.entries(grouped)
-            .map(([categoryId, value]) => {
+            .map(([categoryId, value], idx) => {
                 const category = categories.find((c) => c.id === categoryId);
+                const color = category?.color === '#6b7280' || !category?.color
+                    ? VIBRANT_PALETTE[idx % VIBRANT_PALETTE.length]
+                    : category.color;
+
                 return {
                     name: category?.name || categoryId,
                     value,
-                    color: category?.color || '#6b7280',
+                    color,
                 };
             })
             .sort((a, b) => b.value - a.value);
@@ -35,12 +42,12 @@ export function ExpensePieChart({ transactions, categories }: ExpensePieChartPro
     if (data.length === 0) {
         return (
             <Card title="Despesas por Categoria" icon={PieChartIcon} className="h-full">
-                <div className="flex h-[300px] items-center justify-center mt-4">
+                <div className="flex h-[300px] items-center justify-center mt-4 bg-surface-900/30 rounded-xl border border-white/5">
                     <EmptyState
                         icon={PieChartIcon}
                         title="Nenhuma despesa"
                         description="Você ainda não tem despesas neste mês."
-                        className="border-none bg-transparent"
+                        className="border-none bg-transparent shadow-none"
                     />
                 </div>
             </Card>
@@ -49,37 +56,44 @@ export function ExpensePieChart({ transactions, categories }: ExpensePieChartPro
 
     return (
         <Card title="Despesas por Categoria" icon={PieChartIcon} className="h-full">
-            <div className="h-[300px] mt-4">
-                <ResponsiveContainer width="100%" height="100%">
+            <div className="h-[300px] mt-6 relative">
+                {/* Glow effect center behind chart */}
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 -mt-4 h-32 w-32 rounded-full bg-white/5 blur-xl pointer-events-none" />
+
+                <ResponsiveContainer width="100%" height="100%" className="relative z-10">
                     <PieChart>
                         <Pie
                             data={data}
                             cx="50%"
                             cy="50%"
-                            innerRadius={60}
-                            outerRadius={80}
-                            paddingAngle={5}
+                            innerRadius={70}
+                            outerRadius={95}
+                            paddingAngle={8}
                             dataKey="value"
                             stroke="none"
+                            cornerRadius={8}
                         >
                             {data.map((entry, index) => (
-                                <Cell key={`cell-${index}`} fill={entry.color} />
+                                <Cell key={`cell-${index}`} fill={entry.color} style={{ filter: `drop-shadow(0 4px 6px ${entry.color}40)` }} />
                             ))}
                         </Pie>
                         <Tooltip
-                            formatter={(value: number) => formatBRL(value)}
+                            formatter={(value: number) => `<span style="font-weight:700">${formatBRL(value)}</span>`}
                             contentStyle={{
-                                backgroundColor: '#0f172a',
-                                border: '1px solid #334155',
-                                borderRadius: '0.5rem',
-                                color: '#f1f5f9',
+                                backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                                backdropFilter: 'blur(10px)',
+                                border: '1px solid rgba(255,255,255,0.1)',
+                                borderRadius: '12px',
+                                color: '#f8fafc',
+                                boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.3)'
                             }}
-                            itemStyle={{ color: '#f1f5f9' }}
+                            itemStyle={{ color: '#f8fafc' }}
                         />
                         <Legend
                             verticalAlign="bottom"
                             height={36}
-                            formatter={(value) => <span className="text-gray-300">{value}</span>}
+                            iconType="circle"
+                            formatter={(value) => <span className="text-gray-300 font-medium ml-1">{value}</span>}
                         />
                     </PieChart>
                 </ResponsiveContainer>

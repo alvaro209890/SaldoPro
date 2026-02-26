@@ -50,8 +50,6 @@ export interface UserSettings {
     startDay: number; // 1-31
     currency: string;
     whatsappAllowedNumbers?: string[];
-    whatsappAccessCode?: string;
-    whatsappAccessCodeNormalized?: string;
     updatedAt: string;
 }
 

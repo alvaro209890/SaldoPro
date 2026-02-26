@@ -179,23 +179,18 @@ function buildAddedTransactionMessage(
   aiReply: string,
   currency: string
 ): string {
+  const typeEmoji = receipt.type === 'income' ? '📥' : '📤';
   const lines = [
-    '*Transacao registrada com sucesso*',
+    `${typeEmoji} *${transactionTypeLabel(receipt.type)} registrada*`,
     '',
-    `Numero da transacao: ${receipt.transactionCode}`,
-    `Tipo: ${transactionTypeLabel(receipt.type)}`,
-    `Valor: ${formatCurrency(receipt.amount, currency)}`,
-    `Categoria: ${receipt.categoryName}`,
-    `Descricao: ${receipt.description}`,
-    `Pagamento: ${paymentMethodLabel(receipt.paymentMethod)}`,
-    `Data da transacao: ${formatDateBRFromYmd(receipt.transactionDate)}`,
-    `Registrado em: ${formatDateTimeBR(receipt.recordedAt)}`,
-    `Status: Salvo no SaldoPro`
+    `*${formatCurrency(receipt.amount, currency)}* - ${receipt.description}`,
+    `${receipt.categoryName} | ${paymentMethodLabel(receipt.paymentMethod)} | ${formatDateBRFromYmd(receipt.transactionDate)}`,
+    `Cod: ${receipt.transactionCode}`
   ];
 
   const cleanAiReply = aiReply.trim();
   if (cleanAiReply.length > 0) {
-    lines.push('', `Observacao: ${cleanAiReply}`);
+    lines.push('', cleanAiReply);
   }
 
   return lines.join('\n');
@@ -218,17 +213,15 @@ function buildUpdatedTransactionMessage(
   aiReply: string
 ): string {
   const lines = [
-    '*Transacao atualizada com sucesso*',
+    `✏️ *Transacao atualizada*`,
     '',
-    `Numero da transacao: ${receipt.transactionCode}`,
-    `Campos alterados: ${receipt.changedFields.map(fieldLabel).join(', ')}`,
-    `Atualizado em: ${formatDateTimeBR(receipt.updatedAt)}`,
-    `Status: Salvo no SaldoPro`
+    `Alterado: ${receipt.changedFields.map(fieldLabel).join(', ')}`,
+    `Cod: ${receipt.transactionCode}`
   ];
 
   const cleanAiReply = aiReply.trim();
   if (cleanAiReply.length > 0) {
-    lines.push('', `Observacao: ${cleanAiReply}`);
+    lines.push('', cleanAiReply);
   }
 
   return lines.join('\n');
@@ -239,16 +232,14 @@ function buildDeletedTransactionMessage(
   aiReply: string
 ): string {
   const lines = [
-    '*Transacao excluida com sucesso*',
+    `🗑️ *Transacao excluida*`,
     '',
-    `Numero da transacao: ${receipt.transactionCode}`,
-    `Excluido em: ${formatDateTimeBR(receipt.deletedAt)}`,
-    `Status: Removido do SaldoPro`
+    `Cod: ${receipt.transactionCode}`
   ];
 
   const cleanAiReply = aiReply.trim();
   if (cleanAiReply.length > 0) {
-    lines.push('', `Observacao: ${cleanAiReply}`);
+    lines.push('', cleanAiReply);
   }
 
   return lines.join('\n');

@@ -31,33 +31,41 @@ export function Card({
         !(typeof value === 'string' && value.trim() === '');
 
     return (
-        <div className={`glass-card rounded-2xl p-6 transition-all hover:bg-surface-800/50 ${className}`}>
-            <div className="flex items-center justify-between">
+        <div className={`relative overflow-hidden rounded-2xl p-6 transition-all duration-300 bg-gradient-to-br from-surface-800/80 to-surface-900/90 shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-white/5 backdrop-blur-xl hover:shadow-[0_8px_30px_rgba(99,102,241,0.1)] hover:border-white/10 ${className}`}>
+
+            {/* Subtle glow effect behind the card */}
+            <div className="absolute -top-24 -right-24 h-48 w-48 rounded-full bg-indigo-500/10 blur-[50px] pointer-events-none" />
+
+            <div className="relative z-10 flex items-center justify-between">
                 <div>
-                    <p className="text-sm font-medium text-gray-400">{title}</p>
+                    <p className="text-sm rounded-full bg-surface-700/30 px-3 py-1 font-medium text-gray-300 w-fit backdrop-blur-sm border border-white/5 mb-3">{title}</p>
                     {hasValue ? (
-                        <div className="mt-2 text-2xl font-bold text-white">{value}</div>
+                        <div className="mt-1 text-3xl font-extrabold tracking-tight text-white drop-shadow-sm">{value}</div>
                     ) : null}
                 </div>
-                <div className={`rounded-xl p-3 ${iconClassName}`}>
-                    <Icon className="h-6 w-6" />
+                <div className={`rounded-2xl p-4 shadow-inner ring-1 ring-white/10 backdrop-blur-md ${iconClassName}`}>
+                    <Icon className="h-6 w-6 stroke-[2.5px]" />
                 </div>
             </div>
-            {(subtitle || trend) && (
-                <div className="mt-4 flex items-center gap-2 text-sm">
-                    {trend && (
-                        <span
-                            className={`font-medium ${trend.isPositive ? 'text-emerald-400' : 'text-red-400'
-                                }`}
-                        >
-                            {trend.isPositive ? '+' : '-'}
-                            {Math.abs(trend.value)}%
-                        </span>
-                    )}
-                    {subtitle && <span className="text-gray-500">{subtitle}</span>}
-                </div>
-            )}
-            {children}
+
+            {/* Optional subtitle/trend */}
+            <div className="relative z-10">
+                {(subtitle || trend) && (
+                    <div className="mt-4 flex items-center gap-2 text-sm">
+                        {trend && (
+                            <span
+                                className={`font-semibold px-2 py-0.5 rounded-md ${trend.isPositive ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
+                                    }`}
+                            >
+                                {trend.isPositive ? '+' : '-'}
+                                {Math.abs(trend.value)}%
+                            </span>
+                        )}
+                        {subtitle && <span className="text-gray-400 font-medium">{subtitle}</span>}
+                    </div>
+                )}
+                {children}
+            </div>
         </div>
     );
 }
