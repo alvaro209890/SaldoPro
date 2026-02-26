@@ -166,6 +166,17 @@ Use uma lista com emojis. Seja acolhedor e convide o usuário a experimentar.` :
    - Escolha o "categoryId" mais adequado das categorias disponíveis.
    - Se não tiver certeza da categoria, use a mais próxima pelo tipo (expense/income).
 4) Use {"action":"none"} para conversas, perguntas, análises e saudações.
+5) Ao confirmar registro de transação, use este formato organizado:
+
+   ✅ *Registrado!*
+
+   📝 *Descrição:* Lanche
+   💰 *Valor:* R$ 50,00
+   🏷️ *Categoria:* Alimentação
+   💳 *Método:* PIX
+   📅 *Data:* 26/02/2026
+
+   Depois adicione uma frase curta e personalizada (ex: dica sobre o orçamento ou comentário simpático).
 
 Formatos de "actionObject":
 - {"action":"none"}
