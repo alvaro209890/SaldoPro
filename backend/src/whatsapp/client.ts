@@ -1,4 +1,4 @@
-import makeWASocket, {
+﻿import makeWASocket, {
   DisconnectReason,
   downloadMediaMessage,
   fetchLatestBaileysVersion,
@@ -21,7 +21,6 @@ import {
   getRecentConversationByPhone,
   inboundMessageExists,
   loadWhatsAppAuthSnapshot,
-  resolveUidFromAccessCode,
   resolveUidFromPhone,
   saveWhatsAppAuthSnapshot,
   savePhoneBinding,
@@ -56,12 +55,6 @@ interface ConversationEntry {
 }
 
 const IMAGE_ONLY_FALLBACK_TEXT = 'Analise a imagem enviada e registre o lancamento corretamente.';
-const LINK_CODE_PROMPT =
-  'Para ativar seu atendimento por IA, envie o seu codigo da aba Configuracoes do SaldoPro.';
-const LINK_CODE_INVALID =
-  'Codigo invalido para este numero. Confirme o codigo da sua conta e tente novamente.';
-const LINK_CODE_SUCCESS =
-  'Codigo validado com sucesso. Seu numero foi vinculado e agora as mensagens serao processadas pela IA.';
 
 export class WhatsAppClient {
   private socket: WASocket | null = null;
@@ -79,7 +72,6 @@ export class WhatsAppClient {
   private readonly sentByBotIds = new Set<string>();
   private readonly sentByBotOrder: string[] = [];
   private readonly conversationByPhone = new Map<string, ConversationEntry[]>();
-  private readonly requestedLinkCodePhones = new Set<string>();
   private authSyncTimer: NodeJS.Timeout | null = null;
   private authSyncInFlight = false;
   private authSyncQueued = false;
@@ -329,7 +321,7 @@ export class WhatsAppClient {
     const conversationText = text.trim() || (imageDataUrl ? IMAGE_ONLY_FALLBACK_TEXT : '');
     let binding = await getPhoneBinding(remotePhone);
 
-    // Se não há binding, tenta auto-vincular pelo número cadastrado na conta
+    // Se nÃ£o hÃ¡ binding, tenta auto-vincular pelo nÃºmero cadastrado na conta
     if (!binding) {
       const resolvedUid = await resolveUidFromPhone(remotePhone);
       if (resolvedUid) {
@@ -372,11 +364,9 @@ export class WhatsAppClient {
     this.rememberInbound(messageId);
 
     if (!binding) {
-      await this.handleUnlinkedMessage(remoteJid, remotePhone, text);
+      await this.handleUnlinkedMessage(remotePhone);
       return;
     }
-
-    this.requestedLinkCodePhones.delete(normalizePhoneNumber(remotePhone));
 
     const stillAllowed = await isPhoneAllowedForUid(binding.uid, remotePhone);
     if (!stillAllowed) {
@@ -535,11 +525,11 @@ export class WhatsAppClient {
       : `/api/whatsapp/qr-page?token=${env.whatsappApiToken}`;
 
     logger.info('==================================================');
-    logger.info('  NOVO QR CODE DISPONIVEL — abra no navegador:');
+    logger.info('  NOVO QR CODE DISPONIVEL â€” abra no navegador:');
     logger.info(`  ${qrPageUrl}`);
     logger.info('==================================================');
 
-    // ASCII art apenas para referência em ambientes de terminal local
+    // ASCII art apenas para referÃªncia em ambientes de terminal local
     qrcodeTerminal.generate(qr, { small: true });
 
     try {
@@ -730,28 +720,9 @@ export class WhatsAppClient {
     }
   }
 
-  private async handleUnlinkedMessage(
-    remoteJid: string,
-    remotePhone: string,
-    inboundText: string
-  ): Promise<void> {
+  private async handleUnlinkedMessage(remotePhone: string): Promise<void> {
     const normalizedPhone = normalizePhoneNumber(remotePhone);
-    const trimmed = inboundText.trim();
-
-    // Somente processa se parecer um código de acesso manual
-    if (!this.looksLikeAccessCode(trimmed)) {
-      logger.info('Ignoring WhatsApp message from non-authorized number', { from: normalizedPhone });
-      return;
-    }
-
-    const linkedUid = await this.tryBindPhoneWithCode(normalizedPhone, trimmed);
-    if (!linkedUid) {
-      await this.sendWithRetry(remoteJid, LINK_CODE_INVALID, 'auto_reply');
-      return;
-    }
-
-    this.requestedLinkCodePhones.delete(normalizedPhone);
-    await this.sendWithRetry(remoteJid, LINK_CODE_SUCCESS, 'auto_reply', linkedUid);
+    logger.info('Ignoring WhatsApp message from non-authorized number', { from: normalizedPhone });
   }
 
   private async extractInboundImageDataUrl(message: proto.IWebMessageInfo): Promise<string | null> {
@@ -820,25 +791,8 @@ export class WhatsAppClient {
     this.conversationByPhone.set(this.conversationKey(uid, normalized), updated);
   }
 
-  private looksLikeAccessCode(value: string): boolean {
-    const normalized = value.toUpperCase().replace(/[^A-Z0-9]/g, '');
-    return normalized.length >= 8;
-  }
-
-  private async tryBindPhoneWithCode(phone: string, codeText: string): Promise<string | null> {
-    try {
-      const uid = await resolveUidFromAccessCode(codeText, phone);
-      if (!uid) return null;
-
-      await savePhoneBinding(phone, uid);
-      return uid;
-    } catch (error) {
-      logger.error('Failed to validate WhatsApp access code', error);
-      return null;
-    }
-  }
-
   private conversationKey(uid: string, phone: string): string {
     return `${uid}:${phone}`;
   }
 }
+

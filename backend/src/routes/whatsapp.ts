@@ -1,13 +1,11 @@
-import { Router } from 'express';
+﻿import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { env } from '../config/env';
-import {
-  getPhoneBinding,
-  isPhoneAllowedForUid
-} from '../lib/firestore';
+import { getPhoneBinding, isPhoneAllowedForUid } from '../lib/firestore';
 import { logger } from '../lib/logger';
 import { WhatsAppClient } from '../whatsapp/client';
 import { normalizePhoneNumber } from '../whatsapp/events';
+import { renderWhatsAppPage } from './whatsapp-page';
 
 interface SendMessageBody {
   to?: string;
@@ -17,7 +15,7 @@ interface SendMessageBody {
 export function createWhatsAppRouter(client: WhatsAppClient): Router {
   const router = Router();
 
-  // QR display page — browser-accessible with token as query param (no Bearer header needed)
+  // QR display page - browser-accessible with token as query param (no Bearer header needed)
   router.get('/qr-page', async (req, res) => {
     const token = (req.query.token as string | undefined)?.trim() ?? '';
     if (!token || token !== env.whatsappApiToken) {
@@ -26,96 +24,18 @@ export function createWhatsAppRouter(client: WhatsAppClient): Router {
     }
 
     const status = client.getStatus();
-    let bodyContent: string;
-    let refreshSec = 3;
+    let payload: Awaited<ReturnType<WhatsAppClient['getQrPayload']>> | null = null;
 
-    try {
-      if (status.connected) {
-        bodyContent = `
-          <div class="connected-box">
-            <div class="check">&#x2713;</div>
-            <p>WhatsApp conectado</p>
-            <p class="phone">${status.phone ?? ''}</p>
-          </div>`;
-        refreshSec = 10;
-      } else {
-        const payload = await client.getQrPayload();
-        if (payload.available) {
-          bodyContent = `
-            <img src="${payload.qrPngBase64}" alt="WhatsApp QR Code" />
-            <p class="expires">Expira em: <strong>${payload.expiresInSec}s</strong></p>
-            <p class="hint">Abra o WhatsApp &rarr; Dispositivos conectados &rarr; Conectar dispositivo</p>`;
-        } else {
-          // no_qr or expired — show spinner and wait for next QR
-          bodyContent = `
-            <div class="spinner"></div>
-            <p class="hint">Conectando ao WhatsApp, aguarde...</p>`;
-          refreshSec = 2;
-        }
+    if (!status.connected) {
+      try {
+        payload = await client.getQrPayload();
+      } catch {
+        payload = { available: false, reason: 'no_qr' };
       }
-    } catch {
-      bodyContent = `
-        <div class="spinner"></div>
-        <p class="hint">Conectando ao WhatsApp, aguarde...</p>`;
-      refreshSec = 2;
     }
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(`<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8" />
-  <meta http-equiv="refresh" content="${refreshSec}" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SaldoPro — WhatsApp</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: Arial, sans-serif;
-      background: #111827;
-      color: #f9fafb;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 16px;
-      padding: 24px;
-    }
-    h1 { font-size: 1.4rem; letter-spacing: 0.02em; color: #e5e7eb; }
-    img {
-      width: 280px; height: 280px;
-      background: #fff; padding: 16px;
-      border-radius: 12px; display: block;
-    }
-    .expires { font-size: 0.9rem; color: #9ca3af; }
-    .hint { font-size: 0.85rem; color: #9ca3af; text-align: center; max-width: 300px; }
-    .connected-box { text-align: center; }
-    .connected-box .check {
-      font-size: 3rem; color: #22c55e;
-      width: 72px; height: 72px; line-height: 72px;
-      border-radius: 50%; background: #14532d;
-      margin: 0 auto 12px;
-    }
-    .connected-box p { font-size: 1.1rem; }
-    .connected-box .phone { font-size: 0.9rem; color: #9ca3af; margin-top: 4px; }
-    .spinner {
-      width: 48px; height: 48px;
-      border: 4px solid #1f2937;
-      border-top-color: #3b82f6;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    footer { font-size: 0.7rem; color: #4b5563; margin-top: 12px; }
-  </style>
-</head>
-<body>
-  <h1>SaldoPro &mdash; WhatsApp</h1>
-  ${bodyContent}
-  <footer>Atualiza automaticamente</footer>
-</body>
-</html>`);
+    res.send(renderWhatsAppPage({ status, payload }));
   });
 
   router.use(requireAuth);
@@ -181,11 +101,18 @@ export function createWhatsAppRouter(client: WhatsAppClient): Router {
     }
   });
 
-  router.use((error: unknown, _req: unknown, res: { status: (code: number) => { json: (body: unknown) => void } }, _next: unknown) => {
-    logger.error('WhatsApp route error', error);
-    const message = error instanceof Error ? error.message : 'Unexpected error';
-    res.status(500).json({ error: message });
-  });
+  router.use(
+    (
+      error: unknown,
+      _req: unknown,
+      res: { status: (code: number) => { json: (body: unknown) => void } },
+      _next: unknown
+    ) => {
+      logger.error('WhatsApp route error', error);
+      const message = error instanceof Error ? error.message : 'Unexpected error';
+      res.status(500).json({ error: message });
+    }
+  );
 
   return router;
 }

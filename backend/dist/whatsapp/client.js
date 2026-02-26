@@ -56,9 +56,6 @@ function asDisconnectCode(error) {
     return typeof code === 'number' ? code : null;
 }
 const IMAGE_ONLY_FALLBACK_TEXT = 'Analise a imagem enviada e registre o lancamento corretamente.';
-const LINK_CODE_PROMPT = 'Para ativar seu atendimento por IA, envie o seu codigo da aba Configuracoes do SaldoPro.';
-const LINK_CODE_INVALID = 'Codigo invalido para este numero. Confirme o codigo da sua conta e tente novamente.';
-const LINK_CODE_SUCCESS = 'Codigo validado com sucesso. Seu numero foi vinculado e agora as mensagens serao processadas pela IA.';
 class WhatsAppClient {
     socket = null;
     state = 'connecting';
@@ -75,7 +72,6 @@ class WhatsAppClient {
     sentByBotIds = new Set();
     sentByBotOrder = [];
     conversationByPhone = new Map();
-    requestedLinkCodePhones = new Set();
     authSyncTimer = null;
     authSyncInFlight = false;
     authSyncQueued = false;
@@ -284,7 +280,7 @@ class WhatsAppClient {
         const imageDataUrl = await this.extractInboundImageDataUrl(message);
         const conversationText = text.trim() || (imageDataUrl ? IMAGE_ONLY_FALLBACK_TEXT : '');
         let binding = await (0, firestore_1.getPhoneBinding)(remotePhone);
-        // Se não há binding, tenta auto-vincular pelo número cadastrado na conta
+        // Se nÃ£o hÃ¡ binding, tenta auto-vincular pelo nÃºmero cadastrado na conta
         if (!binding) {
             const resolvedUid = await (0, firestore_1.resolveUidFromPhone)(remotePhone);
             if (resolvedUid) {
@@ -323,10 +319,9 @@ class WhatsAppClient {
         await (0, firestore_1.saveMessageSafe)(inboundRecord);
         this.rememberInbound(messageId);
         if (!binding) {
-            await this.handleUnlinkedMessage(remoteJid, remotePhone, text);
+            await this.handleUnlinkedMessage(remotePhone);
             return;
         }
-        this.requestedLinkCodePhones.delete((0, events_1.normalizePhoneNumber)(remotePhone));
         const stillAllowed = await (0, firestore_1.isPhoneAllowedForUid)(binding.uid, remotePhone);
         if (!stillAllowed) {
             logger_1.logger.info('Ignoring WhatsApp message from number removed from whitelist', {
@@ -462,10 +457,10 @@ class WhatsAppClient {
             ? `${env_1.env.backendUrl}/api/whatsapp/qr-page?token=${env_1.env.whatsappApiToken}`
             : `/api/whatsapp/qr-page?token=${env_1.env.whatsappApiToken}`;
         logger_1.logger.info('==================================================');
-        logger_1.logger.info('  NOVO QR CODE DISPONIVEL — abra no navegador:');
+        logger_1.logger.info('  NOVO QR CODE DISPONIVEL â€” abra no navegador:');
         logger_1.logger.info(`  ${qrPageUrl}`);
         logger_1.logger.info('==================================================');
-        // ASCII art apenas para referência em ambientes de terminal local
+        // ASCII art apenas para referÃªncia em ambientes de terminal local
         qrcode_terminal_1.default.generate(qr, { small: true });
         try {
             this.qrDataUrl = await qrcode_1.default.toDataURL(qr);
@@ -650,21 +645,9 @@ class WhatsAppClient {
                 this.sentByBotIds.delete(oldest);
         }
     }
-    async handleUnlinkedMessage(remoteJid, remotePhone, inboundText) {
+    async handleUnlinkedMessage(remotePhone) {
         const normalizedPhone = (0, events_1.normalizePhoneNumber)(remotePhone);
-        const trimmed = inboundText.trim();
-        // Somente processa se parecer um código de acesso manual
-        if (!this.looksLikeAccessCode(trimmed)) {
-            logger_1.logger.info('Ignoring WhatsApp message from non-authorized number', { from: normalizedPhone });
-            return;
-        }
-        const linkedUid = await this.tryBindPhoneWithCode(normalizedPhone, trimmed);
-        if (!linkedUid) {
-            await this.sendWithRetry(remoteJid, LINK_CODE_INVALID, 'auto_reply');
-            return;
-        }
-        this.requestedLinkCodePhones.delete(normalizedPhone);
-        await this.sendWithRetry(remoteJid, LINK_CODE_SUCCESS, 'auto_reply', linkedUid);
+        logger_1.logger.info('Ignoring WhatsApp message from non-authorized number', { from: normalizedPhone });
     }
     async extractInboundImageDataUrl(message) {
         if (!(0, events_1.isImageMessage)(message))
@@ -724,23 +707,6 @@ class WhatsAppClient {
         const current = await this.getConversationHistory(uid, normalized);
         const updated = [...current, { role: message.role, content }].slice(-env_1.env.whatsappAiHistoryLimit);
         this.conversationByPhone.set(this.conversationKey(uid, normalized), updated);
-    }
-    looksLikeAccessCode(value) {
-        const normalized = value.toUpperCase().replace(/[^A-Z0-9]/g, '');
-        return normalized.length >= 8;
-    }
-    async tryBindPhoneWithCode(phone, codeText) {
-        try {
-            const uid = await (0, firestore_1.resolveUidFromAccessCode)(codeText, phone);
-            if (!uid)
-                return null;
-            await (0, firestore_1.savePhoneBinding)(phone, uid);
-            return uid;
-        }
-        catch (error) {
-            logger_1.logger.error('Failed to validate WhatsApp access code', error);
-            return null;
-        }
     }
     conversationKey(uid, phone) {
         return `${uid}:${phone}`;
