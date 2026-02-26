@@ -30,14 +30,24 @@ function normalizePaymentMethod(method) {
     }
     return 'pix';
 }
-async function processWhatsAppAIMessage(userText) {
-    const uid = env_1.env.whatsappOwnerUid;
-    if (!uid) {
-        return 'Configuracao incompleta do assistente. Defina WHATSAPP_OWNER_UID no backend.';
+async function processWhatsAppAIMessage(uid, messages) {
+    if (!uid || uid.trim().length === 0) {
+        return 'Nao foi possivel identificar a conta vinculada para processar a mensagem.';
+    }
+    const sanitizedMessages = messages
+        .slice(-env_1.env.whatsappAiHistoryLimit)
+        .map((message) => ({
+        role: message.role,
+        content: (message.content ?? '').toString().slice(0, env_1.env.maxMessageLength),
+        ...(message.imageDataUrl ? { imageDataUrl: message.imageDataUrl } : {})
+    }))
+        .filter((message) => message.content.trim() || message.imageDataUrl);
+    if (sanitizedMessages.length === 0) {
+        return 'Nao consegui interpretar a mensagem recebida.';
     }
     const categories = await (0, firestore_1.getUserCategories)(uid);
     const recentTransactions = await (0, firestore_1.getRecentTransactions)(uid, env_1.env.whatsappAiRecentTransactions);
-    const ai = await (0, groq_1.queryGroqAssistant)(userText, categories, recentTransactions);
+    const ai = await (0, groq_1.queryGroqAssistant)(sanitizedMessages, categories, recentTransactions);
     const actionMessage = await executeAction(uid, ai.actionObject, categories);
     if (!actionMessage) {
         return ai.reply;
