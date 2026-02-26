@@ -107,6 +107,7 @@ export class WhatsAppClient {
   private authSyncQueued = false;
   private lastAuthSnapshotHash: string | null = null;
   private recoveringInvalidSession = false;
+  private readonly aiCallTimestamps = new Map<string, number[]>();
 
   async start(): Promise<void> {
     await mkdir(env.whatsappAuthDir, { recursive: true });
@@ -325,6 +326,12 @@ export class WhatsAppClient {
       try {
         await this.handleSingleIncomingMessage(message);
       } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : '';
+        if (errorMsg.includes('Bad MAC') || errorMsg.includes('Bad MAC')) {
+          logger.error('Bad MAC decryption error detected, triggering session recovery', error);
+          void this.recoverFromInvalidSession();
+          return;
+        }
         logger.error('Failed processing inbound message', error);
       }
     }
@@ -396,17 +403,26 @@ export class WhatsAppClient {
       logger.info('MSG_RESOLVE: attempting resolveUidFromPhone', { phone: remotePhone });
       const resolvedUid = await resolveUidFromPhone(remotePhone);
       if (resolvedUid) {
-        await savePhoneBinding(remotePhone, resolvedUid);
-        binding = {
-          phone: normalizePhoneNumber(remotePhone),
-          uid: resolvedUid,
-          linkedAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
-        logger.info('MSG_RESOLVE: auto-linked phone to account', {
-          phone: remotePhone,
-          uid: resolvedUid
-        });
+        // Verify the phone is actually in the user's allowed numbers before auto-binding
+        const isAllowed = await isPhoneAllowedForUid(resolvedUid, remotePhone);
+        if (isAllowed) {
+          await savePhoneBinding(remotePhone, resolvedUid);
+          binding = {
+            phone: normalizePhoneNumber(remotePhone),
+            uid: resolvedUid,
+            linkedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+          logger.info('MSG_RESOLVE: auto-linked phone to account', {
+            phone: remotePhone,
+            uid: resolvedUid
+          });
+        } else {
+          logger.info('MSG_RESOLVE: phone not in allowed list for resolved user, skipping auto-bind', {
+            phone: remotePhone,
+            uid: resolvedUid
+          });
+        }
       } else {
         logger.info('MSG_RESOLVE: no account found for phone', { phone: remotePhone });
       }
@@ -415,7 +431,6 @@ export class WhatsAppClient {
     if (!binding) {
       logger.info('MSG_UNLINKED: no binding found, ignoring message', { from: remotePhone });
       this.rememberInbound(messageId);
-      await this.handleUnlinkedMessage(remotePhone);
       return;
     }
 
@@ -471,6 +486,22 @@ export class WhatsAppClient {
   ): Promise<void> {
     const hasAiInput = inboundText.trim().length > 0 || Boolean(imageDataUrl);
     if (env.whatsappAiEnabled && hasAiInput) {
+      // Rate limiting check
+      if (this.isRateLimited(ownerUid)) {
+        logger.warn('MSG_RATE_LIMITED: AI processing skipped due to rate limit', {
+          uid: ownerUid,
+          phone: remotePhone,
+          limitPerMinute: env.whatsappAiRateLimitPerMinute
+        });
+        const rateLimitMsg = 'Voce enviou muitas mensagens seguidas. Aguarde um momento antes de enviar a proxima.';
+        try {
+          await this.sendWithRetry(remoteJid, rateLimitMsg, 'auto_reply', ownerUid);
+        } catch (rateLimitSendError) {
+          logger.error('Failed to send rate limit notice', rateLimitSendError);
+        }
+        return;
+      }
+
       try {
         const conversation = await this.getConversationHistory(ownerUid, remotePhone);
         const isFirstMessage = conversation.length === 0;
@@ -519,6 +550,8 @@ export class WhatsAppClient {
           });
         }
 
+        this.recordAiCall(ownerUid);
+
         const aiReply = await processWhatsAppAIMessage(ownerUid, aiMessages, {
           isFirstMessage,
           isGreeting,
@@ -536,6 +569,14 @@ export class WhatsAppClient {
         }
       } catch (error) {
         logger.error('Failed to process AI WhatsApp message', error);
+        // Send friendly error message instead of silent failure
+        const errorMsg = 'Desculpe, estou com dificuldade para processar agora. Tente novamente em instantes.';
+        try {
+          await this.sendWithRetry(remoteJid, errorMsg, 'auto_reply', ownerUid);
+        } catch (sendError) {
+          logger.error('Failed to send AI error fallback message', sendError);
+        }
+        return;
       }
     }
 
@@ -883,6 +924,24 @@ export class WhatsAppClient {
       const oldest = this.sentByBotOrder.shift();
       if (oldest) this.sentByBotIds.delete(oldest);
     }
+  }
+
+  private isRateLimited(uid: string): boolean {
+    const now = Date.now();
+    const timestamps = this.aiCallTimestamps.get(uid);
+    if (!timestamps) return false;
+
+    // Keep only timestamps within the last 60 seconds
+    const recent = timestamps.filter((t) => now - t < 60_000);
+    this.aiCallTimestamps.set(uid, recent);
+
+    return recent.length >= env.whatsappAiRateLimitPerMinute;
+  }
+
+  private recordAiCall(uid: string): void {
+    const timestamps = this.aiCallTimestamps.get(uid) ?? [];
+    timestamps.push(Date.now());
+    this.aiCallTimestamps.set(uid, timestamps);
   }
 
   private async handleUnlinkedMessage(remotePhone: string): Promise<void> {

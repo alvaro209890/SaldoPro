@@ -61,7 +61,12 @@ export const env = {
   whatsappAiImageMaxBytes: parseInteger(process.env.WHATSAPP_AI_IMAGE_MAX_BYTES, 5 * 1024 * 1024),
   backendUrl: process.env.BACKEND_URL?.trim() || '',
   qrExpiresSeconds: 60,
-  maxMessageLength: 4096
+  maxMessageLength: 4096,
+  groqTimeoutMs: parseInteger(process.env.GROQ_TIMEOUT_MS, 15000),
+  groqMaxRetries: parseInteger(process.env.GROQ_MAX_RETRIES, 2),
+  whatsappAiRateLimitPerMinute: parseInteger(process.env.WHATSAPP_AI_RATE_LIMIT_PER_MINUTE, 10),
+  geminiApiKey: getOptional('GEMINI_API_KEY'),
+  geminiModel: process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash-preview-05-20'
 };
 
 if (env.whatsappAiEnabled) {

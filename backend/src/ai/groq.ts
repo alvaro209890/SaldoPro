@@ -1,4 +1,5 @@
 ﻿import { env } from '../config/env';
+import { logger } from '../lib/logger';
 import type { UserCategory, UserProfileBackend, UserSettingsBackend, UserTransaction } from '../lib/firestore';
 
 export type PaymentMethod = 'pix' | 'credit' | 'debit' | 'cash' | 'transfer' | 'boleto';
@@ -97,6 +98,9 @@ function buildFinancialSummary(transactions: UserTransaction[], settings: UserSe
   return lines.join('\n');
 }
 
+/** Max transactions to embed in the system prompt (keeps token usage reasonable). */
+const PROMPT_TX_LIMIT = 15;
+
 function buildSystemPrompt(context: UserFinancialContext): string {
   const { profile, settings, categories, recentTransactions } = context;
 
@@ -105,10 +109,10 @@ function buildSystemPrompt(context: UserFinancialContext): string {
 
   const shouldSendSummary = Boolean(
     context.shouldSendCapabilitiesSummary ||
-      context.isFirstMessage ||
-      context.isGreeting ||
-      context.isCapabilitiesQuestion ||
-      context.isConversationRestart
+    context.isFirstMessage ||
+    context.isGreeting ||
+    context.isCapabilitiesQuestion ||
+    context.isConversationRestart
   );
 
   const categoriesList = categories
@@ -116,12 +120,16 @@ function buildSystemPrompt(context: UserFinancialContext): string {
     .join('\n');
 
   const txList = recentTransactions
-    .slice(0, env.whatsappAiRecentTransactions)
+    .slice(0, PROMPT_TX_LIMIT)
     .map(
       (t) =>
         `- ID: "${t.id}", Data: ${t.date}, Desc: "${t.description}", Valor: ${t.amount}, Tipo: ${t.type}, CatID: ${t.category}`
     )
     .join('\n');
+
+  const txNote = recentTransactions.length > PROMPT_TX_LIMIT
+    ? `\n(mostrando ${PROMPT_TX_LIMIT} de ${recentTransactions.length} transacoes recentes)`
+    : '';
 
   const financialSummary = buildFinancialSummary(recentTransactions, settings);
   const today = new Date().toISOString().split('T')[0];
@@ -196,7 +204,7 @@ Categorias disponiveis:
 ${categoriesList || '(nenhuma categoria cadastrada)'}
 
 Transacoes recentes (referencia interna; nao mostrar IDs):
-${txList || '(nenhuma transacao)'}
+${txList || '(nenhuma transacao)'}${txNote}
 
 Data de hoje: ${today}
 Moeda: ${settings.currency}
@@ -216,6 +224,59 @@ function parseAssistantPayload(content: string): Partial<GroqAssistantResult> {
   }
 }
 
+/**
+ * Validates that a parsed actionObject has the correct field types.
+ * Returns a sanitized action or falls back to { action: 'none' }.
+ */
+function validateAction(raw: unknown): AIAction {
+  if (!raw || typeof raw !== 'object') return { action: 'none' };
+
+  const obj = raw as Record<string, unknown>;
+  const action = obj.action;
+
+  if (action === 'add_transaction') {
+    const type = obj.type;
+    const amount = Number(obj.amount);
+    const description = typeof obj.description === 'string' ? obj.description : '';
+    const categoryId = typeof obj.categoryId === 'string' ? obj.categoryId : '';
+    const date = typeof obj.date === 'string' ? obj.date : '';
+    const paymentMethod = typeof obj.paymentMethod === 'string' ? obj.paymentMethod : 'pix';
+
+    if (type !== 'income' && type !== 'expense') return { action: 'none' };
+    if (!Number.isFinite(amount) || amount <= 0) return { action: 'none' };
+
+    return {
+      action: 'add_transaction',
+      type,
+      amount,
+      description,
+      categoryId,
+      date,
+      paymentMethod: paymentMethod as PaymentMethod
+    };
+  }
+
+  if (action === 'update_transaction') {
+    const id = typeof obj.id === 'string' ? obj.id : '';
+    if (!id) return { action: 'none' };
+    const changes = typeof obj.changes === 'object' && obj.changes !== null ? obj.changes : {};
+    return { action: 'update_transaction', id, changes } as AIActionUpdate;
+  }
+
+  if (action === 'delete_transaction') {
+    const id = typeof obj.id === 'string' ? obj.id : '';
+    if (!id) return { action: 'none' };
+    return { action: 'delete_transaction', id };
+  }
+
+  return { action: 'none' };
+}
+
+/** Determines if the HTTP status code is retryable (429 or 5xx). */
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
 export async function queryGroqAssistant(
   messages: GroqChatMessage[],
   context: UserFinancialContext
@@ -225,7 +286,8 @@ export async function queryGroqAssistant(
   }
 
   const lastMessage = messages[messages.length - 1];
-  const targetModel = lastMessage?.imageDataUrl ? env.groqVisionModel : env.groqModel;
+  const isVisionRequest = Boolean(lastMessage?.imageDataUrl);
+  const targetModel = isVisionRequest ? env.groqVisionModel : env.groqModel;
 
   const formattedMessages = messages.map((message) => {
     if (message.imageDataUrl) {
@@ -247,50 +309,239 @@ export async function queryGroqAssistant(
     };
   });
 
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.groqApiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model: targetModel,
-      temperature: 0.35,
-      ...(lastMessage?.imageDataUrl ? {} : { response_format: { type: 'json_object' } }),
-      messages: [
-        {
-          role: 'system',
-          content: buildSystemPrompt(context)
-        },
-        ...formattedMessages
-      ]
-    })
+  const requestBody = JSON.stringify({
+    model: targetModel,
+    temperature: 0.5,
+    ...(isVisionRequest ? {} : { response_format: { type: 'json_object' } }),
+    messages: [
+      {
+        role: 'system',
+        content: buildSystemPrompt(context)
+      },
+      ...formattedMessages
+    ]
   });
 
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`Groq request failed: ${response.status} ${detail}`);
+  // --- Retry loop with timeout ---
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= env.groqMaxRetries; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), env.groqTimeoutMs);
+
+    try {
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.groqApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: requestBody,
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const detail = await response.text();
+
+        if (isRetryableStatus(response.status) && attempt < env.groqMaxRetries) {
+          const backoffMs = Math.min(1000 * Math.pow(2, attempt - 1), 4000);
+          logger.warn('Groq request failed, retrying', {
+            status: response.status,
+            attempt,
+            backoffMs,
+            detail: detail.slice(0, 200)
+          });
+          await new Promise((resolve) => setTimeout(resolve, backoffMs));
+          continue;
+        }
+
+        throw new Error(`Groq request failed: ${response.status} ${detail}`);
+      }
+
+      const data = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const content = data.choices?.[0]?.message?.content;
+      if (!content) {
+        throw new Error('Groq did not return content');
+      }
+
+      // --- Parse response (with vision fallback) ---
+      let parsed: Partial<GroqAssistantResult>;
+      try {
+        parsed = parseAssistantPayload(content);
+      } catch {
+        if (isVisionRequest) {
+          // Vision model may return plain text instead of JSON — use it as the reply
+          logger.warn('Groq vision response is not valid JSON, using raw content as reply', {
+            contentPreview: content.slice(0, 100)
+          });
+          return {
+            reply: content.trim().slice(0, env.maxMessageLength),
+            actionObject: { action: 'none' }
+          };
+        }
+        throw new Error('Groq response is not valid JSON');
+      }
+
+      const rawReply = (parsed.reply ?? '').toString().trim();
+
+      const cleanReply = rawReply
+        .replace(/\(ID:\s*[A-Za-z0-9_-]+\)/g, '')
+        .replace(/ID:\s*[A-Za-z0-9_-]{15,}/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+
+      return {
+        reply: cleanReply || 'Nao consegui entender. Pode reformular?',
+        actionObject: validateAction(parsed.actionObject)
+      };
+    } catch (error) {
+      clearTimeout(timeoutId);
+      lastError = error;
+
+      const isAbort = error instanceof Error && error.name === 'AbortError';
+
+      if (isAbort) {
+        logger.warn('Groq request timed out', { attempt, timeoutMs: env.groqTimeoutMs });
+      }
+
+      if (attempt < env.groqMaxRetries) {
+        const backoffMs = Math.min(1000 * Math.pow(2, attempt - 1), 4000);
+        logger.warn('Groq request error, retrying', {
+          attempt,
+          backoffMs,
+          error: error instanceof Error ? error.message : 'unknown'
+        });
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        continue;
+      }
+    }
   }
 
-  const data = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error('Groq did not return content');
+  // --- Groq failed after all retries, try Gemini fallback ---
+  if (env.geminiApiKey) {
+    logger.warn('Groq failed after retries, falling back to Gemini', {
+      error: lastError instanceof Error ? lastError.message : 'unknown'
+    });
+    try {
+      return await queryGeminiAssistant(messages, context);
+    } catch (geminiError) {
+      logger.error('Gemini fallback also failed', geminiError);
+    }
   }
 
-  const parsed = parseAssistantPayload(content);
-  const rawReply = (parsed.reply ?? '').toString().trim();
+  throw lastError instanceof Error ? lastError : new Error('Groq request failed after retries');
+}
 
-  const cleanReply = rawReply
-    .replace(/\(ID:\s*[A-Za-z0-9_-]+\)/g, '')
-    .replace(/ID:\s*[A-Za-z0-9_-]{15,}/g, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+/**
+ * Fallback to Gemini 2.5 Flash when Groq is unavailable.
+ * Uses Google's Generative Language API format.
+ */
+async function queryGeminiAssistant(
+  messages: GroqChatMessage[],
+  context: UserFinancialContext
+): Promise<GroqAssistantResult> {
+  const systemPrompt = buildSystemPrompt(context);
+  const lastMessage = messages[messages.length - 1];
+  const isVisionRequest = Boolean(lastMessage?.imageDataUrl);
 
-  return {
-    reply: cleanReply || 'Nao consegui entender. Pode reformular?',
-    actionObject: (parsed.actionObject as AIAction) ?? { action: 'none' }
-  };
+  // Convert messages to Gemini format
+  const geminiContents: Array<{ role: string; parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> }> = [];
+
+  for (const msg of messages) {
+    const role = msg.role === 'assistant' ? 'model' : 'user';
+    const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [];
+
+    if (msg.content) {
+      parts.push({ text: msg.content });
+    }
+
+    if (msg.imageDataUrl) {
+      // Extract base64 and mime type from data URL
+      const match = msg.imageDataUrl.match(/^data:(.+?);base64,(.+)$/);
+      if (match) {
+        parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+      }
+    }
+
+    if (parts.length > 0) {
+      geminiContents.push({ role, parts });
+    }
+  }
+
+  const geminiBody = JSON.stringify({
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    contents: geminiContents,
+    generationConfig: {
+      temperature: 0.5,
+      ...(isVisionRequest ? {} : { responseMimeType: 'application/json' })
+    }
+  });
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${env.geminiModel}:generateContent?key=${env.geminiApiKey}`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), env.groqTimeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: geminiBody,
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(`Gemini request failed: ${response.status} ${detail.slice(0, 300)}`);
+    }
+
+    const data = (await response.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!content) {
+      throw new Error('Gemini did not return content');
+    }
+
+    logger.info('Gemini fallback succeeded', { contentLength: content.length });
+
+    // Parse response (same logic as Groq)
+    let parsed: Partial<GroqAssistantResult>;
+    try {
+      parsed = parseAssistantPayload(content);
+    } catch {
+      if (isVisionRequest) {
+        return {
+          reply: content.trim().slice(0, env.maxMessageLength),
+          actionObject: { action: 'none' }
+        };
+      }
+      // Try to use raw content as reply
+      return {
+        reply: content.trim().slice(0, env.maxMessageLength),
+        actionObject: { action: 'none' }
+      };
+    }
+
+    const rawReply = (parsed.reply ?? '').toString().trim();
+    const cleanReply = rawReply
+      .replace(/\(ID:\s*[A-Za-z0-9_-]+\)/g, '')
+      .replace(/ID:\s*[A-Za-z0-9_-]{15,}/g, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    return {
+      reply: cleanReply || 'Nao consegui entender. Pode reformular?',
+      actionObject: validateAction(parsed.actionObject)
+    };
+  } catch (error) {
+    clearTimeout(timeoutId);
+    throw error;
+  }
 }

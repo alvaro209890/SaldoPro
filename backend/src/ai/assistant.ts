@@ -123,26 +123,6 @@ function toFriendlyTransactionCode(transactionId: string): string {
   return `TX-${hash}`;
 }
 
-function buildFinancialAssistantIntro(isCapabilitiesQuestion: boolean): string {
-  const lines = [
-    '*Oi! Eu sou a SaldoPro, sua assistente financeira.*',
-    '',
-    '*Posso te ajudar com:*',
-    '- Registrar receitas e despesas por texto',
-    '- Ler comprovantes/imagens e lancar automaticamente',
-    '- Mostrar resumo financeiro do mes (receitas, despesas e saldo)',
-    '- Acompanhar orcamento e alertar excessos',
-    '- Editar e excluir lancamentos',
-    '- Sugerir melhorias com base nos seus gastos',
-    '',
-    isCapabilitiesQuestion
-      ? '*Exemplos:* "gastei 89,90 no mercado no cartao" ou "quanto ja gastei este mes?"'
-      : '*Se quiser, ja me diga um gasto/receita agora e eu registro pra voce.*'
-  ];
-
-  return lines.join('\n');
-}
-
 function buildAddedTransactionMessage(
   receipt: AddedTransactionReceipt,
   aiReply: string,
