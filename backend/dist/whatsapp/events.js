@@ -2,19 +2,26 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.extractRawType = extractRawType;
 exports.extractMessageText = extractMessageText;
+exports.isImageMessage = isImageMessage;
+exports.getImageMimeType = getImageMimeType;
 exports.isGroupJid = isGroupJid;
 exports.isStatusJid = isStatusJid;
 exports.normalizePhoneNumber = normalizePhoneNumber;
 exports.jidToPhone = jidToPhone;
 exports.normalizePhoneToJid = normalizePhoneToJid;
+const baileys_1 = require("@whiskeysockets/baileys");
+function getMessageContent(message) {
+    return (0, baileys_1.extractMessageContent)(message.message);
+}
 function extractRawType(message) {
-    if (!message.message)
+    const content = getMessageContent(message);
+    if (!content)
         return null;
-    const keys = Object.keys(message.message);
+    const keys = Object.keys(content);
     return keys.length > 0 ? keys[0] : null;
 }
 function extractMessageText(message) {
-    const payload = message.message;
+    const payload = getMessageContent(message);
     if (!payload)
         return '';
     if (payload.conversation)
@@ -36,6 +43,17 @@ function extractMessageText(message) {
         return payload.templateButtonReplyMessage.selectedDisplayText;
     }
     return '';
+}
+function isImageMessage(message) {
+    const payload = getMessageContent(message);
+    return Boolean(payload?.imageMessage);
+}
+function getImageMimeType(message) {
+    const payload = getMessageContent(message);
+    const mimeType = payload?.imageMessage?.mimetype;
+    if (!mimeType || typeof mimeType !== 'string')
+        return null;
+    return mimeType;
 }
 function isGroupJid(jid) {
     return Boolean(jid && jid.endsWith('@g.us'));

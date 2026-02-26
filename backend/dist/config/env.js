@@ -51,21 +51,18 @@ exports.env = {
     firebaseClientEmail: getRequired('FIREBASE_CLIENT_EMAIL'),
     firebasePrivateKey: getRequired('FIREBASE_PRIVATE_KEY'),
     whatsappAiEnabled: parseBoolean(process.env.WHATSAPP_AI_ENABLED, true),
-    whatsappOwnerUid: getOptional('WHATSAPP_OWNER_UID'),
     groqApiKey: getOptional('GROQ_API_KEY'),
     groqModel: process.env.GROQ_MODEL?.trim() || 'llama-3.3-70b-versatile',
+    groqVisionModel: process.env.GROQ_VISION_MODEL?.trim() || 'meta-llama/llama-4-maverick-17b-128e-instruct',
     whatsappAiRecentTransactions: parseInteger(process.env.WHATSAPP_AI_MAX_RECENT_TX, 50),
-    qrExpiresSeconds: 20,
+    whatsappAiHistoryLimit: parseInteger(process.env.WHATSAPP_AI_HISTORY_LIMIT, 10),
+    whatsappAiImageMaxBytes: parseInteger(process.env.WHATSAPP_AI_IMAGE_MAX_BYTES, 5 * 1024 * 1024),
+    backendUrl: process.env.BACKEND_URL?.trim() || '',
+    qrExpiresSeconds: 60,
     maxMessageLength: 4096
 };
 if (exports.env.whatsappAiEnabled) {
-    if (!exports.env.whatsappOwnerUid) {
-        throw new Error('Missing required environment variable: WHATSAPP_OWNER_UID');
-    }
     if (!exports.env.groqApiKey) {
         throw new Error('Missing required environment variable: GROQ_API_KEY');
     }
-}
-if ((exports.env.whatsappAiEnabled || exports.env.whatsappAutoReplyEnabled) && !exports.env.whatsappOwnerUid) {
-    throw new Error('Missing required environment variable: WHATSAPP_OWNER_UID');
 }
