@@ -162,11 +162,18 @@ IDENTIDADE FINANCEIRA
 ESTILO DE RESPOSTA
 - Natural, claro e pouco repetitivo.
 - Evite repetir a mesma abertura entre mensagens consecutivas.
-- Evite repetir palavras e frases identicas de respostas anteriores.
 - Pode escrever respostas mais completas no WhatsApp quando isso ajudar o usuario.
 - Em duvidas, orientacoes e analises, prefira 4 a 12 linhas com estrutura clara.
-- Quando o usuario pedir detalhe, passo a passo ou explicacao, pode estender para ate 16 linhas.
 - Nunca exiba IDs tecnicos para o usuario.
+
+COMPREENSAO DE LINGUAGEM NATURAL
+- O usuario pode escrever de forma informal, com erros de digitacao ou abreviacoes. Interprete com boa vontade.
+- "gastei 50 no mercado" = despesa de R$50 no supermercado
+- "recebi 1500" = receita de R$1500
+- "minhas despesas sao de 800 reais" = o usuario esta INFORMANDO que suas despesas totalizam 800. NAO registre como transacao. Responda com analise e orientacao financeira.
+- "meu salario e 3000" = informacao contextual, NAO transacao. Responda reconhecendo.
+- Se o usuario diz valores sem pedir para registrar, trate como conversa/informacao e use action "none".
+- Diferenca entre REGISTRAR ('gastei', 'paguei', 'comprei', 'recebi') e INFORMAR ('minhas despesas sao', 'meu gasto e', 'tenho de conta').
 
 REGRAS DE RESUMO DE CAPACIDADES
 - ${summaryInstruction}
@@ -183,19 +190,23 @@ QUANDO RESUMIR CAPACIDADES, PRIORIZE ESTES ITENS
 - Tirar duvidas financeiras praticas (economia, planejamento e habitos).
 
 REGRAS TECNICAS (OBRIGATORIO)
-1) Retorne SEMPRE JSON valido com exatamente duas chaves:
-   - "reply": texto para WhatsApp em Markdown simples.
+1) Retorne SEMPRE um JSON valido com exatamente duas chaves:
+   - "reply": string com texto para WhatsApp.
    - "actionObject": objeto com uma das acoes abaixo.
-2) Nao escreva nada fora do JSON.
-3) Para registrar gasto/receita (texto ou imagem): use "add_transaction".
-4) Para conversas gerais, duvidas e orientacoes: use {"action":"none"}.
-5) Se faltar dado essencial para acao financeira, nao invente. Pergunte no "reply" e use action none.
+2) Nao escreva nada antes nem depois do JSON. A resposta inteira deve ser o JSON.
+3) Para registrar gasto/receita (quando o usuario PEDE para registrar): use "add_transaction".
+4) Para conversas gerais, duvidas, orientacoes e informacoes: use {"action":"none"}.
+5) Se faltar dado essencial para acao financeira, pergunte no "reply" e use action none.
+6) NUNCA registre transacao quando o usuario esta apenas INFORMANDO ou PERGUNTANDO sobre valores.
 
 FORMATOS DE ACTIONOBJECT
 - {"action":"none"}
 - {"action":"add_transaction","type":"expense|income","amount":15.5,"description":"Lanche","categoryId":"id","date":"YYYY-MM-DD","paymentMethod":"pix|credit|debit|cash|transfer|boleto"}
 - {"action":"update_transaction","id":"transaction_id","changes":{"amount":20}}
 - {"action":"delete_transaction","id":"transaction_id"}
+
+EXEMPLO DE RESPOSTA (formato exato):
+{"reply":"Lancamento registrado! Despesa de R$ 50,00 em Alimentacao.","actionObject":{"action":"add_transaction","type":"expense","amount":50,"description":"Mercado","categoryId":"alimentacao","date":"${today}","paymentMethod":"pix"}}
 
 CONTEXTO FINANCEIRO
 ${financialSummary}
@@ -212,15 +223,19 @@ ${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.bu
 }
 
 function parseAssistantPayload(content: string): Partial<GroqAssistantResult> {
+  // Remove markdown code fences if present (```json ... ```)
+  let cleaned = content.trim();
+  cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+
   try {
-    return JSON.parse(content) as Partial<GroqAssistantResult>;
+    return JSON.parse(cleaned) as Partial<GroqAssistantResult>;
   } catch {
-    const start = content.indexOf('{');
-    const end = content.lastIndexOf('}');
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
     if (start >= 0 && end > start) {
-      return JSON.parse(content.slice(start, end + 1)) as Partial<GroqAssistantResult>;
+      return JSON.parse(cleaned.slice(start, end + 1)) as Partial<GroqAssistantResult>;
     }
-    throw new Error('Groq response is not valid JSON');
+    throw new Error('Response is not valid JSON');
   }
 }
 
@@ -285,6 +300,18 @@ export async function queryGroqAssistant(
     throw new Error('At least one message is required');
   }
 
+  // --- PRIMARY: Gemini (if configured) ---
+  if (env.geminiApiKey) {
+    try {
+      return await queryGeminiAssistant(messages, context);
+    } catch (geminiError) {
+      logger.warn('Gemini primary failed, falling back to Groq', {
+        error: geminiError instanceof Error ? geminiError.message : 'unknown'
+      });
+    }
+  }
+
+  // --- FALLBACK: Groq ---
   const lastMessage = messages[messages.length - 1];
   const isVisionRequest = Boolean(lastMessage?.imageDataUrl);
   const targetModel = isVisionRequest ? env.groqVisionModel : env.groqModel;
@@ -421,19 +448,7 @@ export async function queryGroqAssistant(
     }
   }
 
-  // --- Groq failed after all retries, try Gemini fallback ---
-  if (env.geminiApiKey) {
-    logger.warn('Groq failed after retries, falling back to Gemini', {
-      error: lastError instanceof Error ? lastError.message : 'unknown'
-    });
-    try {
-      return await queryGeminiAssistant(messages, context);
-    } catch (geminiError) {
-      logger.error('Gemini fallback also failed', geminiError);
-    }
-  }
-
-  throw lastError instanceof Error ? lastError : new Error('Groq request failed after retries');
+  throw lastError instanceof Error ? lastError : new Error('AI request failed after all attempts');
 }
 
 /**
