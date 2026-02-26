@@ -267,9 +267,10 @@ export async function processWhatsAppAIMessage(
     .map((message) => ({
       role: message.role,
       content: (message.content ?? '').toString().slice(0, env.maxMessageLength),
-      ...(message.imageDataUrl ? { imageDataUrl: message.imageDataUrl } : {})
+      ...(message.imageDataUrl ? { imageDataUrl: message.imageDataUrl } : {}),
+      ...(message.audioDataUrl ? { audioDataUrl: message.audioDataUrl } : {})
     }))
-    .filter((message) => message.content.trim() || message.imageDataUrl);
+    .filter((message) => message.content.trim() || message.imageDataUrl || message.audioDataUrl);
 
   if (sanitizedMessages.length === 0) {
     return 'Nao consegui interpretar a mensagem recebida.';
