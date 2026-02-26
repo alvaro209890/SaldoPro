@@ -58,7 +58,8 @@ export const env = {
   whatsappAiRecentTransactions: parseInteger(process.env.WHATSAPP_AI_MAX_RECENT_TX, 50),
   whatsappAiHistoryLimit: parseInteger(process.env.WHATSAPP_AI_HISTORY_LIMIT, 10),
   whatsappAiImageMaxBytes: parseInteger(process.env.WHATSAPP_AI_IMAGE_MAX_BYTES, 5 * 1024 * 1024),
-  qrExpiresSeconds: 20,
+  backendUrl: process.env.BACKEND_URL?.trim() || '',
+  qrExpiresSeconds: 60,
   maxMessageLength: 4096
 };
 

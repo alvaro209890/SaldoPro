@@ -468,6 +468,16 @@ export class WhatsAppClient {
     this.state = 'connecting';
     this.connected = false;
 
+    const qrPageUrl = env.backendUrl
+      ? `${env.backendUrl}/api/whatsapp/qr-page?token=${env.whatsappApiToken}`
+      : `/api/whatsapp/qr-page?token=${env.whatsappApiToken}`;
+
+    logger.info('==================================================');
+    logger.info('  NOVO QR CODE DISPONIVEL — abra no navegador:');
+    logger.info(`  ${qrPageUrl}`);
+    logger.info('==================================================');
+
+    // ASCII art apenas para referência em ambientes de terminal local
     qrcodeTerminal.generate(qr, { small: true });
 
     try {
