@@ -76,6 +76,7 @@ export class WhatsAppClient {
   private authSyncInFlight = false;
   private authSyncQueued = false;
   private lastAuthSnapshotHash: string | null = null;
+  private recoveringInvalidSession = false;
 
   async start(): Promise<void> {
     await mkdir(env.whatsappAuthDir, { recursive: true });
@@ -261,6 +262,19 @@ export class WhatsAppClient {
       const reason = this.mapDisconnectReason(code);
       this.lastDisconnectReason = reason;
       logger.warn('WhatsApp connection closed', { code, reason });
+
+      const shouldForceRelogin =
+        this.allowReconnect &&
+        (code === DisconnectReason.loggedOut || code === DisconnectReason.badSession);
+
+      if (shouldForceRelogin) {
+        logger.warn('Invalid WhatsApp session detected, forcing fresh login to generate new QR', {
+          code,
+          reason
+        });
+        void this.recoverFromInvalidSession();
+        return;
+      }
 
       const shouldReconnect =
         this.allowReconnect && code !== DisconnectReason.loggedOut && code !== DisconnectReason.forbidden;
@@ -563,6 +577,48 @@ export class WhatsAppClient {
     if (!this.reconnectTimer) return;
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
+  }
+
+  private async recoverFromInvalidSession(): Promise<void> {
+    if (this.recoveringInvalidSession) {
+      return;
+    }
+
+    this.recoveringInvalidSession = true;
+    try {
+      this.clearReconnectTimer();
+      this.clearAuthSyncTimer();
+      this.authSyncQueued = false;
+      this.lastAuthSnapshotHash = null;
+      this.clearQr();
+      this.phone = null;
+
+      if (this.socket) {
+        (this.socket as { ws?: { close: () => void } }).ws?.close();
+        this.socket = null;
+      }
+
+      await rm(env.whatsappAuthDir, { recursive: true, force: true });
+      await mkdir(env.whatsappAuthDir, { recursive: true });
+
+      try {
+        await clearWhatsAppAuthSnapshot();
+      } catch (error) {
+        logger.error('Failed to clear invalid WhatsApp auth snapshot in Firestore', error);
+      }
+
+      if (this.allowReconnect) {
+        this.state = 'connecting';
+        await this.connect();
+      }
+    } catch (error) {
+      logger.error('Failed to recover from invalid WhatsApp session', error);
+      if (this.allowReconnect) {
+        this.scheduleReconnect();
+      }
+    } finally {
+      this.recoveringInvalidSession = false;
+    }
   }
 
   private clearAuthSyncTimer(): void {
