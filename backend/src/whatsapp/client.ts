@@ -421,10 +421,10 @@ export class WhatsAppClient {
       textPreview: extractMessageText(message).slice(0, 50)
     });
 
-    const alreadyInFirestore = await inboundMessageExists(messageId);
+    const alreadyInFirestore = await inboundMessageExists(messageId, this.processedInboundIds);
     if (alreadyInFirestore) {
       this.rememberInbound(messageId);
-      logger.info('MSG_SKIP: already in Firestore', { messageId });
+      logger.info('MSG_SKIP: already processed', { messageId });
       return;
     }
 

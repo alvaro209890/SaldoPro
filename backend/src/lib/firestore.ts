@@ -12,7 +12,8 @@ const AUTH_STATE_DOC_ID = 'authState';
 const AUTH_STATE_FILES_SUBCOLLECTION = 'files';
 const PROFILE_SCAN_CACHE_TTL_MS = 15_000; // reduced to 15s so newly registered phones are picked up quickly
 const BINDING_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const LAST_ACTIVITY_CACHE_TTL_MS = 60 * 1000; // 1 minute
+const LAST_ACTIVITY_CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes (was 1 min)
+const ALLOWED_NUMBERS_CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes per-uid cache
 
 function sanitizeDocId(value: string): string {
   return value.replace(/[^\w.-]/g, '_');
@@ -53,7 +54,13 @@ export async function saveWhatsAppMessage(record: WhatsAppMessageRecord): Promis
   await db.collection(COLLECTION_NAME).doc(docId).set(record, { merge: true });
 }
 
-export async function inboundMessageExists(messageId: string): Promise<boolean> {
+export async function inboundMessageExists(
+  messageId: string,
+  processedInMemory?: Set<string>
+): Promise<boolean> {
+  // Avoid network call if we already know this ID from the in-process dedup set
+  if (processedInMemory?.has(messageId)) return true;
+
   const docId = `in_${sanitizeDocId(messageId)}`;
   const snap = await db.collection(COLLECTION_NAME).doc(docId).get();
   return snap.exists;
@@ -196,13 +203,37 @@ export async function deleteUserTransaction(uid: string, transactionId: string):
   await db.collection('users').doc(uid).collection('transactions').doc(transactionId).delete();
 }
 
+// ---------------------------------------------------------------------------
+// Per-UID allowed numbers cache — avoids repeated Firestore reads per message.
+// ---------------------------------------------------------------------------
+const allowedNumbersCache = new Map<string, { numbers: string[]; cachedAt: number }>();
+
+function invalidateAllowedNumbersCache(uid: string): void {
+  allowedNumbersCache.delete(uid);
+}
+
 export async function getAllowedWhatsAppNumbers(uid: string): Promise<string[]> {
+  const cached = allowedNumbersCache.get(uid);
+  if (cached && Date.now() - cached.cachedAt <= ALLOWED_NUMBERS_CACHE_TTL_MS) {
+    return cached.numbers;
+  }
+
   const snap = await db.collection('users').doc(uid).collection('settings').doc('profile').get();
-  if (!snap.exists) return [];
+  if (!snap.exists) {
+    allowedNumbersCache.set(uid, { numbers: [], cachedAt: Date.now() });
+    return [];
+  }
 
   const data = snap.data() as { whatsappAllowedNumbers?: unknown };
   // Use normalizeAllowedNumbers to expand each registered number into all Brazilian variants
-  return normalizeAllowedNumbers(data.whatsappAllowedNumbers);
+  const numbers = normalizeAllowedNumbers(data.whatsappAllowedNumbers);
+  allowedNumbersCache.set(uid, { numbers, cachedAt: Date.now() });
+  return numbers;
+}
+
+/** Call this when a user updates their whatsappAllowedNumbers so the cache stays fresh. */
+export function invalidateAllowedNumbersCacheForUid(uid: string): void {
+  invalidateAllowedNumbersCache(uid);
 }
 
 interface ProfileSettingsData {

@@ -265,7 +265,8 @@ ${financialContextBlock}`;
 function parseAssistantPayload(content: string): Partial<GroqAssistantResult> {
   // Remove markdown code fences if present (```json ... ```)
   let cleaned = content.trim();
-  cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  // Handle both single and multiple backtick fences
+  cleaned = cleaned.replace(/^```+(?:json)?\s*/i, '').replace(/\s*```+$/i, '').trim();
 
   try {
     return JSON.parse(cleaned) as Partial<GroqAssistantResult>;
@@ -277,6 +278,25 @@ function parseAssistantPayload(content: string): Partial<GroqAssistantResult> {
     }
     throw new Error('Response is not valid JSON');
   }
+}
+
+/**
+ * Safety net: if `text` looks like a raw JSON object containing a `reply` field,
+ * extract just the reply text. This prevents leaking raw JSON to users.
+ */
+function sanitizeReply(text: string): string {
+  const trimmed = text.trim();
+  // Quick bail if it doesn't look like JSON
+  if (!trimmed.startsWith('{')) return trimmed;
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    if (typeof parsed.reply === 'string' && parsed.reply.length > 0) {
+      return parsed.reply.trim();
+    }
+  } catch {
+    // Not valid JSON — return as-is
+  }
+  return trimmed;
 }
 
 /**
@@ -430,14 +450,14 @@ async function callGroqModel(
           contentPreview: content.slice(0, 100)
         });
         return {
-          reply: content.trim().slice(0, env.maxMessageLength),
+          reply: sanitizeReply(content).slice(0, env.maxMessageLength),
           actionObject: { action: 'none' }
         };
       }
       throw new Error('Groq response is not valid JSON');
     }
 
-    const reply = cleanAiReply((parsed.reply ?? '').toString());
+    const reply = cleanAiReply(sanitizeReply((parsed.reply ?? '').toString()));
 
     return {
       reply: reply || 'Nao consegui entender. Pode reformular?',
@@ -457,18 +477,6 @@ export async function queryGroqAssistant(
     throw new Error('At least one message is required');
   }
 
-  // --- PRIMARY: Gemini (if configured) ---
-  if (env.geminiApiKey) {
-    try {
-      return await queryGeminiAssistant(messages, context);
-    } catch (geminiError) {
-      logger.warn('Gemini primary failed, falling back to Groq', {
-        error: geminiError instanceof Error ? geminiError.message : 'unknown'
-      });
-    }
-  }
-
-  // --- FALLBACK: Groq model chain ---
   const lastMessage = messages[messages.length - 1];
   const isVisionRequest = Boolean(lastMessage?.imageDataUrl);
 
@@ -495,8 +503,9 @@ export async function queryGroqAssistant(
     ? GROQ_MODEL_CHAIN.filter((m) => m.vision)
     : GROQ_MODEL_CHAIN;
 
-  let lastError: unknown;
+  let lastGroqError: unknown;
 
+  // --- PRIMARY: Try all Groq models in chain ---
   for (const model of modelsToTry) {
     try {
       logger.info('Groq: trying model', { model: model.id, isVisionRequest });
@@ -504,7 +513,7 @@ export async function queryGroqAssistant(
       logger.info('Groq: model succeeded', { model: model.id });
       return result;
     } catch (error) {
-      lastError = error;
+      lastGroqError = error;
       const statusCode = (error as Error & { statusCode?: number }).statusCode;
       const errorMsg = error instanceof Error ? error.message : 'unknown';
 
@@ -534,7 +543,7 @@ export async function queryGroqAssistant(
         continue;
       }
 
-      // Non-retryable error (e.g. invalid JSON) — try next model too
+      // Non-retryable error — try next model anyway
       logger.warn('Groq: model failed with non-retryable error, trying next model', {
         model: model.id,
         error: errorMsg.slice(0, 200)
@@ -543,7 +552,23 @@ export async function queryGroqAssistant(
     }
   }
 
-  throw lastError instanceof Error ? lastError : new Error('AI request failed: all Groq models exhausted');
+  // --- FALLBACK: Gemini (if configured) ---
+  if (env.geminiApiKey) {
+    logger.warn('All Groq models exhausted, falling back to Gemini', {
+      lastError: lastGroqError instanceof Error ? lastGroqError.message : 'unknown'
+    });
+    try {
+      return await queryGeminiAssistant(messages, context);
+    } catch (geminiError) {
+      logger.error('Gemini fallback also failed', {
+        error: geminiError instanceof Error ? geminiError.message : 'unknown'
+      });
+    }
+  }
+
+  throw lastGroqError instanceof Error
+    ? lastGroqError
+    : new Error('AI request failed: all Groq models and Gemini exhausted');
 }
 
 /**
@@ -629,20 +654,18 @@ async function queryGeminiAssistant(
     try {
       parsed = parseAssistantPayload(content);
     } catch {
-      if (isVisionRequest) {
-        return {
-          reply: content.trim().slice(0, env.maxMessageLength),
-          actionObject: { action: 'none' }
-        };
-      }
-      // Try to use raw content as reply
+      // Couldn't parse as JSON — treat raw content as reply but sanitize first
+      const fallbackReply = sanitizeReply(content).trim().slice(0, env.maxMessageLength);
+      logger.warn('Gemini response not parseable as JSON, using sanitized fallback', {
+        contentPreview: content.slice(0, 80)
+      });
       return {
-        reply: content.trim().slice(0, env.maxMessageLength),
+        reply: fallbackReply || 'Nao consegui entender. Pode reformular?',
         actionObject: { action: 'none' }
       };
     }
 
-    const reply = cleanAiReply((parsed.reply ?? '').toString());
+    const reply = cleanAiReply(sanitizeReply((parsed.reply ?? '').toString()));
 
     return {
       reply: reply || 'Nao consegui entender. Pode reformular?',
