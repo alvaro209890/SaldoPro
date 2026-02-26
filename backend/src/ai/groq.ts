@@ -398,6 +398,7 @@ async function callGroqModel(
 ): Promise<GroqAssistantResult> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), env.groqTimeoutMs);
+  const startTime = Date.now();
 
   try {
     const requestBody = JSON.stringify({
@@ -439,6 +440,7 @@ async function callGroqModel(
 
     // Strip thinking blocks from models that use chain-of-thought
     const content = stripThinkingBlocks(rawContent);
+    const elapsedMs = Date.now() - startTime;
 
     // --- Parse response (with vision fallback) ---
     let parsed: Partial<GroqAssistantResult>;
@@ -459,10 +461,18 @@ async function callGroqModel(
     }
 
     const reply = cleanAiReply(sanitizeReply((parsed.reply ?? '').toString()));
+    const finalAction = validateAction(parsed.actionObject);
+
+    logger.info('Groq model response parsed successfully', {
+      model: modelId,
+      elapsedMs,
+      actionType: finalAction.action,
+      replyLength: reply.length
+    });
 
     return {
       reply: reply || 'Nao consegui entender. Pode reformular?',
-      actionObject: validateAction(parsed.actionObject)
+      actionObject: finalAction
     };
   } catch (error) {
     clearTimeout(timeoutId);
@@ -641,6 +651,7 @@ async function queryGeminiAssistant(
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), env.groqTimeoutMs);
+  const startTime = Date.now();
 
   try {
     const response = await fetch(url, {
@@ -667,8 +678,9 @@ async function queryGeminiAssistant(
 
     // Strip any thinking blocks
     const content = stripThinkingBlocks(rawContent);
+    const elapsedMs = Date.now() - startTime;
 
-    logger.info('Gemini primary succeeded', { contentLength: content.length });
+    logger.info('Gemini primary succeeded', { model: env.geminiModel, contentLength: content.length, elapsedMs });
 
     // Parse response (same logic as Groq)
     let parsed: Partial<GroqAssistantResult>;
@@ -687,10 +699,18 @@ async function queryGeminiAssistant(
     }
 
     const reply = cleanAiReply(sanitizeReply((parsed.reply ?? '').toString()));
+    const finalAction = validateAction(parsed.actionObject);
+
+    logger.info('Gemini response parsed successfully', {
+      model: env.geminiModel,
+      elapsedMs,
+      actionType: finalAction.action,
+      replyLength: reply.length
+    });
 
     return {
       reply: reply || 'Nao consegui entender. Pode reformular?',
-      actionObject: validateAction(parsed.actionObject)
+      actionObject: finalAction
     };
   } catch (error) {
     clearTimeout(timeoutId);

@@ -296,6 +296,7 @@ function isServerErrorStatus(status) {
 async function callGroqModel(modelId, systemPrompt, formattedMessages, isVisionRequest) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), env_1.env.groqTimeoutMs);
+    const startTime = Date.now();
     try {
         const requestBody = JSON.stringify({
             model: modelId,
@@ -329,6 +330,7 @@ async function callGroqModel(modelId, systemPrompt, formattedMessages, isVisionR
         }
         // Strip thinking blocks from models that use chain-of-thought
         const content = stripThinkingBlocks(rawContent);
+        const elapsedMs = Date.now() - startTime;
         // --- Parse response (with vision fallback) ---
         let parsed;
         try {
@@ -348,9 +350,16 @@ async function callGroqModel(modelId, systemPrompt, formattedMessages, isVisionR
             throw new Error('Groq response is not valid JSON');
         }
         const reply = cleanAiReply(sanitizeReply((parsed.reply ?? '').toString()));
+        const finalAction = validateAction(parsed.actionObject);
+        logger_1.logger.info('Groq model response parsed successfully', {
+            model: modelId,
+            elapsedMs,
+            actionType: finalAction.action,
+            replyLength: reply.length
+        });
         return {
             reply: reply || 'Nao consegui entender. Pode reformular?',
-            actionObject: validateAction(parsed.actionObject)
+            actionObject: finalAction
         };
     }
     catch (error) {
@@ -502,6 +511,7 @@ async function queryGeminiAssistant(messages, context) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${env_1.env.geminiModel}:generateContent?key=${env_1.env.geminiApiKey}`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), env_1.env.groqTimeoutMs);
+    const startTime = Date.now();
     try {
         const response = await fetch(url, {
             method: 'POST',
@@ -521,7 +531,8 @@ async function queryGeminiAssistant(messages, context) {
         }
         // Strip any thinking blocks
         const content = stripThinkingBlocks(rawContent);
-        logger_1.logger.info('Gemini primary succeeded', { contentLength: content.length });
+        const elapsedMs = Date.now() - startTime;
+        logger_1.logger.info('Gemini primary succeeded', { model: env_1.env.geminiModel, contentLength: content.length, elapsedMs });
         // Parse response (same logic as Groq)
         let parsed;
         try {
@@ -539,9 +550,16 @@ async function queryGeminiAssistant(messages, context) {
             };
         }
         const reply = cleanAiReply(sanitizeReply((parsed.reply ?? '').toString()));
+        const finalAction = validateAction(parsed.actionObject);
+        logger_1.logger.info('Gemini response parsed successfully', {
+            model: env_1.env.geminiModel,
+            elapsedMs,
+            actionType: finalAction.action,
+            replyLength: reply.length
+        });
         return {
             reply: reply || 'Nao consegui entender. Pode reformular?',
-            actionObject: validateAction(parsed.actionObject)
+            actionObject: finalAction
         };
     }
     catch (error) {
