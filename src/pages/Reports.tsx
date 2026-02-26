@@ -154,7 +154,7 @@ export function Reports() {
                     <p className="text-sm text-gray-400 mt-1">Análise detalhada das suas finanças.</p>
                 </div>
 
-                <div className="flex items-center gap-4">
+                <div className="flex flex-col sm:flex-row items-center gap-4 w-full sm:w-auto">
                     <MonthSelector currentMonthKey={monthKey} onChange={setMonthKey} />
                     <Button
                         onClick={exportCSV}
@@ -219,12 +219,12 @@ export function Reports() {
                                 {categoryStats.length === 0 ? (
                                     <div className="p-8 text-center text-gray-400">Nenhuma despesa para analisar.</div>
                                 ) : (
-                                    <table className="w-full text-left text-sm text-gray-300">
+                                    <table className="w-full text-left text-sm text-gray-300 min-w-[350px]">
                                         <thead className="text-xs uppercase bg-surface-800/50 text-gray-400">
                                             <tr>
-                                                <th className="px-6 py-3 rounded-tl-lg w-full">Categoria</th>
-                                                <th className="px-6 py-3 text-right whitespace-nowrap">Qtd</th>
-                                                <th className="px-6 py-3 rounded-tr-lg text-right whitespace-nowrap">Valor</th>
+                                                <th className="px-4 sm:px-6 py-3 rounded-tl-lg w-full">Categoria</th>
+                                                <th className="px-4 sm:px-6 py-3 text-right whitespace-nowrap">Qtd</th>
+                                                <th className="px-4 sm:px-6 py-3 rounded-tr-lg text-right whitespace-nowrap">Valor</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -288,12 +288,12 @@ export function Reports() {
                                 {paymentStats.length === 0 ? (
                                     <div className="p-8 text-center text-gray-400">Nenhuma despesa para analisar.</div>
                                 ) : (
-                                    <table className="w-full text-left text-sm text-gray-300">
+                                    <table className="w-full text-left text-sm text-gray-300 min-w-[350px]">
                                         <thead className="text-xs uppercase bg-surface-800/50 text-gray-400">
                                             <tr>
-                                                <th className="px-6 py-3 rounded-tl-lg">Método</th>
-                                                <th className="px-6 py-3 text-right">Qtd</th>
-                                                <th className="px-6 py-3 rounded-tr-lg text-right">Valor total</th>
+                                                <th className="px-4 sm:px-6 py-3 rounded-tl-lg">Método</th>
+                                                <th className="px-4 sm:px-6 py-3 text-right">Qtd</th>
+                                                <th className="px-4 sm:px-6 py-3 rounded-tr-lg text-right">Valor total</th>
                                             </tr>
                                         </thead>
                                         <tbody>

@@ -110,7 +110,7 @@ export function Transactions() {
                     </p>
                 </div>
 
-                <div className="flex items-center gap-4">
+                <div className="flex flex-col sm:flex-row items-center gap-4 w-full sm:w-auto">
                     <MonthSelector currentMonthKey={monthKey} onChange={setMonthKey} />
                     <Button onClick={handleCreate} className="hidden lg:flex">
                         <Plus className="mr-2 h-4 w-4" />

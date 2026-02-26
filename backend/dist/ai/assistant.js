@@ -13,6 +13,29 @@ const VALID_PAYMENT_METHODS = [
     'transfer',
     'boleto'
 ];
+// ---------------------------------------------------------------------------
+// Financial context cache — avoids repeated Firestore reads for active users.
+// TTL: 2 minutes. Invalidated when a transaction is added/updated/deleted.
+// ---------------------------------------------------------------------------
+const CONTEXT_CACHE_TTL_MS = 2 * 60 * 1000;
+const financialContextCache = new Map();
+function getCachedContext(uid) {
+    const entry = financialContextCache.get(uid);
+    if (!entry)
+        return null;
+    if (Date.now() - entry.cachedAt > CONTEXT_CACHE_TTL_MS) {
+        financialContextCache.delete(uid);
+        return null;
+    }
+    return entry;
+}
+function setCachedContext(uid, ctx) {
+    financialContextCache.set(uid, { ...ctx, cachedAt: Date.now() });
+}
+/** Invalidate cache after a mutation so the next call gets fresh data. */
+function invalidateContextCache(uid) {
+    financialContextCache.delete(uid);
+}
 function todayISO() {
     return new Date().toISOString().split('T')[0];
 }
@@ -84,41 +107,54 @@ function toFriendlyTransactionCode(transactionId) {
     const hash = hashBase36(transactionId).padStart(6, '0').slice(0, 6);
     return `TX-${hash}`;
 }
-function buildFinancialAssistantIntro(isCapabilitiesQuestion) {
-    const lines = [
-        '*Oi! Eu sou a SaldoPro, sua assistente financeira.*',
-        '',
-        '*Posso te ajudar com:*',
-        '- Registrar receitas e despesas por texto',
-        '- Ler comprovantes/imagens e lancar automaticamente',
-        '- Mostrar resumo financeiro do mes (receitas, despesas e saldo)',
-        '- Acompanhar orcamento e alertar excessos',
-        '- Editar e excluir lancamentos',
-        '- Sugerir melhorias com base nos seus gastos',
-        '',
-        isCapabilitiesQuestion
-            ? '*Exemplos:* "gastei 89,90 no mercado no cartao" ou "quanto ja gastei este mes?"'
-            : '*Se quiser, ja me diga um gasto/receita agora e eu registro pra voce.*'
-    ];
-    return lines.join('\n');
-}
 function buildAddedTransactionMessage(receipt, aiReply, currency) {
+    const typeEmoji = receipt.type === 'income' ? '📥' : '📤';
     const lines = [
-        '*Transacao registrada com sucesso*',
+        `${typeEmoji} *${transactionTypeLabel(receipt.type)} registrada*`,
         '',
-        `Numero da transacao: ${receipt.transactionCode}`,
-        `Tipo: ${transactionTypeLabel(receipt.type)}`,
-        `Valor: ${formatCurrency(receipt.amount, currency)}`,
-        `Categoria: ${receipt.categoryName}`,
-        `Descricao: ${receipt.description}`,
-        `Pagamento: ${paymentMethodLabel(receipt.paymentMethod)}`,
-        `Data da transacao: ${formatDateBRFromYmd(receipt.transactionDate)}`,
-        `Registrado em: ${formatDateTimeBR(receipt.recordedAt)}`,
-        `Status: Salvo no SaldoPro`
+        `*${formatCurrency(receipt.amount, currency)}* - ${receipt.description}`,
+        `${receipt.categoryName} | ${paymentMethodLabel(receipt.paymentMethod)} | ${formatDateBRFromYmd(receipt.transactionDate)}`,
+        `Cod: ${receipt.transactionCode}`
     ];
     const cleanAiReply = aiReply.trim();
     if (cleanAiReply.length > 0) {
-        lines.push('', `Observacao: ${cleanAiReply}`);
+        lines.push('', cleanAiReply);
+    }
+    return lines.join('\n');
+}
+function fieldLabel(field) {
+    const labels = {
+        amount: 'Valor',
+        description: 'Descricao',
+        category: 'Categoria',
+        date: 'Data',
+        type: 'Tipo',
+        paymentMethod: 'Pagamento'
+    };
+    return labels[field] ?? field;
+}
+function buildUpdatedTransactionMessage(receipt, aiReply) {
+    const lines = [
+        `✏️ *Transacao atualizada*`,
+        '',
+        `Alterado: ${receipt.changedFields.map(fieldLabel).join(', ')}`,
+        `Cod: ${receipt.transactionCode}`
+    ];
+    const cleanAiReply = aiReply.trim();
+    if (cleanAiReply.length > 0) {
+        lines.push('', cleanAiReply);
+    }
+    return lines.join('\n');
+}
+function buildDeletedTransactionMessage(receipt, aiReply) {
+    const lines = [
+        `🗑️ *Transacao excluida*`,
+        '',
+        `Cod: ${receipt.transactionCode}`
+    ];
+    const cleanAiReply = aiReply.trim();
+    if (cleanAiReply.length > 0) {
+        lines.push('', cleanAiReply);
     }
     return lines.join('\n');
 }
@@ -137,12 +173,25 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
     if (sanitizedMessages.length === 0) {
         return 'Nao consegui interpretar a mensagem recebida.';
     }
-    const [categories, recentTransactions, settings, profile] = await Promise.all([
-        (0, firestore_1.getUserCategories)(uid),
-        (0, firestore_1.getRecentTransactions)(uid, env_1.env.whatsappAiRecentTransactions),
-        (0, firestore_1.getUserSettings)(uid),
-        (0, firestore_1.getUserProfile)(uid)
-    ]);
+    // Use cached context if available (TTL 2 min), otherwise fetch from Firestore
+    const cached = getCachedContext(uid);
+    let categories;
+    let recentTransactions;
+    let settings;
+    let profile;
+    if (cached) {
+        logger_1.logger.info('Using cached financial context', { uid });
+        ({ categories, recentTransactions, settings, profile } = cached);
+    }
+    else {
+        [categories, recentTransactions, settings, profile] = await Promise.all([
+            (0, firestore_1.getUserCategories)(uid),
+            (0, firestore_1.getRecentTransactions)(uid, env_1.env.whatsappAiRecentTransactions),
+            (0, firestore_1.getUserSettings)(uid),
+            (0, firestore_1.getUserProfile)(uid)
+        ]);
+        setCachedContext(uid, { categories, recentTransactions, settings, profile });
+    }
     const context = {
         profile,
         settings,
@@ -156,22 +205,21 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
     };
     const ai = await (0, groq_1.queryGroqAssistant)(sanitizedMessages, context);
     const actionResult = await executeAction(uid, ai.actionObject, categories);
-    const shouldForceCapabilitiesIntro = Boolean(options.isGreeting ||
-        options.isConversationRestart ||
-        options.isFirstMessage ||
-        options.isCapabilitiesQuestion);
     if (actionResult.kind === 'added') {
         return buildAddedTransactionMessage(actionResult.receipt, ai.reply, settings.currency)
+            .slice(0, env_1.env.maxMessageLength);
+    }
+    if (actionResult.kind === 'updated') {
+        return buildUpdatedTransactionMessage(actionResult.receipt, ai.reply)
+            .slice(0, env_1.env.maxMessageLength);
+    }
+    if (actionResult.kind === 'deleted') {
+        return buildDeletedTransactionMessage(actionResult.receipt, ai.reply)
             .slice(0, env_1.env.maxMessageLength);
     }
     if (actionResult.kind === 'error') {
         const baseReply = ai.reply.trim() || 'Nao consegui concluir a acao solicitada.';
         return `${baseReply}\n\nAviso: ${actionResult.message}`.slice(0, env_1.env.maxMessageLength);
-    }
-    if (shouldForceCapabilitiesIntro) {
-        const intro = buildFinancialAssistantIntro(Boolean(options.isCapabilitiesQuestion));
-        const reply = ai.reply.trim();
-        return `${intro}${reply ? `\n\n${reply}` : ''}`.slice(0, env_1.env.maxMessageLength);
     }
     return `${ai.reply}`.slice(0, env_1.env.maxMessageLength);
 }
@@ -199,6 +247,7 @@ async function executeAction(uid, action, categories) {
                 paymentMethod: normalizePaymentMethod(action.paymentMethod)
             };
             const transactionId = await (0, firestore_1.addUserTransaction)(uid, payload);
+            invalidateContextCache(uid);
             const categoryName = categories.find((c) => c.id === category)?.name ?? category;
             return {
                 kind: 'added',
@@ -241,14 +290,29 @@ async function executeAction(uid, action, categories) {
                 return { kind: 'none' };
             }
             await (0, firestore_1.updateUserTransaction)(uid, action.id, changes);
-            return { kind: 'none' };
+            invalidateContextCache(uid);
+            return {
+                kind: 'updated',
+                receipt: {
+                    transactionCode: toFriendlyTransactionCode(action.id),
+                    changedFields: Object.keys(changes),
+                    updatedAt: new Date().toISOString()
+                }
+            };
         }
         if (action.action === 'delete_transaction') {
             if (!action.id || typeof action.id !== 'string') {
                 return { kind: 'none' };
             }
             await (0, firestore_1.deleteUserTransaction)(uid, action.id);
-            return { kind: 'none' };
+            invalidateContextCache(uid);
+            return {
+                kind: 'deleted',
+                receipt: {
+                    transactionCode: toFriendlyTransactionCode(action.id),
+                    deletedAt: new Date().toISOString()
+                }
+            };
         }
     }
     catch (error) {

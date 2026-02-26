@@ -11,10 +11,10 @@ exports.addUserTransaction = addUserTransaction;
 exports.updateUserTransaction = updateUserTransaction;
 exports.deleteUserTransaction = deleteUserTransaction;
 exports.getAllowedWhatsAppNumbers = getAllowedWhatsAppNumbers;
+exports.invalidateAllowedNumbersCacheForUid = invalidateAllowedNumbersCacheForUid;
 exports.isPhoneAllowedForUid = isPhoneAllowedForUid;
 exports.isPhoneAllowedForAnyAccount = isPhoneAllowedForAnyAccount;
 exports.resolveUidFromPhone = resolveUidFromPhone;
-exports.resolveUidFromAccessCode = resolveUidFromAccessCode;
 exports.getPhoneBinding = getPhoneBinding;
 exports.savePhoneBinding = savePhoneBinding;
 exports.loadWhatsAppAuthSnapshot = loadWhatsAppAuthSnapshot;
@@ -32,7 +32,10 @@ const BINDINGS_COLLECTION_NAME = 'whatsappBindings';
 const AUTH_STATE_COLLECTION_NAME = 'whatsappRuntime';
 const AUTH_STATE_DOC_ID = 'authState';
 const AUTH_STATE_FILES_SUBCOLLECTION = 'files';
-const PROFILE_SCAN_CACHE_TTL_MS = 30_000;
+const PROFILE_SCAN_CACHE_TTL_MS = 15_000; // reduced to 15s so newly registered phones are picked up quickly
+const BINDING_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const LAST_ACTIVITY_CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes (was 1 min)
+const ALLOWED_NUMBERS_CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes per-uid cache
 function sanitizeDocId(value) {
     return value.replace(/[^\w.-]/g, '_');
 }
@@ -64,7 +67,10 @@ async function saveWhatsAppMessage(record) {
     const docId = getDocId(record);
     await db.collection(COLLECTION_NAME).doc(docId).set(record, { merge: true });
 }
-async function inboundMessageExists(messageId) {
+async function inboundMessageExists(messageId, processedInMemory) {
+    // Avoid network call if we already know this ID from the in-process dedup set
+    if (processedInMemory?.has(messageId))
+        return true;
     const docId = `in_${sanitizeDocId(messageId)}`;
     const snap = await db.collection(COLLECTION_NAME).doc(docId).get();
     return snap.exists;
@@ -143,30 +149,50 @@ async function updateUserTransaction(uid, transactionId, changes) {
 async function deleteUserTransaction(uid, transactionId) {
     await db.collection('users').doc(uid).collection('transactions').doc(transactionId).delete();
 }
+// ---------------------------------------------------------------------------
+// Per-UID allowed numbers cache — avoids repeated Firestore reads per message.
+// ---------------------------------------------------------------------------
+const allowedNumbersCache = new Map();
+function invalidateAllowedNumbersCache(uid) {
+    allowedNumbersCache.delete(uid);
+}
 async function getAllowedWhatsAppNumbers(uid) {
+    const cached = allowedNumbersCache.get(uid);
+    if (cached && Date.now() - cached.cachedAt <= ALLOWED_NUMBERS_CACHE_TTL_MS) {
+        return cached.numbers;
+    }
     const snap = await db.collection('users').doc(uid).collection('settings').doc('profile').get();
-    if (!snap.exists)
+    if (!snap.exists) {
+        allowedNumbersCache.set(uid, { numbers: [], cachedAt: Date.now() });
         return [];
+    }
     const data = snap.data();
-    if (!Array.isArray(data.whatsappAllowedNumbers))
-        return [];
-    return [...new Set(data.whatsappAllowedNumbers
-            .map((value) => (typeof value === 'string' ? (0, events_1.normalizePhoneNumber)(value) : ''))
-            .filter((value) => value.length >= 10))];
+    // Use normalizeAllowedNumbers to expand each registered number into all Brazilian variants
+    const numbers = normalizeAllowedNumbers(data.whatsappAllowedNumbers);
+    allowedNumbersCache.set(uid, { numbers, cachedAt: Date.now() });
+    return numbers;
 }
-function normalizeAccessCode(value) {
-    return value.toUpperCase().replace(/[^A-Z0-9]/g, '');
-}
-function extractUidFromSettingsDoc(doc) {
-    return doc.ref.parent.parent?.id ?? null;
+/** Call this when a user updates their whatsappAllowedNumbers so the cache stays fresh. */
+function invalidateAllowedNumbersCacheForUid(uid) {
+    invalidateAllowedNumbersCache(uid);
 }
 let profileScanCache = null;
 function normalizeAllowedNumbers(value) {
     if (!Array.isArray(value))
         return [];
-    return [...new Set(value
-            .map((item) => (typeof item === 'string' ? (0, events_1.normalizePhoneNumber)(item) : ''))
-            .filter((item) => item.length >= 10))];
+    // Expand each stored number into all its Brazilian variants so any format matches
+    const allVariants = new Set();
+    for (const item of value) {
+        if (typeof item !== 'string')
+            continue;
+        const digits = (0, events_1.normalizePhoneNumber)(item);
+        if (digits.length < 10)
+            continue;
+        for (const variant of (0, events_1.brazilianPhoneVariants)(digits)) {
+            allVariants.add(variant);
+        }
+    }
+    return [...allVariants];
 }
 function isMissingIndexError(error) {
     const message = error?.message;
@@ -213,21 +239,6 @@ async function fallbackIsPhoneAllowedForAnyAccount(variants) {
 async function fallbackResolveUidFromPhone(variants) {
     const profiles = await scanAllProfileSettings();
     for (const entry of profiles) {
-        const allowed = normalizeAllowedNumbers(entry.data.whatsappAllowedNumbers);
-        if (variants.some((variant) => allowed.includes(variant))) {
-            return entry.uid;
-        }
-    }
-    return null;
-}
-async function fallbackResolveUidFromAccessCode(normalizedCode, variants) {
-    const profiles = await scanAllProfileSettings();
-    for (const entry of profiles) {
-        const code = typeof entry.data.whatsappAccessCodeNormalized === 'string'
-            ? entry.data.whatsappAccessCodeNormalized
-            : '';
-        if (code !== normalizedCode)
-            continue;
         const allowed = normalizeAllowedNumbers(entry.data.whatsappAllowedNumbers);
         if (variants.some((variant) => allowed.includes(variant))) {
             return entry.uid;
@@ -295,33 +306,30 @@ async function resolveUidFromPhone(phone) {
         return null;
     }
 }
-async function resolveUidFromAccessCode(accessCodeText, phone) {
-    const normalizedCode = normalizeAccessCode(accessCodeText);
-    const normalizedPhone = (0, events_1.normalizePhoneNumber)(phone);
-    if (normalizedCode.length < 8 || normalizedPhone.length < 10) {
-        return null;
+// ---------------------------------------------------------------------------
+// Phone binding cache — avoids repeated Firestore lookups for the same phone.
+// ---------------------------------------------------------------------------
+const bindingCache = new Map();
+function getCachedBinding(phone) {
+    const entry = bindingCache.get(phone);
+    if (!entry)
+        return undefined;
+    if (Date.now() - entry.cachedAt > BINDING_CACHE_TTL_MS) {
+        bindingCache.delete(phone);
+        return undefined;
     }
-    try {
-        // Scan all profiles and match by access code only
-        const profiles = await scanAllProfileSettings();
-        for (const entry of profiles) {
-            const entryCode = normalizeAccessCode(typeof entry.data.whatsappAccessCodeNormalized === 'string'
-                ? entry.data.whatsappAccessCodeNormalized
-                : '');
-            if (entryCode && entryCode === normalizedCode) {
-                return entry.uid;
-            }
-        }
-    }
-    catch (error) {
-        logger_1.logger.error('resolveUidFromAccessCode failed', error);
-    }
-    return null;
+    return entry.binding;
+}
+function setCachedBinding(phone, binding) {
+    bindingCache.set(phone, { binding, cachedAt: Date.now() });
 }
 async function getPhoneBinding(phone) {
     const normalizedPhone = (0, events_1.normalizePhoneNumber)(phone);
     if (normalizedPhone.length < 10)
         return null;
+    const cached = getCachedBinding(normalizedPhone);
+    if (cached !== undefined)
+        return cached;
     const variants = (0, events_1.brazilianPhoneVariants)(normalizedPhone);
     const snaps = await Promise.all(variants.map((v) => db.collection(BINDINGS_COLLECTION_NAME).doc(v).get()));
     for (const snap of snaps) {
@@ -330,13 +338,16 @@ async function getPhoneBinding(phone) {
         const data = snap.data();
         if (!data.uid || typeof data.uid !== 'string')
             continue;
-        return {
+        const result = {
             phone: snap.id,
             uid: data.uid,
             linkedAt: typeof data.linkedAt === 'string' ? data.linkedAt : new Date().toISOString(),
             updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : new Date().toISOString()
         };
+        setCachedBinding(normalizedPhone, result);
+        return result;
     }
+    setCachedBinding(normalizedPhone, null);
     return null;
 }
 async function savePhoneBinding(phone, uid) {
@@ -372,6 +383,11 @@ async function savePhoneBinding(phone, uid) {
         batch.set(db.collection(BINDINGS_COLLECTION_NAME).doc(v), bindingData, { merge: true });
     }
     await batch.commit();
+    // Invalidate binding cache for all variants
+    for (const v of variants) {
+        bindingCache.delete(v);
+    }
+    bindingCache.delete(normalizedPhone);
 }
 async function loadWhatsAppAuthSnapshot() {
     try {
@@ -498,12 +514,24 @@ async function getRecentConversationByPhone(uid, phone, limitCount) {
         content: entry.content
     }));
 }
+// ---------------------------------------------------------------------------
+// Last conversation activity cache — avoids 2 Firestore queries per message.
+// ---------------------------------------------------------------------------
+const lastActivityCache = new Map();
+function lastActivityCacheKey(uid, phone) {
+    return `${uid}:${phone}`;
+}
 async function getLastConversationActivityByPhone(uid, phone) {
     if (!uid || uid.trim().length === 0)
         return null;
     const normalizedPhone = (0, events_1.normalizePhoneNumber)(phone);
     if (normalizedPhone.length < 10)
         return null;
+    const cacheKey = lastActivityCacheKey(uid, normalizedPhone);
+    const cached = lastActivityCache.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt <= LAST_ACTIVITY_CACHE_TTL_MS) {
+        return cached.activity;
+    }
     try {
         const [inboundSnap, outboundSnap] = await Promise.all([
             db
@@ -525,16 +553,20 @@ async function getLastConversationActivityByPhone(uid, phone) {
         const outboundCreatedAt = outboundSnap.empty ? null : outboundSnap.docs[0].data().createdAt;
         const inboundIso = typeof inboundCreatedAt === 'string' ? inboundCreatedAt : null;
         const outboundIso = typeof outboundCreatedAt === 'string' ? outboundCreatedAt : null;
+        let result = null;
         if (!inboundIso && !outboundIso)
-            return null;
-        if (!inboundIso)
-            return outboundIso;
-        if (!outboundIso)
-            return inboundIso;
-        return inboundIso > outboundIso ? inboundIso : outboundIso;
+            result = null;
+        else if (!inboundIso)
+            result = outboundIso;
+        else if (!outboundIso)
+            result = inboundIso;
+        else
+            result = inboundIso > outboundIso ? inboundIso : outboundIso;
+        lastActivityCache.set(cacheKey, { activity: result, cachedAt: Date.now() });
+        return result;
     }
     catch (error) {
-        logger_1.logger.error('getLastConversationActivityByPhone failed', error);
+        logger_1.logger.warn('getLastConversationActivityByPhone failed (index may still be building)', error);
         return null;
     }
 }

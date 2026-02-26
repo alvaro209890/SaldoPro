@@ -81,3 +81,22 @@ export interface TransactionFilters {
     sortBy: 'date' | 'amount' | 'description';
     sortOrder: 'asc' | 'desc';
 }
+
+export interface Reminder {
+    id: string;
+    title: string;
+    amount: number;
+    dueDate: string; // YYYY-MM-DD
+    type: 'payable' | 'receivable';
+    status: 'pending' | 'paid';
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface ReminderFormData {
+    title: string;
+    amount: number;
+    dueDate: string;
+    type: 'payable' | 'receivable';
+    status: 'pending' | 'paid';
+}

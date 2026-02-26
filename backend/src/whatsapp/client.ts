@@ -458,7 +458,20 @@ export class WhatsAppClient {
       uid: binding?.uid ?? null
     });
 
-    // Se não há binding, tenta auto-vincular pelo número cadastrado na conta
+    if (binding) {
+      const stillAllowed = await isPhoneAllowedForUid(binding.uid, remotePhone);
+      if (!stillAllowed) {
+        logger.info('MSG_STALE_BINDING: old binding no longer allowed, dropping to re-resolve', {
+          phone: remotePhone,
+          oldUid: binding.uid
+        });
+        binding = null; // force re-resolve below
+      } else {
+        bindingJustVerified = true;
+      }
+    }
+
+    // Se não há binding (ou era stale), tenta auto-vincular pelo número cadastrado na conta
     if (!binding) {
       logger.info('MSG_RESOLVE: attempting resolveUidFromPhone', { phone: remotePhone });
       const resolvedUid = await resolveUidFromPhone(remotePhone);
@@ -490,22 +503,9 @@ export class WhatsAppClient {
     }
 
     if (!binding) {
-      logger.info('MSG_UNLINKED: no binding found, ignoring message', { from: remotePhone });
+      logger.info('MSG_UNLINKED: no binding found or allowed, ignoring message', { from: remotePhone });
       this.rememberInbound(messageId);
       return;
-    }
-
-    // Skip re-check if we just verified the phone during auto-binding above
-    if (!bindingJustVerified) {
-      const stillAllowed = await isPhoneAllowedForUid(binding.uid, remotePhone);
-      if (!stillAllowed) {
-        logger.info('MSG_BLOCKED: phone not in whitelist anymore, ignoring message', {
-          from: remotePhone,
-          uid: binding.uid
-        });
-        this.rememberInbound(messageId);
-        return;
-      }
     }
 
     const inboundRecord: WhatsAppMessageRecord = {

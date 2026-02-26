@@ -80,6 +80,8 @@ function isCapabilitiesIntentMessage(text) {
         /\b(o que|oq)\s+faz\b/.test(normalized));
 }
 const IMAGE_ONLY_FALLBACK_TEXT = 'Analise a imagem enviada e registre o lancamento corretamente.';
+/** Max number of messages processed concurrently by the AI pipeline. */
+const MESSAGE_QUEUE_CONCURRENCY = 3;
 class WhatsAppClient {
     socket = null;
     state = 'connecting';
@@ -101,6 +103,10 @@ class WhatsAppClient {
     authSyncQueued = false;
     lastAuthSnapshotHash = null;
     recoveringInvalidSession = false;
+    aiCallTimestamps = new Map();
+    // --- Message processing queue ---
+    messageQueue = [];
+    messageQueueActive = 0;
     async start() {
         await (0, promises_1.mkdir)(env_1.env.whatsappAuthDir, { recursive: true });
         await this.restoreAuthStateFromFirestoreIfNeeded();
@@ -256,16 +262,27 @@ class WhatsAppClient {
             this.lastDisconnectReason = reason;
             logger_1.logger.warn('WhatsApp connection closed', { code, reason });
             const shouldForceRelogin = this.allowReconnect &&
-                (code === baileys_1.DisconnectReason.loggedOut || code === baileys_1.DisconnectReason.badSession);
+                (code === baileys_1.DisconnectReason.loggedOut ||
+                    code === baileys_1.DisconnectReason.badSession ||
+                    code === baileys_1.DisconnectReason.connectionReplaced);
             if (shouldForceRelogin) {
-                logger_1.logger.warn('Invalid WhatsApp session detected, forcing fresh login to generate new QR', {
+                const delayMs = code === baileys_1.DisconnectReason.connectionReplaced ? 5000 : 0;
+                logger_1.logger.warn('Invalid/replaced WhatsApp session detected, forcing fresh login to generate new QR', {
                     code,
-                    reason
+                    reason,
+                    delayMs
                 });
-                void this.recoverFromInvalidSession();
+                if (delayMs > 0) {
+                    setTimeout(() => void this.recoverFromInvalidSession(), delayMs);
+                }
+                else {
+                    void this.recoverFromInvalidSession();
+                }
                 return;
             }
-            const shouldReconnect = this.allowReconnect && code !== baileys_1.DisconnectReason.loggedOut && code !== baileys_1.DisconnectReason.forbidden;
+            const shouldReconnect = this.allowReconnect &&
+                code !== baileys_1.DisconnectReason.loggedOut &&
+                code !== baileys_1.DisconnectReason.forbidden;
             if (shouldReconnect) {
                 this.scheduleReconnect();
             }
@@ -275,12 +292,42 @@ class WhatsAppClient {
         if (upsert.type !== 'notify')
             return;
         for (const message of upsert.messages) {
+            this.enqueueMessage(message);
+        }
+    }
+    /**
+     * Enqueue a message for processing with bounded concurrency.
+     * Up to MESSAGE_QUEUE_CONCURRENCY messages are processed in parallel;
+     * the rest wait in the queue until a slot opens.
+     */
+    enqueueMessage(message) {
+        const task = async () => {
             try {
                 await this.handleSingleIncomingMessage(message);
             }
             catch (error) {
+                const errorMsg = error instanceof Error ? error.message : '';
+                if (errorMsg.includes('Bad MAC')) {
+                    logger_1.logger.error('Bad MAC decryption error detected, triggering session recovery', error);
+                    void this.recoverFromInvalidSession();
+                    return;
+                }
                 logger_1.logger.error('Failed processing inbound message', error);
             }
+        };
+        this.messageQueue.push(task);
+        void this.drainMessageQueue();
+    }
+    async drainMessageQueue() {
+        while (this.messageQueue.length > 0 && this.messageQueueActive < MESSAGE_QUEUE_CONCURRENCY) {
+            const task = this.messageQueue.shift();
+            if (!task)
+                break;
+            this.messageQueueActive += 1;
+            task().finally(() => {
+                this.messageQueueActive -= 1;
+                void this.drainMessageQueue();
+            });
         }
     }
     async handleSingleIncomingMessage(message) {
@@ -319,10 +366,10 @@ class WhatsAppClient {
             rawType: (0, events_1.extractRawType)(message),
             textPreview: (0, events_1.extractMessageText)(message).slice(0, 50)
         });
-        const alreadyInFirestore = await (0, firestore_1.inboundMessageExists)(messageId);
+        const alreadyInFirestore = await (0, firestore_1.inboundMessageExists)(messageId, this.processedInboundIds);
         if (alreadyInFirestore) {
             this.rememberInbound(messageId);
-            logger_1.logger.info('MSG_SKIP: already in Firestore', { messageId });
+            logger_1.logger.info('MSG_SKIP: already processed', { messageId });
             return;
         }
         const waTimestamp = message.messageTimestamp ? Number(message.messageTimestamp) : null;
@@ -330,46 +377,72 @@ class WhatsAppClient {
         const text = (0, events_1.extractMessageText)(message);
         const rawType = (0, events_1.extractRawType)(message);
         const imageDataUrl = await this.extractInboundImageDataUrl(message);
-        const conversationText = text.trim() || (imageDataUrl ? IMAGE_ONLY_FALLBACK_TEXT : '');
+        const audioDataUrl = await this.extractInboundAudioDataUrl(message);
+        const conversationText = text.trim() || (imageDataUrl ? IMAGE_ONLY_FALLBACK_TEXT : '') || (audioDataUrl ? 'Audio enviado no WhatsApp.' : '');
+        // Skip messages with no usable content (e.g. decryption failures)
+        if (!conversationText && !imageDataUrl && !audioDataUrl) {
+            this.rememberInbound(messageId);
+            logger_1.logger.info('MSG_SKIP: empty message (likely decryption failure), ignoring', {
+                messageId,
+                rawType,
+                from: remotePhone
+            });
+            return;
+        }
         let binding = await (0, firestore_1.getPhoneBinding)(remotePhone);
+        let bindingJustVerified = false;
         logger_1.logger.info('MSG_BIND: phone binding lookup', {
             phone: remotePhone,
             found: Boolean(binding),
             uid: binding?.uid ?? null
         });
-        // Se não há binding, tenta auto-vincular pelo número cadastrado na conta
+        if (binding) {
+            const stillAllowed = await (0, firestore_1.isPhoneAllowedForUid)(binding.uid, remotePhone);
+            if (!stillAllowed) {
+                logger_1.logger.info('MSG_STALE_BINDING: old binding no longer allowed, dropping to re-resolve', {
+                    phone: remotePhone,
+                    oldUid: binding.uid
+                });
+                binding = null; // force re-resolve below
+            }
+            else {
+                bindingJustVerified = true;
+            }
+        }
+        // Se não há binding (ou era stale), tenta auto-vincular pelo número cadastrado na conta
         if (!binding) {
             logger_1.logger.info('MSG_RESOLVE: attempting resolveUidFromPhone', { phone: remotePhone });
             const resolvedUid = await (0, firestore_1.resolveUidFromPhone)(remotePhone);
             if (resolvedUid) {
-                await (0, firestore_1.savePhoneBinding)(remotePhone, resolvedUid);
-                binding = {
-                    phone: (0, events_1.normalizePhoneNumber)(remotePhone),
-                    uid: resolvedUid,
-                    linkedAt: new Date().toISOString(),
-                    updatedAt: new Date().toISOString()
-                };
-                logger_1.logger.info('MSG_RESOLVE: auto-linked phone to account', {
-                    phone: remotePhone,
-                    uid: resolvedUid
-                });
+                // Verify the phone is actually in the user's allowed numbers before auto-binding
+                const isAllowed = await (0, firestore_1.isPhoneAllowedForUid)(resolvedUid, remotePhone);
+                if (isAllowed) {
+                    await (0, firestore_1.savePhoneBinding)(remotePhone, resolvedUid);
+                    binding = {
+                        phone: (0, events_1.normalizePhoneNumber)(remotePhone),
+                        uid: resolvedUid,
+                        linkedAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString()
+                    };
+                    bindingJustVerified = true;
+                    logger_1.logger.info('MSG_RESOLVE: auto-linked phone to account', {
+                        phone: remotePhone,
+                        uid: resolvedUid
+                    });
+                }
+                else {
+                    logger_1.logger.info('MSG_RESOLVE: phone not in allowed list for resolved user, skipping auto-bind', {
+                        phone: remotePhone,
+                        uid: resolvedUid
+                    });
+                }
             }
             else {
                 logger_1.logger.info('MSG_RESOLVE: no account found for phone', { phone: remotePhone });
             }
         }
         if (!binding) {
-            logger_1.logger.info('MSG_UNLINKED: no binding found, ignoring message', { from: remotePhone });
-            this.rememberInbound(messageId);
-            await this.handleUnlinkedMessage(remotePhone);
-            return;
-        }
-        const stillAllowed = await (0, firestore_1.isPhoneAllowedForUid)(binding.uid, remotePhone);
-        if (!stillAllowed) {
-            logger_1.logger.info('MSG_BLOCKED: phone not in whitelist anymore, ignoring message', {
-                from: remotePhone,
-                uid: binding.uid
-            });
+            logger_1.logger.info('MSG_UNLINKED: no binding found or allowed, ignoring message', { from: remotePhone });
             this.rememberInbound(messageId);
             return;
         }
@@ -389,7 +462,8 @@ class WhatsAppClient {
                 fromMe: Boolean(key.fromMe),
                 isGroup: false,
                 isSelfChat,
-                hasImage: Boolean(imageDataUrl)
+                hasImage: Boolean(imageDataUrl),
+                hasAudio: Boolean(audioDataUrl)
             }
         };
         await (0, firestore_1.saveMessageSafe)(inboundRecord);
@@ -398,13 +472,30 @@ class WhatsAppClient {
             uid: binding.uid,
             phone: remotePhone,
             textLength: conversationText.length,
-            hasImage: Boolean(imageDataUrl)
+            hasImage: Boolean(imageDataUrl),
+            hasAudio: Boolean(audioDataUrl)
         });
-        await this.sendSmartReply(binding.uid, remoteJid, remotePhone, conversationText, imageDataUrl);
+        await this.sendSmartReply(binding.uid, remoteJid, remotePhone, conversationText, imageDataUrl, audioDataUrl);
     }
-    async sendSmartReply(ownerUid, remoteJid, remotePhone, inboundText, imageDataUrl) {
-        const hasAiInput = inboundText.trim().length > 0 || Boolean(imageDataUrl);
+    async sendSmartReply(ownerUid, remoteJid, remotePhone, inboundText, imageDataUrl, audioDataUrl = null) {
+        const hasAiInput = inboundText.trim().length > 0 || Boolean(imageDataUrl) || Boolean(audioDataUrl);
         if (env_1.env.whatsappAiEnabled && hasAiInput) {
+            // Rate limiting check
+            if (this.isRateLimited(ownerUid)) {
+                logger_1.logger.warn('MSG_RATE_LIMITED: AI processing skipped due to rate limit', {
+                    uid: ownerUid,
+                    phone: remotePhone,
+                    limitPerMinute: env_1.env.whatsappAiRateLimitPerMinute
+                });
+                const rateLimitMsg = 'Voce enviou muitas mensagens seguidas. Aguarde um momento antes de enviar a proxima.';
+                try {
+                    await this.sendWithRetry(remoteJid, rateLimitMsg, 'auto_reply', ownerUid);
+                }
+                catch (rateLimitSendError) {
+                    logger_1.logger.error('Failed to send rate limit notice', rateLimitSendError);
+                }
+                return;
+            }
             try {
                 const conversation = await this.getConversationHistory(ownerUid, remotePhone);
                 const isFirstMessage = conversation.length === 0;
@@ -424,28 +515,42 @@ class WhatsAppClient {
                     role: entry.role,
                     content: entry.content
                 }));
-                // Always add the current message at the end with the image if present
+                // Always add the current message at the end with the image/audio if present
+                let finalContent = inboundText.trim();
+                if (!finalContent) {
+                    if (imageDataUrl)
+                        finalContent = 'Analise a imagem enviada e registre o lançamento corretamente.';
+                    else if (audioDataUrl)
+                        finalContent = 'Transcreva e interprete o audio enviado, e execute a acao de registrar ou responder.';
+                }
                 aiMessages.push({
                     role: 'user',
-                    content: inboundText.trim() || (imageDataUrl ? 'Analise a imagem enviada e registre o lançamento corretamente.' : ''),
-                    ...(imageDataUrl ? { imageDataUrl } : {})
+                    content: finalContent,
+                    ...(imageDataUrl ? { imageDataUrl } : {}),
+                    ...(audioDataUrl ? { audioDataUrl } : {})
                 });
-                logger_1.logger.info('MSG_AI_CONTEXT: sending to Groq', {
+                logger_1.logger.info('MSG_AI_CONTEXT: sending to AI', {
                     historyCount: conversation.length,
                     totalMessages: aiMessages.length,
                     hasImage: Boolean(imageDataUrl),
+                    hasAudio: Boolean(audioDataUrl),
                     isGreeting,
                     isCapabilitiesQuestion,
                     isConversationRestart,
                     shouldSendCapabilitiesSummary
                 });
                 // Save user message to conversation cache for future context
-                if (inboundText.trim() || imageDataUrl) {
+                if (inboundText.trim() || imageDataUrl || audioDataUrl) {
+                    let textForHistory = inboundText.trim();
+                    if (!textForHistory) {
+                        textForHistory = imageDataUrl ? 'Imagem enviada no WhatsApp.' : 'Audio enviado no WhatsApp.';
+                    }
                     await this.appendConversationMessage(ownerUid, remotePhone, {
                         role: 'user',
-                        content: inboundText.trim() || 'Imagem enviada no WhatsApp.'
+                        content: textForHistory
                     });
                 }
+                this.recordAiCall(ownerUid);
                 const aiReply = await (0, assistant_1.processWhatsAppAIMessage)(ownerUid, aiMessages, {
                     isFirstMessage,
                     isGreeting,
@@ -464,6 +569,15 @@ class WhatsAppClient {
             }
             catch (error) {
                 logger_1.logger.error('Failed to process AI WhatsApp message', error);
+                // Send friendly error message instead of silent failure
+                const errorMsg = 'Desculpe, estou com dificuldade para processar agora. Tente novamente em instantes.';
+                try {
+                    await this.sendWithRetry(remoteJid, errorMsg, 'auto_reply', ownerUid);
+                }
+                catch (sendError) {
+                    logger_1.logger.error('Failed to send AI error fallback message', sendError);
+                }
+                return;
             }
         }
         if (!env_1.env.whatsappAutoReplyEnabled)
@@ -790,6 +904,21 @@ class WhatsAppClient {
                 this.sentByBotIds.delete(oldest);
         }
     }
+    isRateLimited(uid) {
+        const now = Date.now();
+        const timestamps = this.aiCallTimestamps.get(uid);
+        if (!timestamps)
+            return false;
+        // Keep only timestamps within the last 60 seconds
+        const recent = timestamps.filter((t) => now - t < 60_000);
+        this.aiCallTimestamps.set(uid, recent);
+        return recent.length >= env_1.env.whatsappAiRateLimitPerMinute;
+    }
+    recordAiCall(uid) {
+        const timestamps = this.aiCallTimestamps.get(uid) ?? [];
+        timestamps.push(Date.now());
+        this.aiCallTimestamps.set(uid, timestamps);
+    }
     async handleUnlinkedMessage(remotePhone) {
         const normalizedPhone = (0, events_1.normalizePhoneNumber)(remotePhone);
         logger_1.logger.info('Ignoring WhatsApp message from non-authorized number', { from: normalizedPhone });
@@ -818,6 +947,32 @@ class WhatsAppClient {
             return null;
         }
     }
+    async extractInboundAudioDataUrl(message) {
+        if (!(0, events_1.isAudioMessage)(message))
+            return null;
+        const mimeType = (0, events_1.getAudioMimeType)(message) || 'audio/ogg';
+        try {
+            const mediaBuffer = await (0, baileys_1.downloadMediaMessage)(message, 'buffer', {});
+            if (!mediaBuffer || mediaBuffer.length === 0) {
+                return null;
+            }
+            // Max 10MB for audio
+            const maxAudioBytes = 10 * 1024 * 1024;
+            if (mediaBuffer.length > maxAudioBytes) {
+                logger_1.logger.warn('Ignoring inbound audio because it exceeds max size', {
+                    size: mediaBuffer.length,
+                    maxAllowed: maxAudioBytes
+                });
+                return null;
+            }
+            const base64 = mediaBuffer.toString('base64');
+            return `data:${mimeType};base64,${base64}`;
+        }
+        catch (error) {
+            logger_1.logger.error('Failed to download inbound WhatsApp audio', error);
+            return null;
+        }
+    }
     async getConversationHistory(uid, phone) {
         if (!uid || uid.trim().length === 0)
             return [];
@@ -834,10 +989,9 @@ class WhatsAppClient {
             return loaded;
         }
         catch (error) {
-            logger_1.logger.error('Failed to load WhatsApp conversation history', error);
-            const empty = [];
-            this.conversationByPhone.set(cacheKey, empty);
-            return empty;
+            logger_1.logger.warn('Failed to load WhatsApp conversation history (will retry next message)', error);
+            // Do NOT cache empty on error — allow retry on next message (e.g. index still building)
+            return [];
         }
     }
     async appendConversationMessage(uid, phone, message) {

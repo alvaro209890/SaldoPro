@@ -23,6 +23,10 @@ service cloud.firestore {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
       
+      match /reminders/{reminderId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+      
       match /chatSessions/{sessionId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
         

@@ -11,7 +11,7 @@ import {
     type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './config';
-import type { Transaction, Category, UserSettings, StoredChatMessage, ChatSession } from '@/types';
+import type { Transaction, Category, UserSettings, StoredChatMessage, ChatSession, Reminder } from '@/types';
 import { generateMonthKey } from '@/utils/date';
 
 // ─── Transactions ────────────────────────────────────────────
@@ -265,4 +265,64 @@ export async function addChatMessage(
 
     return Promise.all([addPromise, updateSessionPromise]);
 }
+
+// ─── Reminders ──────────────────────────────────────────────
+
+export function onRemindersSnapshot(
+    uid: string,
+    callback: (reminders: Reminder[]) => void,
+    onError?: (error: Error) => void
+): Unsubscribe {
+    const ref = collection(db, 'users', uid, 'reminders');
+    const q = query(
+        ref,
+        orderBy('dueDate', 'asc')
+    );
+
+    return onSnapshot(
+        q,
+        (snap) => {
+            const reminders = snap.docs.map((d) => ({
+                id: d.id,
+                ...d.data(),
+            })) as Reminder[];
+            callback(reminders);
+        },
+        (error) => {
+            console.error('Error fetching reminders:', error);
+            if (onError) onError(error);
+        }
+    );
+}
+
+export async function addReminder(
+    uid: string,
+    data: Omit<Reminder, 'id' | 'createdAt' | 'updatedAt'>
+) {
+    const ref = collection(db, 'users', uid, 'reminders');
+    const now = new Date().toISOString();
+    return addDoc(ref, {
+        ...data,
+        createdAt: now,
+        updatedAt: now,
+    });
+}
+
+export async function updateReminder(
+    uid: string,
+    reminderId: string,
+    data: Partial<Omit<Reminder, 'id' | 'createdAt'>>
+) {
+    const ref = doc(db, 'users', uid, 'reminders', reminderId);
+    return updateDoc(ref, {
+        ...data,
+        updatedAt: new Date().toISOString(),
+    });
+}
+
+export async function deleteReminder(uid: string, reminderId: string) {
+    const ref = doc(db, 'users', uid, 'reminders', reminderId);
+    return deleteDoc(ref);
+}
+
 

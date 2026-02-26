@@ -11,6 +11,7 @@ import {
     X,
     Wallet,
     Sparkles,
+    Bell,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -24,6 +25,7 @@ const NAV_ITEMS = [
     { label: 'Lançamento IA', path: '/app/ai', icon: Sparkles },
     { label: 'Categorias', path: '/app/categories', icon: Tags },
     { label: 'Relatórios', path: '/app/reports', icon: PieChart },
+    { label: 'Lembretes', path: '/app/reminders', icon: Bell },
     { label: 'Configurações', path: '/app/settings', icon: Settings },
 ];
 

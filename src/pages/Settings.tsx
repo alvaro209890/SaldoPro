@@ -174,7 +174,7 @@ export function Settings() {
 
                     <form onSubmit={handleSubmit(onSubmit)} className="p-6 sm:p-10 space-y-8 bg-[#0a0f12]">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                            <div className="md:col-span-2 bg-[#0f1419] p-6 rounded-2xl border border-surface-800/80">
+                            <div className="md:col-span-2 hidden bg-[#0f1419] p-6 rounded-2xl border border-surface-800/80">
                                 <Input
                                     label="Orçamento Mensal (Meta de gastos)"
                                     type="number"
@@ -184,10 +184,6 @@ export function Settings() {
                                     error={errors.budget?.message}
                                     {...register('budget', { valueAsNumber: true })}
                                 />
-                                <p className="mt-3 text-sm text-gray-500 flex items-start gap-2">
-                                    <span className="text-indigo-400 mt-0.5">💡</span>
-                                    Defina um limite ideal de gastos mensais. Recomendamos estipular um valor 10% abaixo da sua receita. Isso habilitará o card de acompanhamento no Dashboard principal. Se deixar como 0, o card sumirá.
-                                </p>
                             </div>
 
                             <div className="bg-[#0f1419] p-6 rounded-2xl border border-surface-800/80">

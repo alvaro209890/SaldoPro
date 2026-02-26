@@ -4,6 +4,8 @@ exports.extractRawType = extractRawType;
 exports.extractMessageText = extractMessageText;
 exports.isImageMessage = isImageMessage;
 exports.getImageMimeType = getImageMimeType;
+exports.isAudioMessage = isAudioMessage;
+exports.getAudioMimeType = getAudioMimeType;
 exports.isGroupJid = isGroupJid;
 exports.isStatusJid = isStatusJid;
 exports.normalizePhoneNumber = normalizePhoneNumber;
@@ -52,6 +54,17 @@ function isImageMessage(message) {
 function getImageMimeType(message) {
     const payload = getMessageContent(message);
     const mimeType = payload?.imageMessage?.mimetype;
+    if (!mimeType || typeof mimeType !== 'string')
+        return null;
+    return mimeType;
+}
+function isAudioMessage(message) {
+    const payload = getMessageContent(message);
+    return Boolean(payload?.audioMessage);
+}
+function getAudioMimeType(message) {
+    const payload = getMessageContent(message);
+    const mimeType = payload?.audioMessage?.mimetype;
     if (!mimeType || typeof mimeType !== 'string')
         return null;
     return mimeType;

@@ -2,42 +2,35 @@ import { useEffect, useState } from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Calendar, Tag, FileText, CreditCard, DollarSign, ArrowDown, ArrowUp } from 'lucide-react';
+import { Calendar, FileText, DollarSign, ArrowDown, ArrowUp } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { Select } from '@/components/ui/Select';
-import { PAYMENT_METHOD_LABELS } from '@/utils/constants';
-import type { Transaction, Category, TransactionFormData } from '@/types';
+import type { Reminder, ReminderFormData } from '@/types';
 
-const transactionSchema = z.object({
-    type: z.enum(['income', 'expense']),
+const reminderSchema = z.object({
+    type: z.enum(['payable', 'receivable']),
     amount: z.number().min(0.01, 'O valor deve ser maior que zero'),
-    date: z.string().min(1, 'A data é obrigatória'),
-    category: z.string().min(1, 'A categoria é obrigatória'),
-    description: z.string().min(1, 'A descrição é obrigatória'),
-    paymentMethod: z.enum(['pix', 'credit', 'debit', 'cash', 'transfer', 'boleto']),
+    dueDate: z.string().min(1, 'A data de vencimento é obrigatória'),
+    title: z.string().min(1, 'O título é obrigatório'),
+    status: z.enum(['pending', 'paid']),
 });
 
-interface TransactionFormProps {
+interface ReminderFormProps {
     isOpen: boolean;
     onClose: () => void;
-    onSubmit: (data: TransactionFormData) => Promise<void>;
+    onSubmit: (data: ReminderFormData) => Promise<void>;
     onDelete?: () => Promise<void>;
-    initialData?: Transaction | null;
-    categories: Category[];
-    defaultDate?: string;
+    initialData?: Reminder | null;
 }
 
-export function TransactionForm({
+export function ReminderForm({
     isOpen,
     onClose,
     onSubmit,
     onDelete,
     initialData,
-    categories,
-    defaultDate,
-}: TransactionFormProps) {
+}: ReminderFormProps) {
     const [isLoading, setIsLoading] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -50,20 +43,18 @@ export function TransactionForm({
         reset,
         setValue,
         formState: { errors },
-    } = useForm<TransactionFormData>({
-        resolver: zodResolver(transactionSchema),
+    } = useForm<ReminderFormData>({
+        resolver: zodResolver(reminderSchema),
         defaultValues: {
-            type: 'expense',
+            type: 'payable',
             amount: 0,
-            date: defaultDate || new Date().toISOString().split('T')[0],
-            category: '',
-            description: '',
-            paymentMethod: 'pix',
+            dueDate: new Date().toISOString().split('T')[0],
+            title: '',
+            status: 'pending',
         },
     });
 
     const type = watch('type');
-    const filteredCategories = categories.filter((c) => c.type === type);
 
     useEffect(() => {
         if (isOpen) {
@@ -71,33 +62,25 @@ export function TransactionForm({
                 reset({
                     type: initialData.type,
                     amount: initialData.amount,
-                    date: initialData.date,
-                    category: initialData.category,
-                    description: initialData.description,
-                    paymentMethod: initialData.paymentMethod,
+                    dueDate: initialData.dueDate,
+                    title: initialData.title,
+                    status: initialData.status,
                 });
             } else {
                 const today = new Date().toISOString().split('T')[0];
                 reset({
-                    type: 'expense',
+                    type: 'payable',
                     amount: 0,
-                    date: defaultDate || today,
-                    category: '',
-                    description: '',
-                    paymentMethod: 'pix',
+                    dueDate: today,
+                    title: '',
+                    status: 'pending',
                 });
             }
             setShowDeleteConfirm(false);
         }
-    }, [isOpen, initialData, reset, defaultDate]);
+    }, [isOpen, initialData, reset]);
 
-    useEffect(() => {
-        if (filteredCategories.length > 0 && !initialData) {
-            setValue('category', filteredCategories[0].id);
-        }
-    }, [type, filteredCategories, setValue, initialData]);
-
-    const handleFormSubmit = async (data: TransactionFormData) => {
+    const handleFormSubmit = async (data: ReminderFormData) => {
         setIsLoading(true);
         try {
             await onSubmit(data);
@@ -126,35 +109,34 @@ export function TransactionForm({
         <Modal
             isOpen={isOpen}
             onClose={onClose}
-            title={initialData ? 'Editar Transação' : 'Nova Transação'}
+            title={initialData ? 'Editar Lembrete' : 'Novo Lembrete'}
         >
             <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-6">
                 {/* Toggle Type */}
                 <div className="grid grid-cols-2 gap-2 p-1 bg-surface-800 rounded-xl">
                     <button
                         type="button"
-                        onClick={() => setValue('type', 'expense')}
-                        className={`flex items-center justify-center gap-2 py-2 text-sm font-medium rounded-lg transition-all ${type === 'expense'
+                        onClick={() => setValue('type', 'payable')}
+                        className={`flex items-center justify-center gap-2 py-2 text-sm font-medium rounded-lg transition-all ${type === 'payable'
                             ? 'bg-red-500 text-white shadow-md'
                             : 'text-gray-400 hover:text-gray-200'
                             }`}
                     >
-                        <ArrowDown className="h-4 w-4" /> Despesa
+                        <ArrowDown className="h-4 w-4" /> A Pagar
                     </button>
                     <button
                         type="button"
-                        onClick={() => setValue('type', 'income')}
-                        className={`flex items-center justify-center gap-2 py-2 text-sm font-medium rounded-lg transition-all ${type === 'income'
+                        onClick={() => setValue('type', 'receivable')}
+                        className={`flex items-center justify-center gap-2 py-2 text-sm font-medium rounded-lg transition-all ${type === 'receivable'
                             ? 'bg-emerald-500 text-white shadow-md'
                             : 'text-gray-400 hover:text-gray-200'
                             }`}
                     >
-                        <ArrowUp className="h-4 w-4" /> Receita
+                        <ArrowUp className="h-4 w-4" /> A Receber
                     </button>
                 </div>
 
                 <div className="grid gap-6 sm:grid-cols-2">
-                    {/* Amount field needs custom parsing so input type text but logic handles it visually better? Number is simpler for MVP */}
                     <div className="sm:col-span-2">
                         <Controller
                             name="amount"
@@ -191,51 +173,19 @@ export function TransactionForm({
                     <Input
                         label="Descrição"
                         icon={FileText}
-                        placeholder="Ex: Supermercado"
-                        error={errors.description?.message}
-                        {...register('description')}
-                    />
-
-                    <Controller
-                        name="category"
-                        control={control}
-                        render={({ field }) => (
-                            <Select
-                                label="Categoria"
-                                icon={Tag}
-                                error={errors.category?.message}
-                                options={[
-                                    { value: '', label: 'Selecione...' },
-                                    ...filteredCategories.map((c) => ({ value: c.id, label: c.name })),
-                                ]}
-                                {...field}
-                            />
-                        )}
+                        placeholder="Ex: Aluguel"
+                        error={errors.title?.message}
+                        {...register('title')}
+                        className="sm:col-span-2"
                     />
 
                     <Input
-                        label="Data"
+                        label="Vencimento"
                         type="date"
                         icon={Calendar}
-                        error={errors.date?.message}
-                        {...register('date')}
-                    />
-
-                    <Controller
-                        name="paymentMethod"
-                        control={control}
-                        render={({ field }) => (
-                            <Select
-                                label="Forma de Pagamento"
-                                icon={CreditCard}
-                                error={errors.paymentMethod?.message}
-                                options={Object.entries(PAYMENT_METHOD_LABELS).map(([value, label]) => ({
-                                    value,
-                                    label,
-                                }))}
-                                {...field}
-                            />
-                        )}
+                        error={errors.dueDate?.message}
+                        {...register('dueDate')}
+                        className="sm:col-span-2"
                     />
                 </div>
 

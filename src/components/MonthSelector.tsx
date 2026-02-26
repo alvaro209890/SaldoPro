@@ -11,7 +11,7 @@ export function MonthSelector({ currentMonthKey, onChange }: MonthSelectorProps)
     const handleNext = () => onChange(navigateMonth(currentMonthKey, 1));
 
     return (
-        <div className="flex items-center gap-4 rounded-xl border border-surface-700 bg-surface-800/50 p-2 glass">
+        <div className="flex w-full sm:w-auto items-center justify-between sm:justify-center gap-4 rounded-xl border border-surface-700 bg-surface-800/50 p-2 glass">
             <button
                 onClick={handlePrev}
                 className="rounded-lg p-2 text-gray-400 transition-colors hover:bg-surface-700 hover:text-white"

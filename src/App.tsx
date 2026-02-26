@@ -12,6 +12,7 @@ import { Categories } from '@/pages/Categories';
 import { Reports } from '@/pages/Reports';
 import { Settings } from '@/pages/Settings';
 import { AIAssistant } from '@/pages/AIAssistant';
+import { Reminders } from '@/pages/Reminders';
 
 export function App() {
     return (
@@ -30,6 +31,7 @@ export function App() {
                     <Route path="reports" element={<Reports />} />
                     <Route path="settings" element={<Settings />} />
                     <Route path="ai" element={<AIAssistant />} />
+                    <Route path="reminders" element={<Reminders />} />
                 </Route>
             </Route>
 

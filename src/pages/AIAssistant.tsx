@@ -6,7 +6,7 @@ import { useChatSessions } from '@/hooks/useChatSessions';
 import { chatWithAI, type ChatMessage } from '@/services/ai';
 import { uploadImageToCloudinary } from '@/services/cloudinary';
 import { Button } from '@/components/ui/Button';
-import { Sparkles, Send, Bot, ImagePlus, X, User, MessageSquarePlus, MessageSquare, Trash2 } from 'lucide-react';
+import { Sparkles, Send, Bot, ImagePlus, X, User, MessageSquarePlus, MessageSquare, Trash2, Menu } from 'lucide-react';
 import { toast } from 'sonner';
 import { generateMonthKey } from '@/utils/date';
 import ReactMarkdown from 'react-markdown';
@@ -39,6 +39,7 @@ export function AIAssistant() {
     const [imagePreview, setImagePreview] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const [showMobileSidebar, setShowMobileSidebar] = useState(false);
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -200,29 +201,37 @@ export function AIAssistant() {
         : [{ id: 'intro', role: 'assistant' as const, content: 'Olá! Sou o SaldoPro AI. Posso te ajudar a analisar seus gastos, lançar novas despesas ou editar antigos lançamentos.\n\nDescreva seu lançamento em texto para eu adicionar automaticamente!' }];
 
     return (
-        <div className="flex h-full w-full overflow-hidden bg-gray-950 text-gray-100 font-sans">
+        <div className="flex h-full w-full overflow-hidden bg-gray-950 text-gray-100 font-sans relative">
 
             {/* Sidebar with Sessions */}
-            <div className="w-80 shrink-0 flex flex-col border-r border-surface-800 bg-surface-900/50 relative z-10">
+            <div className={`w-full md:w-80 shrink-0 flex-col border-r border-surface-800 bg-surface-900/95 md:bg-surface-900/50 absolute inset-y-0 left-0 md:relative z-30 md:z-10 h-full backdrop-blur-xl md:backdrop-blur-none transition-transform duration-300 ${showMobileSidebar ? 'flex translate-x-0' : 'hidden md:flex md:translate-x-0'}`}>
                 <div className="p-4 border-b border-surface-800 flex flex-col gap-4">
 
-                    <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
-                            <Sparkles className="w-5 h-5 text-indigo-400" />
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
+                                <Sparkles className="w-5 h-5 text-indigo-400" />
+                            </div>
+                            <div>
+                                <h1 className="text-xl font-bold text-white leading-tight">SaldoPro AI</h1>
+                                <p className="text-xs text-green-400 font-medium flex items-center gap-1.5">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span> Online
+                                </p>
+                            </div>
                         </div>
-                        <div>
-                            <h1 className="text-xl font-bold text-white leading-tight">SaldoPro AI</h1>
-                            <p className="text-xs text-green-400 font-medium flex items-center gap-1.5">
-                                <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span> Online
-                            </p>
-                        </div>
+                        <button onClick={() => setShowMobileSidebar(false)} className="md:hidden p-2 text-gray-400 hover:text-white transition-colors">
+                            <X className="w-6 h-6" />
+                        </button>
                     </div>
                 </div>
 
                 <div className="px-4 pt-4 pb-2">
 
                     <Button
-                        onClick={handleCreateSession}
+                        onClick={() => {
+                            handleCreateSession();
+                            setShowMobileSidebar(false);
+                        }}
                         className="w-full justify-start gap-2 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/20 rounded-xl h-11 transition-all"
                     >
                         <MessageSquarePlus className="w-4 h-4" />
@@ -239,7 +248,10 @@ export function AIAssistant() {
                         sessions.map(session => (
                             <div
                                 key={session.id}
-                                onClick={() => setActiveSessionId(session.id)}
+                                onClick={() => {
+                                    setActiveSessionId(session.id);
+                                    setShowMobileSidebar(false);
+                                }}
                                 className={`group flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all duration-200 ${activeSessionId === session.id
                                     ? 'bg-indigo-500/10 text-indigo-400 relative'
                                     : 'bg-transparent text-gray-400 hover:bg-surface-800/50 hover:text-gray-200'
@@ -254,7 +266,7 @@ export function AIAssistant() {
                                 </div>
                                 <button
                                     onClick={(e) => handleDeleteSession(e, session.id)}
-                                    className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-500 hover:text-red-400 hover:bg-surface-700 rounded-lg transition-all shrink-0"
+                                    className="opacity-100 md:opacity-0 group-hover:opacity-100 p-1.5 text-gray-500 hover:text-red-400 hover:bg-surface-700 rounded-lg transition-all shrink-0"
                                     title="Apagar conversa"
                                 >
                                     <Trash2 className="w-3.5 h-3.5" />
@@ -266,7 +278,18 @@ export function AIAssistant() {
             </div>
 
             {/* Main Chat Area */}
-            <div className="flex-1 bg-surface-950 flex flex-col overflow-hidden relative">
+            <div className="flex-1 bg-surface-950 flex flex-col overflow-hidden relative w-full">
+
+                {/* Mobile Header Toggle */}
+                <div className="md:hidden p-4 border-b border-surface-800 bg-surface-900/50 flex flex-row items-center gap-3 z-10 relative">
+                    <button onClick={() => setShowMobileSidebar(true)} className="p-2 -ml-2 text-gray-400 hover:text-white rounded-lg transition-colors">
+                        <Menu className="w-6 h-6" />
+                    </button>
+                    <div className="flex items-center gap-2">
+                        <Sparkles className="w-4 h-4 text-indigo-400" />
+                        <span className="font-semibold text-white">SaldoPro AI</span>
+                    </div>
+                </div>
 
                 {/* Decorative background gradients */}
                 <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-indigo-500/5 rounded-full blur-[120px] pointer-events-none" />
