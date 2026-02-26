@@ -55,7 +55,7 @@ function formatBRL(value: number): string {
   return `R$ ${value.toFixed(2).replace('.', ',')}`;
 }
 
-export async function processWhatsAppAIMessage(uid: string, messages: GroqChatMessage[]): Promise<string> {
+export async function processWhatsAppAIMessage(uid: string, messages: GroqChatMessage[], isFirstMessage = false): Promise<string> {
   if (!uid || uid.trim().length === 0) {
     return 'Não foi possível identificar a conta vinculada para processar a mensagem.';
   }
@@ -84,7 +84,8 @@ export async function processWhatsAppAIMessage(uid: string, messages: GroqChatMe
     profile,
     settings,
     categories,
-    recentTransactions
+    recentTransactions,
+    isFirstMessage
   };
 
   const ai = await queryGroqAssistant(sanitizedMessages, context);

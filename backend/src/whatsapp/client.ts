@@ -456,6 +456,15 @@ export class WhatsAppClient {
     if (env.whatsappAiEnabled && hasAiInput) {
       try {
         const conversation = await this.getConversationHistory(ownerUid, remotePhone);
+        const isFirstMessage = conversation.length === 0;
+
+        if (isFirstMessage) {
+          logger.info('MSG_WELCOME: first message detected, AI will introduce itself', {
+            uid: ownerUid,
+            phone: remotePhone
+          });
+        }
+
         const aiMessages: GroqChatMessage[] = conversation.map((entry, index) => ({
           role: entry.role,
           content: entry.content,
@@ -464,7 +473,7 @@ export class WhatsAppClient {
             : {})
         }));
 
-        const aiReply = await processWhatsAppAIMessage(ownerUid, aiMessages);
+        const aiReply = await processWhatsAppAIMessage(ownerUid, aiMessages, isFirstMessage);
         if (aiReply.trim()) {
           await this.sendWithRetry(remoteJid, aiReply.trim(), 'auto_reply', ownerUid);
           await this.appendConversationMessage(ownerUid, remotePhone, {

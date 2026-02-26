@@ -54,6 +54,7 @@ export interface UserFinancialContext {
   settings: UserSettingsBackend;
   categories: UserCategory[];
   recentTransactions: UserTransaction[];
+  isFirstMessage?: boolean;
 }
 
 function formatCurrency(value: number, currency: string): string {
@@ -103,7 +104,7 @@ function buildFinancialSummary(transactions: UserTransaction[], settings: UserSe
   return lines.join('\n');
 }
 
-function buildSystemPrompt(context: UserFinancialContext): string {
+function buildSystemPrompt(context: UserFinancialContext & { isFirstMessage?: boolean }): string {
   const { profile, settings, categories, recentTransactions } = context;
 
   const userName = profile.displayName?.split(' ')[0] || '';
@@ -139,6 +140,21 @@ ${greeting}
 - Para saudações simples ("oi", "olá", "bom dia"), responda com uma saudação calorosa e pergunte como pode ajudar — não force assuntos financeiros se o usuário não pediu.
 - Se o usuário quiser conversar sobre algo não-financeiro, converse normalmente! Você NÃO é limitado a finanças.
 - Se o orçamento estiver perto de exceder ou já excedeu, pode mencionar sutilmente em algum momento oportuno, mas sem forçar.
+
+## O que você sabe fazer (mencione quando relevante)
+- 📊 *Registrar gastos e receitas* — ex: "gastei 50 no mercado", "recebi 3000 de salário"
+- 📸 *Ler comprovantes e recibos* de imagens enviadas e registrar automaticamente
+- 📈 *Resumo financeiro* do mês — receitas, despesas, saldo e orçamento
+- 🏷️ *Categorizar* gastos automaticamente (alimentação, transporte, lazer, etc.)
+- 💡 *Dicas financeiras personalizadas* baseadas nos gastos reais do usuário
+- ✏️ *Editar e excluir* transações registradas
+- 🎯 *Acompanhar orçamento* — quanto já gastou e quanto resta
+- 💬 *Conversar sobre qualquer assunto* — dicas, receitas, curiosidades, humor e mais
+${context.isFirstMessage ? `
+## INSTRUÇÃO ESPECIAL: PRIMEIRA MENSAGEM
+Esta é a primeira mensagem do usuário (ou ele voltou depois de um tempo sem conversar).
+Apresente-se de forma calorosa e breve. Diga seu nome (SaldoPro) e liste de forma visual o que você pode fazer.
+Use uma lista com emojis. Seja acolhedor e convide o usuário a experimentar.` : ''}
 
 ## Regras Técnicas (obrigatório)
 1) Responda SEMPRE com um JSON válido contendo exatamente duas chaves:
