@@ -48,6 +48,7 @@ export interface GroqChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   imageDataUrl?: string;
+  audioDataUrl?: string;
 }
 
 export interface UserFinancialContext {
@@ -477,9 +478,21 @@ export async function queryGroqAssistant(
     throw new Error('At least one message is required');
   }
 
+  // --- CHECK REQUEST TYPE ---
   const lastMessage = messages[messages.length - 1];
   const isVisionRequest = Boolean(lastMessage?.imageDataUrl);
+  const isAudioRequest = Boolean(lastMessage?.audioDataUrl);
 
+  // --- AUDIO REQUESTS: Fast-path to Gemini (Groq does not support conversational audio) ---
+  if (isAudioRequest) {
+    if (!env.geminiApiKey) {
+      throw new Error('Transcricao e analise de audio indisponivel. Configure a chave do Gemini.');
+    }
+    logger.info('Audio request detected, bypassing Groq and routing directly to Gemini.');
+    return queryGeminiAssistant(messages, context);
+  }
+
+  // --- PREPARE GROQ MESSAGES ---
   const formattedMessages = messages.map((message) => {
     if (message.imageDataUrl) {
       return {
@@ -602,17 +615,25 @@ async function queryGeminiAssistant(
       }
     }
 
+    if (msg.audioDataUrl) {
+      const match = msg.audioDataUrl.match(/^data:(.+?);base64,(.+)$/);
+      if (match) {
+        parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+      }
+    }
+
     if (parts.length > 0) {
       geminiContents.push({ role, parts });
     }
   }
 
+  const hasMedia = isVisionRequest || Boolean(lastMessage?.audioDataUrl);
   const geminiBody = JSON.stringify({
     systemInstruction: { parts: [{ text: systemPrompt }] },
     contents: geminiContents,
     generationConfig: {
       temperature: 0.5,
-      ...(isVisionRequest ? {} : { responseMimeType: 'application/json' })
+      ...(hasMedia ? {} : { responseMimeType: 'application/json' })
     }
   });
 

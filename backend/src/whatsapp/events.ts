@@ -43,6 +43,18 @@ export function getImageMimeType(message: proto.IWebMessageInfo): string | null 
   return mimeType;
 }
 
+export function isAudioMessage(message: proto.IWebMessageInfo): boolean {
+  const payload = getMessageContent(message);
+  return Boolean(payload?.audioMessage);
+}
+
+export function getAudioMimeType(message: proto.IWebMessageInfo): string | null {
+  const payload = getMessageContent(message);
+  const mimeType = payload?.audioMessage?.mimetype;
+  if (!mimeType || typeof mimeType !== 'string') return null;
+  return mimeType;
+}
+
 export function isGroupJid(jid: string | null | undefined): boolean {
   return Boolean(jid && jid.endsWith('@g.us'));
 }

@@ -18,6 +18,7 @@ export interface WhatsAppMessageRecord {
     isGroup: boolean;
     isSelfChat?: boolean;
     hasImage?: boolean;
+    hasAudio?: boolean;
   };
 }
 

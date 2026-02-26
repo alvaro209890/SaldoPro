@@ -33,6 +33,8 @@ import {
   extractMessageText,
   extractRawType,
   getImageMimeType,
+  isAudioMessage,
+  getAudioMimeType,
   isGroupJid,
   isImageMessage,
   isStatusJid,
@@ -433,10 +435,11 @@ export class WhatsAppClient {
     const text = extractMessageText(message);
     const rawType = extractRawType(message);
     const imageDataUrl = await this.extractInboundImageDataUrl(message);
-    const conversationText = text.trim() || (imageDataUrl ? IMAGE_ONLY_FALLBACK_TEXT : '');
+    const audioDataUrl = await this.extractInboundAudioDataUrl(message);
+    const conversationText = text.trim() || (imageDataUrl ? IMAGE_ONLY_FALLBACK_TEXT : '') || (audioDataUrl ? 'Audio enviado no WhatsApp.' : '');
 
     // Skip messages with no usable content (e.g. decryption failures)
-    if (!conversationText && !imageDataUrl) {
+    if (!conversationText && !imageDataUrl && !audioDataUrl) {
       this.rememberInbound(messageId);
       logger.info('MSG_SKIP: empty message (likely decryption failure), ignoring', {
         messageId,
@@ -521,7 +524,8 @@ export class WhatsAppClient {
         fromMe: Boolean(key.fromMe),
         isGroup: false,
         isSelfChat,
-        hasImage: Boolean(imageDataUrl)
+        hasImage: Boolean(imageDataUrl),
+        hasAudio: Boolean(audioDataUrl)
       }
     };
 
@@ -532,10 +536,11 @@ export class WhatsAppClient {
       uid: binding.uid,
       phone: remotePhone,
       textLength: conversationText.length,
-      hasImage: Boolean(imageDataUrl)
+      hasImage: Boolean(imageDataUrl),
+      hasAudio: Boolean(audioDataUrl)
     });
 
-    await this.sendSmartReply(binding.uid, remoteJid, remotePhone, conversationText, imageDataUrl);
+    await this.sendSmartReply(binding.uid, remoteJid, remotePhone, conversationText, imageDataUrl, audioDataUrl);
   }
 
   private async sendSmartReply(
@@ -543,9 +548,10 @@ export class WhatsAppClient {
     remoteJid: string,
     remotePhone: string,
     inboundText: string,
-    imageDataUrl: string | null
+    imageDataUrl: string | null,
+    audioDataUrl: string | null = null
   ): Promise<void> {
-    const hasAiInput = inboundText.trim().length > 0 || Boolean(imageDataUrl);
+    const hasAiInput = inboundText.trim().length > 0 || Boolean(imageDataUrl) || Boolean(audioDataUrl);
     if (env.whatsappAiEnabled && hasAiInput) {
       // Rate limiting check
       if (this.isRateLimited(ownerUid)) {
@@ -586,17 +592,25 @@ export class WhatsAppClient {
           content: entry.content
         }));
 
-        // Always add the current message at the end with the image if present
+        // Always add the current message at the end with the image/audio if present
+        let finalContent = inboundText.trim();
+        if (!finalContent) {
+          if (imageDataUrl) finalContent = 'Analise a imagem enviada e registre o lançamento corretamente.';
+          else if (audioDataUrl) finalContent = 'Transcreva e interprete o audio enviado, e execute a acao de registrar ou responder.';
+        }
+
         aiMessages.push({
           role: 'user',
-          content: inboundText.trim() || (imageDataUrl ? 'Analise a imagem enviada e registre o lançamento corretamente.' : ''),
-          ...(imageDataUrl ? { imageDataUrl } : {})
+          content: finalContent,
+          ...(imageDataUrl ? { imageDataUrl } : {}),
+          ...(audioDataUrl ? { audioDataUrl } : {})
         });
 
-        logger.info('MSG_AI_CONTEXT: sending to Groq', {
+        logger.info('MSG_AI_CONTEXT: sending to AI', {
           historyCount: conversation.length,
           totalMessages: aiMessages.length,
           hasImage: Boolean(imageDataUrl),
+          hasAudio: Boolean(audioDataUrl),
           isGreeting,
           isCapabilitiesQuestion,
           isConversationRestart,
@@ -604,10 +618,14 @@ export class WhatsAppClient {
         });
 
         // Save user message to conversation cache for future context
-        if (inboundText.trim() || imageDataUrl) {
+        if (inboundText.trim() || imageDataUrl || audioDataUrl) {
+          let textForHistory = inboundText.trim();
+          if (!textForHistory) {
+            textForHistory = imageDataUrl ? 'Imagem enviada no WhatsApp.' : 'Audio enviado no WhatsApp.';
+          }
           await this.appendConversationMessage(ownerUid, remotePhone, {
             role: 'user',
-            content: inboundText.trim() || 'Imagem enviada no WhatsApp.'
+            content: textForHistory
           });
         }
 
@@ -1032,6 +1050,34 @@ export class WhatsAppClient {
       return `data:${mimeType};base64,${base64}`;
     } catch (error) {
       logger.error('Failed to download inbound WhatsApp image', error);
+      return null;
+    }
+  }
+
+  private async extractInboundAudioDataUrl(message: proto.IWebMessageInfo): Promise<string | null> {
+    if (!isAudioMessage(message)) return null;
+
+    const mimeType = getAudioMimeType(message) || 'audio/ogg';
+    try {
+      const mediaBuffer = await downloadMediaMessage(message, 'buffer', {});
+      if (!mediaBuffer || mediaBuffer.length === 0) {
+        return null;
+      }
+
+      // Max 10MB for audio
+      const maxAudioBytes = 10 * 1024 * 1024;
+      if (mediaBuffer.length > maxAudioBytes) {
+        logger.warn('Ignoring inbound audio because it exceeds max size', {
+          size: mediaBuffer.length,
+          maxAllowed: maxAudioBytes
+        });
+        return null;
+      }
+
+      const base64 = mediaBuffer.toString('base64');
+      return `data:${mimeType};base64,${base64}`;
+    } catch (error) {
+      logger.error('Failed to download inbound WhatsApp audio', error);
       return null;
     }
   }
