@@ -382,9 +382,10 @@ class WhatsAppClient {
         // Skip messages with no usable content (e.g. decryption failures)
         if (!conversationText && !imageDataUrl && !audioDataUrl) {
             this.rememberInbound(messageId);
-            logger_1.logger.info('MSG_SKIP: empty message (likely decryption failure), ignoring', {
+            logger_1.logger.info('MSG_SKIP: empty message (likely decryption failure or unsupported media), ignoring', {
                 messageId,
                 rawType,
+                hasAudioDataUrl: Boolean(audioDataUrl),
                 from: remotePhone
             });
             return;
@@ -948,28 +949,33 @@ class WhatsAppClient {
         }
     }
     async extractInboundAudioDataUrl(message) {
-        if (!(0, events_1.isAudioMessage)(message))
+        const rawType = (0, events_1.extractRawType)(message);
+        const isAudio = (0, events_1.isAudioMessage)(message);
+        logger_1.logger.info('AUDIO_EXTRACT_START', { messageId: message.key.id, rawType, isAudio });
+        if (!isAudio)
             return null;
         const mimeType = (0, events_1.getAudioMimeType)(message) || 'audio/ogg';
         try {
             const mediaBuffer = await (0, baileys_1.downloadMediaMessage)(message, 'buffer', {});
             if (!mediaBuffer || mediaBuffer.length === 0) {
+                logger_1.logger.warn('AUDIO_EXTRACT_FAIL: buffer is empty');
                 return null;
             }
             // Max 10MB for audio
             const maxAudioBytes = 10 * 1024 * 1024;
             if (mediaBuffer.length > maxAudioBytes) {
-                logger_1.logger.warn('Ignoring inbound audio because it exceeds max size', {
+                logger_1.logger.warn('AUDIO_EXTRACT_FAIL: exceeds max size', {
                     size: mediaBuffer.length,
                     maxAllowed: maxAudioBytes
                 });
                 return null;
             }
             const base64 = mediaBuffer.toString('base64');
+            logger_1.logger.info('AUDIO_EXTRACT_SUCCESS', { size: mediaBuffer.length, mimeType });
             return `data:${mimeType};base64,${base64}`;
         }
         catch (error) {
-            logger_1.logger.error('Failed to download inbound WhatsApp audio', error);
+            logger_1.logger.error('AUDIO_EXTRACT_ERROR: Failed to download inbound WhatsApp audio', error);
             return null;
         }
     }

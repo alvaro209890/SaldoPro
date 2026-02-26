@@ -441,9 +441,10 @@ export class WhatsAppClient {
     // Skip messages with no usable content (e.g. decryption failures)
     if (!conversationText && !imageDataUrl && !audioDataUrl) {
       this.rememberInbound(messageId);
-      logger.info('MSG_SKIP: empty message (likely decryption failure), ignoring', {
+      logger.info('MSG_SKIP: empty message (likely decryption failure or unsupported media), ignoring', {
         messageId,
         rawType,
+        hasAudioDataUrl: Boolean(audioDataUrl),
         from: remotePhone
       });
       return;
@@ -1055,19 +1056,24 @@ export class WhatsAppClient {
   }
 
   private async extractInboundAudioDataUrl(message: proto.IWebMessageInfo): Promise<string | null> {
-    if (!isAudioMessage(message)) return null;
+    const rawType = extractRawType(message);
+    const isAudio = isAudioMessage(message);
+    logger.info('AUDIO_EXTRACT_START', { messageId: message.key.id, rawType, isAudio });
+
+    if (!isAudio) return null;
 
     const mimeType = getAudioMimeType(message) || 'audio/ogg';
     try {
       const mediaBuffer = await downloadMediaMessage(message, 'buffer', {});
       if (!mediaBuffer || mediaBuffer.length === 0) {
+        logger.warn('AUDIO_EXTRACT_FAIL: buffer is empty');
         return null;
       }
 
       // Max 10MB for audio
       const maxAudioBytes = 10 * 1024 * 1024;
       if (mediaBuffer.length > maxAudioBytes) {
-        logger.warn('Ignoring inbound audio because it exceeds max size', {
+        logger.warn('AUDIO_EXTRACT_FAIL: exceeds max size', {
           size: mediaBuffer.length,
           maxAllowed: maxAudioBytes
         });
@@ -1075,9 +1081,10 @@ export class WhatsAppClient {
       }
 
       const base64 = mediaBuffer.toString('base64');
+      logger.info('AUDIO_EXTRACT_SUCCESS', { size: mediaBuffer.length, mimeType });
       return `data:${mimeType};base64,${base64}`;
     } catch (error) {
-      logger.error('Failed to download inbound WhatsApp audio', error);
+      logger.error('AUDIO_EXTRACT_ERROR: Failed to download inbound WhatsApp audio', error);
       return null;
     }
   }

@@ -60,11 +60,11 @@ function getImageMimeType(message) {
 }
 function isAudioMessage(message) {
     const payload = getMessageContent(message);
-    return Boolean(payload?.audioMessage);
+    return Boolean(payload?.audioMessage || payload?.ptvMessage);
 }
 function getAudioMimeType(message) {
     const payload = getMessageContent(message);
-    const mimeType = payload?.audioMessage?.mimetype;
+    const mimeType = payload?.audioMessage?.mimetype || payload?.ptvMessage?.mimetype;
     if (!mimeType || typeof mimeType !== 'string')
         return null;
     return mimeType;

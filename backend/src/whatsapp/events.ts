@@ -45,12 +45,12 @@ export function getImageMimeType(message: proto.IWebMessageInfo): string | null 
 
 export function isAudioMessage(message: proto.IWebMessageInfo): boolean {
   const payload = getMessageContent(message);
-  return Boolean(payload?.audioMessage);
+  return Boolean(payload?.audioMessage || payload?.ptvMessage);
 }
 
 export function getAudioMimeType(message: proto.IWebMessageInfo): string | null {
   const payload = getMessageContent(message);
-  const mimeType = payload?.audioMessage?.mimetype;
+  const mimeType = payload?.audioMessage?.mimetype || payload?.ptvMessage?.mimetype;
   if (!mimeType || typeof mimeType !== 'string') return null;
   return mimeType;
 }
