@@ -27,10 +27,20 @@ const server = app.listen(env_1.env.port, () => {
 void whatsappClient.start().catch((error) => {
     logger_1.logger.error('Failed to start WhatsApp client', error);
 });
+// Keep-alive: pings own /healthz every 5 minutes to prevent Render free-tier spin-down
+if (env_1.env.backendUrl) {
+    const KEEP_ALIVE_MS = 5 * 60 * 1000;
+    setInterval(() => {
+        fetch(`${env_1.env.backendUrl}/healthz`).catch(() => { });
+    }, KEEP_ALIVE_MS);
+    logger_1.logger.info('Keep-alive enabled', { url: `${env_1.env.backendUrl}/healthz`, intervalMs: KEEP_ALIVE_MS });
+}
 const shutdown = async (signal) => {
-    logger_1.logger.warn('Shutdown signal received', { signal });
+    logger_1.logger.warn('Shutdown signal received — closing gracefully', { signal });
     server.close();
     await whatsappClient.shutdown();
+    // Brief pause so the WebSocket close frame is sent before the process exits
+    await new Promise((resolve) => setTimeout(resolve, 500));
     process.exit(0);
 };
 process.on('SIGTERM', () => {

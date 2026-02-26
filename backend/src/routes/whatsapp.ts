@@ -25,26 +25,39 @@ export function createWhatsAppRouter(client: WhatsAppClient): Router {
       return;
     }
 
+    const status = client.getStatus();
     let bodyContent: string;
+    let refreshSec = 3;
+
     try {
-      const payload = await client.getQrPayload();
-      if (!payload.available) {
-        if (payload.reason === 'already_connected') {
-          bodyContent = '<p class="status ok">&#x2705; WhatsApp já está conectado!</p>';
-        } else if (payload.reason === 'expired') {
-          bodyContent = '<p class="status warn">&#x23F3; QR expirado. Aguardando novo QR code...</p>';
-        } else {
-          bodyContent = '<p class="status info">&#x1F4F1; Iniciando conexão, aguarde o QR code...</p>';
-        }
-      } else {
+      if (status.connected) {
         bodyContent = `
-          <img src="${payload.qrPngBase64}" alt="WhatsApp QR Code" />
-          <p class="expires">Expira em: <strong>${payload.expiresInSec}s</strong></p>
-          <p class="hint">Abra o WhatsApp &rarr; Dispositivos conectados &rarr; Conectar dispositivo</p>
-        `;
+          <div class="connected-box">
+            <div class="check">&#x2713;</div>
+            <p>WhatsApp conectado</p>
+            <p class="phone">${status.phone ?? ''}</p>
+          </div>`;
+        refreshSec = 10;
+      } else {
+        const payload = await client.getQrPayload();
+        if (payload.available) {
+          bodyContent = `
+            <img src="${payload.qrPngBase64}" alt="WhatsApp QR Code" />
+            <p class="expires">Expira em: <strong>${payload.expiresInSec}s</strong></p>
+            <p class="hint">Abra o WhatsApp &rarr; Dispositivos conectados &rarr; Conectar dispositivo</p>`;
+        } else {
+          // no_qr or expired — show spinner and wait for next QR
+          bodyContent = `
+            <div class="spinner"></div>
+            <p class="hint">Conectando ao WhatsApp, aguarde...</p>`;
+          refreshSec = 2;
+        }
       }
     } catch {
-      bodyContent = '<p class="status warn">Erro ao carregar QR code. Recarregue a página.</p>';
+      bodyContent = `
+        <div class="spinner"></div>
+        <p class="hint">Conectando ao WhatsApp, aguarde...</p>`;
+      refreshSec = 2;
     }
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -52,9 +65,9 @@ export function createWhatsAppRouter(client: WhatsAppClient): Router {
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="refresh" content="3" />
+  <meta http-equiv="refresh" content="${refreshSec}" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SaldoPro — WhatsApp QR Code</title>
+  <title>SaldoPro — WhatsApp</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -71,26 +84,36 @@ export function createWhatsAppRouter(client: WhatsAppClient): Router {
     }
     h1 { font-size: 1.4rem; letter-spacing: 0.02em; color: #e5e7eb; }
     img {
-      width: 280px;
-      height: 280px;
-      background: #ffffff;
-      padding: 16px;
-      border-radius: 12px;
-      display: block;
+      width: 280px; height: 280px;
+      background: #fff; padding: 16px;
+      border-radius: 12px; display: block;
     }
     .expires { font-size: 0.9rem; color: #9ca3af; }
-    .hint { font-size: 0.8rem; color: #6b7280; text-align: center; max-width: 280px; }
-    .status { font-size: 1.1rem; padding: 12px 24px; border-radius: 8px; }
-    .ok   { background: #14532d; color: #bbf7d0; }
-    .warn { background: #451a03; color: #fde68a; }
-    .info { background: #1e3a5f; color: #bfdbfe; }
-    footer { font-size: 0.7rem; color: #4b5563; }
+    .hint { font-size: 0.85rem; color: #9ca3af; text-align: center; max-width: 300px; }
+    .connected-box { text-align: center; }
+    .connected-box .check {
+      font-size: 3rem; color: #22c55e;
+      width: 72px; height: 72px; line-height: 72px;
+      border-radius: 50%; background: #14532d;
+      margin: 0 auto 12px;
+    }
+    .connected-box p { font-size: 1.1rem; }
+    .connected-box .phone { font-size: 0.9rem; color: #9ca3af; margin-top: 4px; }
+    .spinner {
+      width: 48px; height: 48px;
+      border: 4px solid #1f2937;
+      border-top-color: #3b82f6;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    footer { font-size: 0.7rem; color: #4b5563; margin-top: 12px; }
   </style>
 </head>
 <body>
   <h1>SaldoPro &mdash; WhatsApp</h1>
   ${bodyContent}
-  <footer>Página atualiza automaticamente a cada 5 segundos</footer>
+  <footer>Atualiza automaticamente</footer>
 </body>
 </html>`);
   });

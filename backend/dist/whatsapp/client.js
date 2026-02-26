@@ -74,6 +74,13 @@ class WhatsAppClient {
     requestedLinkCodePhones = new Set();
     async start() {
         await (0, promises_1.mkdir)(env_1.env.whatsappAuthDir, { recursive: true });
+        const files = await (0, promises_1.readdir)(env_1.env.whatsappAuthDir);
+        const hasSavedSession = files.some((f) => f.includes('creds'));
+        logger_1.logger.info('WhatsApp auth state', {
+            authDir: env_1.env.whatsappAuthDir,
+            filesFound: files.length,
+            hasSavedSession
+        });
         await this.connect();
     }
     async shutdown() {

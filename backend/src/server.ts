@@ -28,10 +28,21 @@ void whatsappClient.start().catch((error) => {
   logger.error('Failed to start WhatsApp client', error);
 });
 
+// Keep-alive: pings own /healthz every 5 minutes to prevent Render free-tier spin-down
+if (env.backendUrl) {
+  const KEEP_ALIVE_MS = 5 * 60 * 1000;
+  setInterval(() => {
+    fetch(`${env.backendUrl}/healthz`).catch(() => {});
+  }, KEEP_ALIVE_MS);
+  logger.info('Keep-alive enabled', { url: `${env.backendUrl}/healthz`, intervalMs: KEEP_ALIVE_MS });
+}
+
 const shutdown = async (signal: string): Promise<void> => {
-  logger.warn('Shutdown signal received', { signal });
+  logger.warn('Shutdown signal received — closing gracefully', { signal });
   server.close();
   await whatsappClient.shutdown();
+  // Brief pause so the WebSocket close frame is sent before the process exits
+  await new Promise((resolve) => setTimeout(resolve, 500));
   process.exit(0);
 };
 

@@ -207,8 +207,8 @@ export function AIAssistant() {
                 <div className="p-4 border-b border-surface-800/50 flex flex-col gap-4">
 
                     <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0">
-                            <Sparkles className="w-5 h-5 text-white" />
+                        <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
+                            <Sparkles className="w-5 h-5 text-indigo-400" />
                         </div>
                         <div>
                             <h1 className="text-xl font-bold text-white leading-tight">SaldoPro AI</h1>
@@ -223,9 +223,9 @@ export function AIAssistant() {
 
                     <Button
                         onClick={handleCreateSession}
-                        className="w-full justify-start gap-2 bg-gradient-to-r from-surface-800 to-surface-700 hover:from-surface-700 hover:to-surface-600 text-gray-100 border border-surface-600/50 hover:border-surface-500 rounded-xl h-11 shadow-sm transition-all"
+                        className="w-full justify-start gap-2 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/20 rounded-xl h-11 transition-all"
                     >
-                        <MessageSquarePlus className="w-4 h-4 text-indigo-400" />
+                        <MessageSquarePlus className="w-4 h-4" />
                         Nova Conversa
                     </Button>
                 </div>
@@ -241,12 +241,12 @@ export function AIAssistant() {
                                 key={session.id}
                                 onClick={() => setActiveSessionId(session.id)}
                                 className={`group flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all duration-200 ${activeSessionId === session.id
-                                    ? 'bg-surface-800/80 border border-surface-600/50 text-white relative shadow-sm ring-1 ring-surface-700/50'
-                                    : 'bg-transparent border border-transparent text-gray-400 hover:bg-surface-800/40 hover:text-gray-200 hover:shadow-sm'
+                                    ? 'bg-indigo-500/10 border border-indigo-500/20 text-white relative'
+                                    : 'bg-transparent border border-transparent text-gray-400 hover:bg-surface-800/40 hover:text-gray-200'
                                     }`}
                             >
                                 {activeSessionId === session.id && (
-                                    <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-gradient-to-b from-indigo-500 to-purple-500 rounded-r-full" />
+                                    <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-indigo-500 rounded-r-full" />
                                 )}
                                 <div className="flex items-center gap-3 overflow-hidden">
                                     <MessageSquare className={`w-4 h-4 shrink-0 transition-colors ${activeSessionId === session.id ? 'text-indigo-400' : 'text-surface-500 group-hover:text-surface-400'}`} />
@@ -266,11 +266,11 @@ export function AIAssistant() {
             </div>
 
             {/* Main Chat Area */}
-            <div className="flex-1 bg-gradient-to-br from-[#0a0f14] via-[#0f1419] to-[#0c1015] flex flex-col overflow-hidden relative">
+            <div className="flex-1 bg-surface-950 flex flex-col overflow-hidden relative">
 
                 {/* Decorative background gradients */}
-                <div className="absolute top-0 left-0 w-full h-96 bg-indigo-500/5 rounded-full blur-[120px] pointer-events-none" />
-                <div className="absolute bottom-0 right-0 w-[500px] h-[500px] bg-purple-500/5 rounded-full blur-[150px] pointer-events-none" />
+                <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-indigo-500/5 rounded-full blur-[120px] pointer-events-none" />
+                <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-indigo-500/5 rounded-full blur-[150px] pointer-events-none" />
 
                 {!activeSessionId ? (
                     <div className="flex-1 flex flex-col items-center justify-center text-center p-8 relative z-10 animate-in fade-in duration-500">
@@ -280,16 +280,16 @@ export function AIAssistant() {
                                 <Sparkles className="w-12 h-12 text-indigo-400" />
                             </div>
                         </div>
-                        <h2 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-white to-gray-400 mb-3">Como posso ajudar?</h2>
+                        <h2 className="text-3xl font-bold text-white mb-3">Como posso ajudar?</h2>
                         <p className="text-gray-400 max-w-md text-sm leading-relaxed mb-8">Selecione uma conversa ao lado ou crie uma nova para começar a interagir com seu assistente financeiro inteligente.</p>
-                        <Button onClick={handleCreateSession} className="gap-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-full px-8 py-6 shadow-lg shadow-indigo-500/25 border-none transition-all hover:-translate-y-0.5 font-medium text-base">
+                        <Button onClick={handleCreateSession} className="gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-8 py-6 shadow-lg border-none transition-all font-medium text-base">
                             <MessageSquarePlus className="w-5 h-5" /> Iniciar Nova Conversa
                         </Button>
                     </div>
                 ) : (
                     <>
                         {/* Chat History View */}
-                        <div className="flex-1 overflow-y-auto px-6 py-8 custom-scrollbar space-y-8 lg:px-24 xl:px-48 relative z-10">
+                        <div className="flex-1 overflow-y-auto px-4 sm:px-6 md:px-12 py-8 custom-scrollbar space-y-8 relative z-10">
                             {displayHistory.map((msg, idx) => {
                                 const isUser = msg.role === 'user';
                                 return (
@@ -298,7 +298,7 @@ export function AIAssistant() {
                                             ${isUser ? 'bg-surface-800 border-surface-700 text-gray-400' : 'bg-indigo-900/40 border-indigo-500/30 text-indigo-400 backdrop-blur-sm'}`}>
                                             {isUser ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
                                         </div>
-                                        <div className={`space-y-2 ${isUser ? 'max-w-[80%] items-end flex flex-col' : 'w-[85%] max-w-none items-start flex flex-col'}`}>
+                                        <div className={`space-y-2 ${isUser ? 'max-w-[85%] items-end flex flex-col' : 'w-full max-w-[95%] items-start flex flex-col'}`}>
                                             {('imageUrl' in msg && msg.imageUrl) && (
                                                 <div className="p-1 rounded-2xl bg-surface-800/80 backdrop-blur-md border border-surface-700 w-fit shrink-0 overflow-hidden shadow-md">
                                                     <a href={msg.imageUrl} target="_blank" rel="noopener noreferrer">
@@ -306,10 +306,10 @@ export function AIAssistant() {
                                                     </a>
                                                 </div>
                                             )}
-                                            <div className={`px-5 py-4 text-[15px] whitespace-pre-wrap leading-relaxed border shadow-sm w-full
+                                            <div className={`px-5 py-4 text-[15px] whitespace-pre-wrap leading-relaxed shadow-sm w-full
                                                 ${isUser
-                                                    ? 'bg-gradient-to-br from-indigo-600 to-purple-600 border-indigo-500/30 text-white rounded-[1.5rem] rounded-tr-[0.5rem] shadow-indigo-500/10 w-auto max-w-full'
-                                                    : 'bg-surface-800/60 backdrop-blur-md border-surface-700/60 text-gray-200 rounded-[1.5rem] rounded-tl-[0.5rem] prose prose-invert prose-p:leading-relaxed prose-pre:bg-surface-900/80 prose-pre:border prose-pre:border-surface-700 hover:prose-a:text-indigo-400'}`}>
+                                                    ? 'bg-indigo-600 text-white rounded-2xl rounded-br-sm max-w-full'
+                                                    : 'bg-surface-900 border border-surface-800 text-gray-200 rounded-2xl rounded-tl-sm prose prose-invert prose-p:leading-relaxed prose-pre:bg-surface-950 prose-pre:border prose-pre:border-surface-800 hover:prose-a:text-indigo-400'}`}>
                                                 {isUser ? (
                                                     msg.content
                                                 ) : (
@@ -339,30 +339,33 @@ export function AIAssistant() {
                         </div>
 
                         {/* Input Area */}
-                        <div className="p-4 lg:px-24 xl:px-48 pb-8 shrink-0 relative z-20 bg-gradient-to-t from-[#0a0f14] via-[#0a0f14]/90 to-transparent pt-12">
+                        <div className="p-4 sm:px-6 md:px-12 pb-6 shrink-0 relative z-20 bg-gradient-to-t from-surface-950 via-surface-950/90 to-transparent pt-12">
                             <div className="max-w-4xl mx-auto relative group">
                                 {imagePreview && (
-                                    <div className="absolute bottom-[calc(100%+12px)] left-0 animate-in fade-in zoom-in duration-200">
-                                        <img src={imagePreview} alt="Preview" className="h-24 w-auto rounded-2xl border border-surface-600/50 object-cover shadow-2xl shadow-black/50" />
-                                        <button
-                                            onClick={handleRemoveImage}
-                                            className="absolute -top-2 -right-2 bg-surface-800 hover:bg-red-500 border border-surface-600 rounded-full p-1.5 text-white transition-colors shadow-lg"
-                                        >
-                                            <X className="w-3.5 h-3.5" />
-                                        </button>
+                                    <div className="absolute bottom-full mb-4 left-4 animate-in fade-in zoom-in duration-200">
+                                        <div className="relative inline-block border-2 border-surface-800 rounded-xl bg-surface-900 p-1">
+                                            <img src={imagePreview} alt="Preview" className="h-20 w-auto rounded-lg object-cover" />
+                                            <button
+                                                onClick={handleRemoveImage}
+                                                className="absolute -top-3 -right-3 bg-red-500 hover:bg-red-600 text-white rounded-full p-1 shadow-lg transition-colors"
+                                            >
+                                                <X className="w-4 h-4" />
+                                            </button>
+                                        </div>
                                     </div>
                                 )}
-                                <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500/20 to-purple-500/20 rounded-[2rem] blur opacity-0 group-focus-within:opacity-100 transition duration-500" />
-                                <div className="relative flex items-end bg-surface-900/90 border border-surface-700/50 rounded-[2rem] backdrop-blur-xl shadow-2xl p-1.5 gap-2 focus-within:border-indigo-500/50 focus-within:ring-1 focus-within:ring-indigo-500/50 transition-all">
+
+                                <div className="relative flex items-end bg-surface-900 border border-surface-800 rounded-xl shadow-lg focus-within:border-indigo-500/50 focus-within:ring-1 focus-within:ring-indigo-500/50 transition-all">
                                     <button
                                         type="button"
-                                        className="shrink-0 h-11 w-11 flex items-center justify-center rounded-full text-gray-400 hover:text-indigo-400 hover:bg-indigo-500/10 transition-all focus:outline-none disabled:opacity-50 mt-auto mb-1 ml-1"
+                                        className="shrink-0 h-[52px] w-[52px] flex items-center justify-center text-gray-400 hover:text-indigo-400 transition-colors disabled:opacity-50"
                                         onClick={() => fileInputRef.current?.click()}
                                         disabled={isProcessing}
                                         title="Anexar comprovante"
                                     >
                                         <ImagePlus className="w-5 h-5" />
                                     </button>
+
                                     <input
                                         type="file"
                                         accept="image/*"
@@ -370,31 +373,40 @@ export function AIAssistant() {
                                         ref={fileInputRef}
                                         onChange={handleImageChange}
                                     />
-                                    <div className="relative flex-1">
+
+                                    <div className="relative flex-1 py-[14px]">
                                         <textarea
                                             value={input}
                                             onChange={(e) => setInput(e.target.value)}
                                             onKeyDown={handleKeyDown}
                                             disabled={isProcessing}
-                                            placeholder="Descreva seu lançamento ou peça uma análise..."
-                                            className="w-full min-h-[56px] max-h-[200px] resize-none bg-transparent py-[18px] text-[15px] text-gray-100 placeholder-gray-500 transition-all focus:outline-none custom-scrollbar disabled:opacity-50"
+                                            placeholder="Descreva seu lançamento..."
+                                            className="w-full h-6 max-h-[120px] resize-none bg-transparent text-[15px] text-gray-100 placeholder-gray-500 focus:outline-none custom-scrollbar disabled:opacity-50 !p-0 leading-[24px]"
                                             rows={1}
+                                            style={{ minHeight: '24px' }}
                                         />
                                     </div>
-                                    <Button
-                                        onClick={handleSend}
-                                        disabled={(!input.trim() && !imagePreview) || isProcessing}
-                                        isLoading={isProcessing}
-                                        className={`shrink-0 h-11 w-11 p-0 rounded-full flex items-center justify-center disabled:opacity-50 transition-all mt-auto mb-1 mr-1 shadow-md
-                                            ${(input.trim() || imagePreview) && !isProcessing
-                                                ? 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white shadow-indigo-500/25 border-none'
-                                                : 'bg-surface-800 text-gray-500 border border-surface-700'}`}
-                                    >
-                                        {!isProcessing && <Send className="w-4 h-4 ml-0.5" />}
-                                    </Button>
+
+                                    <div className="px-2 py-2 flex items-end">
+                                        <button
+                                            onClick={handleSend}
+                                            disabled={(!input.trim() && !imagePreview) || isProcessing}
+                                            className={`h-9 w-9 flex items-center justify-center rounded-lg transition-all
+                                                ${(input.trim() || imagePreview) && !isProcessing
+                                                    ? 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-sm'
+                                                    : 'bg-surface-800 text-gray-500 cursor-not-allowed'}`}
+                                        >
+                                            {!isProcessing ? (
+                                                <Send className="w-[18px] h-[18px] ml-0.5" />
+                                            ) : (
+                                                <Bot className="w-[18px] h-[18px] animate-pulse" />
+                                            )}
+                                        </button>
+                                    </div>
                                 </div>
-                                <div className="text-center mt-3 text-xs text-surface-500 font-medium tracking-wide">
-                                    IAs podem cometer erros. Revise antes de salvar.
+
+                                <div className="text-center mt-3 text-xs text-surface-500">
+                                    O SaldoPro AI pode cometer erros de interpretação. Verifique os lançamentos.
                                 </div>
                             </div>
                         </div>

@@ -6,7 +6,7 @@ import makeWASocket, {
   type proto,
   type WASocket
 } from '@whiskeysockets/baileys';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, readdir, rm } from 'node:fs/promises';
 import QRCode from 'qrcode';
 import qrcodeTerminal from 'qrcode-terminal';
 import { processWhatsAppAIMessage } from '../ai/assistant';
@@ -76,6 +76,13 @@ export class WhatsAppClient {
 
   async start(): Promise<void> {
     await mkdir(env.whatsappAuthDir, { recursive: true });
+    const files = await readdir(env.whatsappAuthDir);
+    const hasSavedSession = files.some((f) => f.includes('creds'));
+    logger.info('WhatsApp auth state', {
+      authDir: env.whatsappAuthDir,
+      filesFound: files.length,
+      hasSavedSession
+    });
     await this.connect();
   }
 
