@@ -367,7 +367,23 @@ export async function resolveUidFromPhone(phone: string): Promise<string | null>
   const variants = brazilianPhoneVariants(normalizedPhone);
 
   try {
-    return await fallbackResolveUidFromPhone(variants);
+    const result = await fallbackResolveUidFromPhone(variants);
+
+    if (!result) {
+      // Log all registered numbers for debugging
+      const profiles = await scanAllProfileSettings();
+      const allNumbers = profiles.flatMap((p) =>
+        normalizeAllowedNumbers(p.data.whatsappAllowedNumbers)
+      );
+      logger.info('MSG_RESOLVE_DEBUG: phone not found in any account', {
+        incomingPhone: normalizedPhone,
+        variantsTried: variants,
+        registeredNumbers: allNumbers.slice(0, 20),
+        totalUsers: profiles.length
+      });
+    }
+
+    return result;
   } catch (error) {
     logger.error('resolveUidFromPhone: failed to scan profiles', error);
     return null;
