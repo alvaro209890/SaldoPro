@@ -6,19 +6,24 @@ import makeWASocket, {
   type proto,
   type WASocket
 } from '@whiskeysockets/baileys';
-import { mkdir, readdir, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { basename, join } from 'node:path';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import QRCode from 'qrcode';
 import qrcodeTerminal from 'qrcode-terminal';
 import { processWhatsAppAIMessage } from '../ai/assistant';
 import type { GroqChatMessage } from '../ai/groq';
 import { env } from '../config/env';
 import {
+  clearWhatsAppAuthSnapshot,
   getPhoneBinding,
   isPhoneAllowedForUid,
   getRecentConversationByPhone,
   inboundMessageExists,
+  loadWhatsAppAuthSnapshot,
   resolveUidFromAccessCode,
   resolveUidFromPhone,
+  saveWhatsAppAuthSnapshot,
   savePhoneBinding,
   saveMessageSafe
 } from '../lib/firestore';
@@ -75,9 +80,14 @@ export class WhatsAppClient {
   private readonly sentByBotOrder: string[] = [];
   private readonly conversationByPhone = new Map<string, ConversationEntry[]>();
   private readonly requestedLinkCodePhones = new Set<string>();
+  private authSyncTimer: NodeJS.Timeout | null = null;
+  private authSyncInFlight = false;
+  private authSyncQueued = false;
+  private lastAuthSnapshotHash: string | null = null;
 
   async start(): Promise<void> {
     await mkdir(env.whatsappAuthDir, { recursive: true });
+    await this.restoreAuthStateFromFirestoreIfNeeded();
     const files = await readdir(env.whatsappAuthDir);
     const hasSavedSession = files.some((f) => f.includes('creds'));
     logger.info('WhatsApp auth state', {
@@ -91,6 +101,9 @@ export class WhatsAppClient {
   async shutdown(): Promise<void> {
     this.allowReconnect = false;
     this.clearReconnectTimer();
+    this.clearAuthSyncTimer();
+    this.authSyncQueued = false;
+    await this.syncAuthStateNow();
     if (this.socket) {
       (this.socket as { ws?: { close: () => void } }).ws?.close();
     }
@@ -174,8 +187,17 @@ export class WhatsAppClient {
       this.socket = null;
     }
 
+    this.clearAuthSyncTimer();
+    this.authSyncQueued = false;
+    this.lastAuthSnapshotHash = null;
+
     await rm(env.whatsappAuthDir, { recursive: true, force: true });
     await mkdir(env.whatsappAuthDir, { recursive: true });
+    try {
+      await clearWhatsAppAuthSnapshot();
+    } catch (error) {
+      logger.error('Failed to clear WhatsApp auth snapshot in Firestore', error);
+    }
 
     this.allowReconnect = true;
     await this.connect();
@@ -197,7 +219,10 @@ export class WhatsAppClient {
 
     this.socket = socket;
 
-    socket.ev.on('creds.update', saveCreds);
+    socket.ev.on('creds.update', () => {
+      void saveCreds();
+      this.scheduleAuthStateSync();
+    });
     socket.ev.on('connection.update', (update) => {
       void this.handleConnectionUpdate(update);
     });
@@ -231,6 +256,7 @@ export class WhatsAppClient {
       this.lastDisconnectReason = null;
       this.phone = jidToPhone(this.socket?.user?.id) || null;
       this.clearQr();
+      this.scheduleAuthStateSync();
       logger.info('WhatsApp connection opened', { phone: this.phone });
       return;
     }
@@ -547,6 +573,118 @@ export class WhatsAppClient {
     if (!this.reconnectTimer) return;
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
+  }
+
+  private clearAuthSyncTimer(): void {
+    if (!this.authSyncTimer) return;
+    clearTimeout(this.authSyncTimer);
+    this.authSyncTimer = null;
+  }
+
+  private scheduleAuthStateSync(): void {
+    this.clearAuthSyncTimer();
+    this.authSyncTimer = setTimeout(() => {
+      this.authSyncTimer = null;
+      void this.syncAuthStateNow();
+    }, 1200);
+  }
+
+  private async syncAuthStateNow(): Promise<void> {
+    if (this.authSyncInFlight) {
+      this.authSyncQueued = true;
+      return;
+    }
+
+    this.authSyncInFlight = true;
+    try {
+      const files = await readdir(env.whatsappAuthDir);
+      const authFiles = files
+        .filter((filename) => filename.endsWith('.json'))
+        .sort((a, b) => a.localeCompare(b));
+
+      if (authFiles.length === 0) {
+        return;
+      }
+
+      const snapshotFiles = await Promise.all(
+        authFiles.map(async (filename) => {
+          const content = await readFile(join(env.whatsappAuthDir, filename));
+          return {
+            filename,
+            contentBase64: content.toString('base64')
+          };
+        })
+      );
+
+      const hash = this.computeAuthSnapshotHash(snapshotFiles);
+      if (hash === this.lastAuthSnapshotHash) {
+        return;
+      }
+
+      await saveWhatsAppAuthSnapshot(snapshotFiles);
+      this.lastAuthSnapshotHash = hash;
+      logger.info('WhatsApp auth snapshot synced to Firestore', {
+        fileCount: snapshotFiles.length
+      });
+    } catch (error) {
+      logger.error('Failed to sync WhatsApp auth snapshot', error);
+    } finally {
+      this.authSyncInFlight = false;
+      if (this.authSyncQueued) {
+        this.authSyncQueued = false;
+        this.scheduleAuthStateSync();
+      }
+    }
+  }
+
+  private computeAuthSnapshotHash(files: Array<{ filename: string; contentBase64: string }>): string {
+    const hash = createHash('sha256');
+    for (const file of files) {
+      hash.update(file.filename);
+      hash.update('\0');
+      hash.update(file.contentBase64);
+      hash.update('\0');
+    }
+    return hash.digest('hex');
+  }
+
+  private async restoreAuthStateFromFirestoreIfNeeded(): Promise<void> {
+    const currentFiles = await readdir(env.whatsappAuthDir);
+    const hasLocalCreds = currentFiles.some((filename) => filename.includes('creds'));
+    if (hasLocalCreds) {
+      return;
+    }
+
+    const snapshotFiles = await loadWhatsAppAuthSnapshot();
+    if (snapshotFiles.length === 0) {
+      return;
+    }
+
+    let restoredCount = 0;
+    for (const file of snapshotFiles) {
+      const safeName = basename(file.filename);
+      if (!safeName || safeName !== file.filename) {
+        continue;
+      }
+
+      try {
+        const payload = Buffer.from(file.contentBase64, 'base64');
+        if (payload.length === 0) continue;
+        await writeFile(join(env.whatsappAuthDir, safeName), payload);
+        restoredCount += 1;
+      } catch (error) {
+        logger.warn('Skipping invalid WhatsApp auth snapshot file', {
+          file: safeName,
+          error: error instanceof Error ? error.message : 'unknown'
+        });
+      }
+    }
+
+    if (restoredCount > 0) {
+      logger.info('Restored WhatsApp auth state from Firestore snapshot', {
+        fileCount: restoredCount
+      });
+    }
   }
 
   private mapDisconnectReason(code: number | null): string {

@@ -7,9 +7,17 @@ import { brazilianPhoneVariants, normalizePhoneNumber } from '../whatsapp/events
 
 const COLLECTION_NAME = 'whatsappMessages';
 const BINDINGS_COLLECTION_NAME = 'whatsappBindings';
+const AUTH_STATE_COLLECTION_NAME = 'whatsappRuntime';
+const AUTH_STATE_DOC_ID = 'authState';
+const AUTH_STATE_FILES_SUBCOLLECTION = 'files';
+const PROFILE_SCAN_CACHE_TTL_MS = 30_000;
 
 function sanitizeDocId(value: string): string {
   return value.replace(/[^\w.-]/g, '_');
+}
+
+function authFileDocId(filename: string): string {
+  return Buffer.from(filename, 'utf8').toString('base64url');
 }
 
 function getDocId(record: WhatsAppMessageRecord): string {
@@ -176,6 +184,112 @@ function extractUidFromSettingsDoc(doc: FirebaseFirestore.QueryDocumentSnapshot)
   return doc.ref.parent.parent?.id ?? null;
 }
 
+interface ProfileSettingsData {
+  whatsappAllowedNumbers?: unknown;
+  whatsappAccessCodeNormalized?: unknown;
+}
+
+interface ProfileSettingsEntry {
+  uid: string;
+  data: ProfileSettingsData;
+}
+
+interface ProfileScanCache {
+  fetchedAt: number;
+  entries: ProfileSettingsEntry[];
+}
+
+let profileScanCache: ProfileScanCache | null = null;
+
+function normalizeAllowedNumbers(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  return [...new Set(
+    value
+      .map((item) => (typeof item === 'string' ? normalizePhoneNumber(item) : ''))
+      .filter((item) => item.length >= 10)
+  )];
+}
+
+function isMissingIndexError(error: unknown): boolean {
+  const message = (error as { message?: unknown } | undefined)?.message;
+  if (typeof message === 'string' && message.includes('FAILED_PRECONDITION')) return true;
+
+  const code = (error as { code?: unknown } | undefined)?.code;
+  return code === 9;
+}
+
+async function scanAllProfileSettings(forceRefresh = false): Promise<ProfileSettingsEntry[]> {
+  if (!forceRefresh && profileScanCache) {
+    const ageMs = Date.now() - profileScanCache.fetchedAt;
+    if (ageMs <= PROFILE_SCAN_CACHE_TTL_MS) {
+      return profileScanCache.entries;
+    }
+  }
+
+  const usersSnap = await db.collection('users').get();
+  if (usersSnap.empty) {
+    profileScanCache = { fetchedAt: Date.now(), entries: [] };
+    return [];
+  }
+
+  const profileSnaps = await Promise.all(
+    usersSnap.docs.map((userDoc) => userDoc.ref.collection('settings').doc('profile').get())
+  );
+
+  const entries: ProfileSettingsEntry[] = [];
+  for (const profileSnap of profileSnaps) {
+    if (!profileSnap.exists) continue;
+    const uid = profileSnap.ref.parent.parent?.id;
+    if (!uid) continue;
+    entries.push({
+      uid,
+      data: (profileSnap.data() ?? {}) as ProfileSettingsData
+    });
+  }
+
+  profileScanCache = { fetchedAt: Date.now(), entries };
+  return entries;
+}
+
+async function fallbackIsPhoneAllowedForAnyAccount(variants: string[]): Promise<boolean> {
+  const profiles = await scanAllProfileSettings();
+  return profiles.some((entry) => {
+    const allowed = normalizeAllowedNumbers(entry.data.whatsappAllowedNumbers);
+    return variants.some((variant) => allowed.includes(variant));
+  });
+}
+
+async function fallbackResolveUidFromPhone(variants: string[]): Promise<string | null> {
+  const profiles = await scanAllProfileSettings();
+  for (const entry of profiles) {
+    const allowed = normalizeAllowedNumbers(entry.data.whatsappAllowedNumbers);
+    if (variants.some((variant) => allowed.includes(variant))) {
+      return entry.uid;
+    }
+  }
+  return null;
+}
+
+async function fallbackResolveUidFromAccessCode(
+  normalizedCode: string,
+  variants: string
+[]): Promise<string | null> {
+  const profiles = await scanAllProfileSettings();
+  for (const entry of profiles) {
+    const code = typeof entry.data.whatsappAccessCodeNormalized === 'string'
+      ? entry.data.whatsappAccessCodeNormalized
+      : '';
+    if (code !== normalizedCode) continue;
+
+    const allowed = normalizeAllowedNumbers(entry.data.whatsappAllowedNumbers);
+    if (variants.some((variant) => allowed.includes(variant))) {
+      return entry.uid;
+    }
+  }
+  return null;
+}
+
 export async function isPhoneAllowedForUid(uid: string, phone: string): Promise<boolean> {
   const normalizedPhone = normalizePhoneNumber(phone);
   if (normalizedPhone.length < 10) return false;
@@ -202,7 +316,17 @@ export async function isPhoneAllowedForAnyAccount(phone: string): Promise<boolea
     return snaps.some((snap) => snap.docs.some((doc) => doc.id === 'profile'));
   } catch (error) {
     logger.error('isPhoneAllowedForAnyAccount: collectionGroup query failed (missing Firestore index?)', error);
-    return false;
+    if (!isMissingIndexError(error)) {
+      return false;
+    }
+
+    logger.warn('isPhoneAllowedForAnyAccount: falling back to users profile scan');
+    try {
+      return await fallbackIsPhoneAllowedForAnyAccount(variants);
+    } catch (fallbackError) {
+      logger.error('isPhoneAllowedForAnyAccount fallback failed', fallbackError);
+      return false;
+    }
   }
 }
 
@@ -230,6 +354,16 @@ export async function resolveUidFromPhone(phone: string): Promise<string | null>
     }
   } catch (error) {
     logger.error('resolveUidFromPhone: collectionGroup query failed (missing Firestore index?)', error);
+    if (!isMissingIndexError(error)) {
+      return null;
+    }
+
+    logger.warn('resolveUidFromPhone: falling back to users profile scan');
+    try {
+      return await fallbackResolveUidFromPhone(variants);
+    } catch (fallbackError) {
+      logger.error('resolveUidFromPhone fallback failed', fallbackError);
+    }
   }
 
   return null;
@@ -273,6 +407,17 @@ export async function resolveUidFromAccessCode(
     }
   } catch (error) {
     logger.error('resolveUidFromAccessCode: collectionGroup query failed (missing Firestore index?)', error);
+    if (!isMissingIndexError(error)) {
+      return null;
+    }
+
+    logger.warn('resolveUidFromAccessCode: falling back to users profile scan');
+    try {
+      const variants = brazilianPhoneVariants(normalizedPhone);
+      return await fallbackResolveUidFromAccessCode(normalizedCode, variants);
+    } catch (fallbackError) {
+      logger.error('resolveUidFromAccessCode fallback failed', fallbackError);
+    }
   }
 
   return null;
@@ -339,6 +484,104 @@ export async function savePhoneBinding(phone: string, uid: string): Promise<void
   for (const v of variants) {
     batch.set(db.collection(BINDINGS_COLLECTION_NAME).doc(v), bindingData, { merge: true });
   }
+  await batch.commit();
+}
+
+export interface WhatsAppAuthSnapshotFile {
+  filename: string;
+  contentBase64: string;
+}
+
+export async function loadWhatsAppAuthSnapshot(): Promise<WhatsAppAuthSnapshotFile[]> {
+  try {
+    const filesSnap = await db
+      .collection(AUTH_STATE_COLLECTION_NAME)
+      .doc(AUTH_STATE_DOC_ID)
+      .collection(AUTH_STATE_FILES_SUBCOLLECTION)
+      .get();
+
+    return filesSnap.docs
+      .map((doc) => {
+        const data = doc.data() as Partial<WhatsAppAuthSnapshotFile>;
+        const filename = typeof data.filename === 'string' ? data.filename.trim() : '';
+        const contentBase64 = typeof data.contentBase64 === 'string' ? data.contentBase64.trim() : '';
+        if (!filename || !contentBase64) return null;
+        return { filename, contentBase64 };
+      })
+      .filter((entry): entry is WhatsAppAuthSnapshotFile => Boolean(entry))
+      .sort((a, b) => a.filename.localeCompare(b.filename));
+  } catch (error) {
+    logger.error('Failed to load WhatsApp auth snapshot from Firestore', error);
+    return [];
+  }
+}
+
+export async function saveWhatsAppAuthSnapshot(files: WhatsAppAuthSnapshotFile[]): Promise<void> {
+  const now = new Date().toISOString();
+  const normalized = files
+    .map((file) => ({
+      filename: file.filename.trim(),
+      contentBase64: file.contentBase64.trim()
+    }))
+    .filter((file) => file.filename.length > 0 && file.contentBase64.length > 0);
+
+  const rootRef = db.collection(AUTH_STATE_COLLECTION_NAME).doc(AUTH_STATE_DOC_ID);
+  const filesRef = rootRef.collection(AUTH_STATE_FILES_SUBCOLLECTION);
+
+  const existingSnap = await filesRef.get();
+  const batch = db.batch();
+  const keptDocIds = new Set<string>();
+
+  for (const file of normalized) {
+    const docId = authFileDocId(file.filename);
+    keptDocIds.add(docId);
+    batch.set(
+      filesRef.doc(docId),
+      {
+        filename: file.filename,
+        contentBase64: file.contentBase64,
+        updatedAt: now
+      },
+      { merge: true }
+    );
+  }
+
+  for (const doc of existingSnap.docs) {
+    if (!keptDocIds.has(doc.id)) {
+      batch.delete(doc.ref);
+    }
+  }
+
+  batch.set(
+    rootRef,
+    {
+      fileCount: normalized.length,
+      updatedAt: now
+    },
+    { merge: true }
+  );
+
+  await batch.commit();
+}
+
+export async function clearWhatsAppAuthSnapshot(): Promise<void> {
+  const rootRef = db.collection(AUTH_STATE_COLLECTION_NAME).doc(AUTH_STATE_DOC_ID);
+  const filesRef = rootRef.collection(AUTH_STATE_FILES_SUBCOLLECTION);
+  const filesSnap = await filesRef.get();
+
+  const batch = db.batch();
+  for (const doc of filesSnap.docs) {
+    batch.delete(doc.ref);
+  }
+  batch.set(
+    rootRef,
+    {
+      fileCount: 0,
+      updatedAt: new Date().toISOString()
+    },
+    { merge: true }
+  );
+
   await batch.commit();
 }
 
