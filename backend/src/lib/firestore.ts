@@ -497,13 +497,37 @@ async function fallbackIsPhoneAllowedForAnyAccount(variants: string[]): Promise<
 }
 
 async function fallbackResolveUidFromPhone(variants: string[]): Promise<string | null> {
-  const profiles = await scanAllProfileSettings();
+  // First try with cached profiles
+  let profiles = await scanAllProfileSettings();
   for (const entry of profiles) {
     const allowed = normalizeAllowedNumbers(entry.data.whatsappAllowedNumbers);
     if (variants.some((variant) => allowed.includes(variant))) {
       return entry.uid;
     }
   }
+
+  // Cache might be stale — force refresh and try again
+  profiles = await scanAllProfileSettings(true);
+  for (const entry of profiles) {
+    const rawValue = entry.data.whatsappAllowedNumbers;
+    const allowed = normalizeAllowedNumbers(rawValue);
+    logger.info('RESOLVE_SCAN_DEBUG: checking profile', {
+      uid: entry.uid,
+      rawType: typeof rawValue,
+      isArray: Array.isArray(rawValue),
+      rawPreview: JSON.stringify(rawValue).slice(0, 200),
+      allowedVariants: allowed.slice(0, 10),
+      searchingFor: variants
+    });
+    if (variants.some((variant) => allowed.includes(variant))) {
+      logger.info('RESOLVE_SCAN_MATCH: phone matched to account', {
+        uid: entry.uid,
+        matchedVariant: variants.find((v) => allowed.includes(v))
+      });
+      return entry.uid;
+    }
+  }
+
   return null;
 }
 
