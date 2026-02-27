@@ -150,6 +150,7 @@ export class WhatsAppClient {
   private recoveringInvalidSession = false;
   private readonly aiCallTimestamps = new Map<string, number[]>();
   private softReconnectCount = 0;
+  private connectionEpoch = 0;
 
   // --- LID message buffer: store messages with unresolved LID for later replay ---
   private readonly pendingLidMessages = new Map<string, { message: proto.IWebMessageInfo; bufferedAt: number }[]>();
@@ -180,12 +181,23 @@ export class WhatsAppClient {
 
   async shutdown(): Promise<void> {
     this.allowReconnect = false;
+    this.connectionEpoch++;
     this.clearReconnectTimer();
     this.clearAuthSyncTimer();
     this.authSyncQueued = false;
     await this.syncAuthStateNow();
     if (this.socket) {
-      (this.socket as { ws?: { close: () => void } }).ws?.close();
+      try {
+        this.socket.ev.removeAllListeners('connection.update');
+        this.socket.ev.removeAllListeners('creds.update');
+        this.socket.ev.removeAllListeners('messages.upsert');
+        this.socket.ev.removeAllListeners('chats.phoneNumberShare');
+        this.socket.ev.removeAllListeners('contacts.upsert');
+        this.socket.ev.removeAllListeners('contacts.update');
+        (this.socket as { ws?: { close: () => void } }).ws?.close();
+      } catch {
+        // ignore cleanup errors
+      }
     }
     this.socket = null;
   }
@@ -255,6 +267,7 @@ export class WhatsAppClient {
   async resetSession(): Promise<void> {
     logger.warn('Resetting WhatsApp session by API request', { slotId: this.slotId });
     this.allowReconnect = false;
+    this.connectionEpoch++;
     this.clearReconnectTimer();
     this.connected = false;
     this.state = 'connecting';
@@ -268,7 +281,17 @@ export class WhatsAppClient {
       } catch (error) {
         logger.warn('Socket logout failed during reset', error);
       }
-      (this.socket as { ws?: { close: () => void } }).ws?.close();
+      try {
+        this.socket.ev.removeAllListeners('connection.update');
+        this.socket.ev.removeAllListeners('creds.update');
+        this.socket.ev.removeAllListeners('messages.upsert');
+        this.socket.ev.removeAllListeners('chats.phoneNumberShare');
+        this.socket.ev.removeAllListeners('contacts.upsert');
+        this.socket.ev.removeAllListeners('contacts.update');
+        (this.socket as { ws?: { close: () => void } }).ws?.close();
+      } catch {
+        // ignore cleanup errors
+      }
       this.socket = null;
     }
 
@@ -289,11 +312,39 @@ export class WhatsAppClient {
   }
 
   private async connect(): Promise<void> {
+    // Clean up previous socket to prevent stale event handlers from
+    // interfering with the new connection (e.g. old socket's 'close' event
+    // overwriting state after a new socket is already created).
+    if (this.socket) {
+      try {
+        this.socket.ev.removeAllListeners('connection.update');
+        this.socket.ev.removeAllListeners('creds.update');
+        this.socket.ev.removeAllListeners('messages.upsert');
+        this.socket.ev.removeAllListeners('chats.phoneNumberShare');
+        this.socket.ev.removeAllListeners('contacts.upsert');
+        this.socket.ev.removeAllListeners('contacts.update');
+        (this.socket as { ws?: { close: () => void } }).ws?.close();
+      } catch {
+        // ignore cleanup errors
+      }
+      this.socket = null;
+    }
+
+    const epoch = ++this.connectionEpoch;
     this.state = 'connecting';
     this.connected = false;
 
     const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
-    const { version } = await fetchLatestBaileysVersion();
+
+    let version: [number, number, number];
+    try {
+      ({ version } = await fetchLatestBaileysVersion());
+    } catch (error) {
+      logger.warn('fetchLatestBaileysVersion failed, using fallback', {
+        error: error instanceof Error ? error.message : 'unknown'
+      });
+      version = [2, 3000, 1017531287];
+    }
 
     const socket = makeWASocket({
       auth: state,
@@ -310,26 +361,32 @@ export class WhatsAppClient {
     this.socket = socket;
 
     socket.ev.on('creds.update', () => {
+      if (this.connectionEpoch !== epoch) return;
       void saveCreds();
       this.scheduleAuthStateSync();
     });
     socket.ev.on('connection.update', (update) => {
+      if (this.connectionEpoch !== epoch) return;
       void this.handleConnectionUpdate(update);
     });
     socket.ev.on('messages.upsert', (upsert) => {
+      if (this.connectionEpoch !== epoch) return;
       void this.handleMessagesUpsert(upsert as { type: string; messages: proto.IWebMessageInfo[] });
     });
     socket.ev.on('chats.phoneNumberShare', (event) => {
+      if (this.connectionEpoch !== epoch) return;
       this.rememberLidMapping(event.lid, event.jid, 'phone_number_share');
     });
     socket.ev.on('contacts.upsert', (contacts) => {
+      if (this.connectionEpoch !== epoch) return;
       this.absorbContactLidMappings(contacts, 'contacts_upsert');
     });
     socket.ev.on('contacts.update', (contacts) => {
+      if (this.connectionEpoch !== epoch) return;
       this.absorbContactLidMappings(contacts, 'contacts_update');
     });
 
-    logger.info('WhatsApp socket initialized', { slotId: this.slotId, displayName: this.displayName });
+    logger.info('WhatsApp socket initialized', { slotId: this.slotId, displayName: this.displayName, epoch });
   }
 
   private async handleConnectionUpdate(update: {
@@ -1068,8 +1125,23 @@ export class WhatsAppClient {
       this.clearQr();
       this.phone = null;
 
+      // Invalidate the current epoch so any pending events from the old
+      // socket are silently ignored (prevents stale close events from
+      // overwriting state after we create a new socket).
+      this.connectionEpoch++;
+
       if (this.socket) {
-        (this.socket as { ws?: { close: () => void } }).ws?.close();
+        try {
+          this.socket.ev.removeAllListeners('connection.update');
+          this.socket.ev.removeAllListeners('creds.update');
+          this.socket.ev.removeAllListeners('messages.upsert');
+          this.socket.ev.removeAllListeners('chats.phoneNumberShare');
+          this.socket.ev.removeAllListeners('contacts.upsert');
+          this.socket.ev.removeAllListeners('contacts.update');
+          (this.socket as { ws?: { close: () => void } }).ws?.close();
+        } catch {
+          // ignore cleanup errors
+        }
         this.socket = null;
       }
 
@@ -1559,9 +1631,18 @@ export class WhatsAppClient {
     this.connected = false;
     this.state = 'connecting';
     this.lastDisconnectReason = 'bad_mac_reconnect';
+    this.connectionEpoch++;
 
     try {
-      (this.socket as { ws?: { close: () => void } } | null)?.ws?.close();
+      if (this.socket) {
+        this.socket.ev.removeAllListeners('connection.update');
+        this.socket.ev.removeAllListeners('creds.update');
+        this.socket.ev.removeAllListeners('messages.upsert');
+        this.socket.ev.removeAllListeners('chats.phoneNumberShare');
+        this.socket.ev.removeAllListeners('contacts.upsert');
+        this.socket.ev.removeAllListeners('contacts.update');
+        (this.socket as { ws?: { close: () => void } }).ws?.close();
+      }
     } catch (error) {
       logger.warn('Failed closing websocket during soft reconnect', {
         slotId: this.slotId,
