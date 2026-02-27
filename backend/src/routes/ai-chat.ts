@@ -3,6 +3,7 @@ import { requireFirebaseAuth } from '../middleware/firebase-auth';
 import { queryGroqAssistant, type GroqChatMessage, type UserFinancialContext } from '../ai/groq';
 import { getUserCategories, getRecentTransactions, getUserSettings, getUserProfile } from '../lib/firestore';
 import { logger } from '../lib/logger';
+import { env } from '../config/env';
 
 interface WebChatMessage {
     role: 'user' | 'assistant' | 'system';
@@ -24,6 +25,23 @@ interface WebChatRequestBody {
     }>;
 }
 
+// In-memory sliding-window rate limiter (per UID, resets every 60 seconds)
+const webChatCallTimestamps = new Map<string, number[]>();
+
+function isWebChatRateLimited(uid: string): boolean {
+    const now = Date.now();
+    const timestamps = webChatCallTimestamps.get(uid) ?? [];
+    const recent = timestamps.filter((t) => now - t < 60_000);
+    webChatCallTimestamps.set(uid, recent);
+    return recent.length >= env.whatsappAiRateLimitPerMinute;
+}
+
+function recordWebChatCall(uid: string): void {
+    const timestamps = webChatCallTimestamps.get(uid) ?? [];
+    timestamps.push(Date.now());
+    webChatCallTimestamps.set(uid, timestamps);
+}
+
 export function createAiChatRouter(): Router {
     const router = Router();
 
@@ -33,6 +51,12 @@ export function createAiChatRouter(): Router {
     router.post('/chat', async (req: Request, res: Response): Promise<void> => {
         const uid = (req as Request & { uid: string }).uid;
         const body = req.body as WebChatRequestBody;
+
+        if (isWebChatRateLimited(uid)) {
+            logger.warn('Web AI chat rate limited', { uid, limitPerMinute: env.whatsappAiRateLimitPerMinute });
+            res.status(429).json({ error: 'Limite de mensagens atingido. Aguarde um momento e tente novamente.' });
+            return;
+        }
 
         if (!body.messages || !Array.isArray(body.messages) || body.messages.length === 0) {
             res.status(400).json({ error: 'messages é obrigatório e deve conter ao menos uma mensagem.' });
@@ -88,6 +112,7 @@ export function createAiChatRouter(): Router {
                 hasImage: groqMessages.some(m => m.imageDataUrl)
             });
 
+            recordWebChatCall(uid);
             const result = await queryGroqAssistant(groqMessages, context);
 
             res.json({

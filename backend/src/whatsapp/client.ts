@@ -907,8 +907,12 @@ export class WhatsAppClient {
     } finally {
       this.authSyncInFlight = false;
       if (this.authSyncQueued) {
+        // Call directly without re-entering the debounce timer: we already know changes
+        // occurred (they arrived while this sync was in flight), so there is no reason
+        // to wait another 1.2 s. A new creds.update during the gap would reset the
+        // debounce timer and keep pushing the sync further into the future.
         this.authSyncQueued = false;
-        this.scheduleAuthStateSync();
+        void this.syncAuthStateNow();
       }
     }
   }
