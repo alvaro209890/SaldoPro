@@ -92,6 +92,9 @@ const MESSAGE_QUEUE_CONCURRENCY = 3;
 /** Refresh typing presence periodically while AI processing is running. */
 const COMPOSING_REFRESH_MS = 4000;
 class WhatsAppClient {
+    slotId;
+    authDir;
+    displayName;
     socket = null;
     state = 'connecting';
     connected = false;
@@ -116,13 +119,19 @@ class WhatsAppClient {
     // --- Message processing queue ---
     messageQueue = [];
     messageQueueActive = 0;
+    constructor(options) {
+        this.slotId = options.slotId;
+        this.authDir = options.authDir;
+        this.displayName = options.displayName?.trim() || options.slotId.toUpperCase();
+    }
     async start() {
-        await (0, promises_1.mkdir)(env_1.env.whatsappAuthDir, { recursive: true });
+        await (0, promises_1.mkdir)(this.authDir, { recursive: true });
         await this.restoreAuthStateFromFirestoreIfNeeded();
-        const files = await (0, promises_1.readdir)(env_1.env.whatsappAuthDir);
+        const files = await (0, promises_1.readdir)(this.authDir);
         const hasSavedSession = files.some((f) => f.includes('creds'));
         logger_1.logger.info('WhatsApp auth state', {
-            authDir: env_1.env.whatsappAuthDir,
+            slotId: this.slotId,
+            authDir: this.authDir,
             filesFound: files.length,
             hasSavedSession
         });
@@ -141,11 +150,15 @@ class WhatsAppClient {
     }
     getStatus() {
         return {
+            slotId: this.slotId,
             connected: this.connected,
             state: this.state,
             phone: this.phone,
             lastDisconnectReason: this.lastDisconnectReason
         };
+    }
+    getSlotId() {
+        return this.slotId;
     }
     async getQrPayload() {
         if (this.connected) {
@@ -187,7 +200,7 @@ class WhatsAppClient {
         return result;
     }
     async resetSession() {
-        logger_1.logger.warn('Resetting WhatsApp session by API request');
+        logger_1.logger.warn('Resetting WhatsApp session by API request', { slotId: this.slotId });
         this.allowReconnect = false;
         this.clearReconnectTimer();
         this.connected = false;
@@ -208,13 +221,13 @@ class WhatsAppClient {
         this.clearAuthSyncTimer();
         this.authSyncQueued = false;
         this.lastAuthSnapshotHash = null;
-        await (0, promises_1.rm)(env_1.env.whatsappAuthDir, { recursive: true, force: true });
-        await (0, promises_1.mkdir)(env_1.env.whatsappAuthDir, { recursive: true });
+        await (0, promises_1.rm)(this.authDir, { recursive: true, force: true });
+        await (0, promises_1.mkdir)(this.authDir, { recursive: true });
         try {
-            await (0, firestore_1.clearWhatsAppAuthSnapshot)();
+            await (0, firestore_1.clearWhatsAppAuthSnapshot)(this.slotId);
         }
         catch (error) {
-            logger_1.logger.error('Failed to clear WhatsApp auth snapshot in Firestore', error);
+            logger_1.logger.error('Failed to clear WhatsApp auth snapshot in Firestore', { slotId: this.slotId, error });
         }
         this.allowReconnect = true;
         await this.connect();
@@ -222,7 +235,7 @@ class WhatsAppClient {
     async connect() {
         this.state = 'connecting';
         this.connected = false;
-        const { state, saveCreds } = await (0, baileys_1.useMultiFileAuthState)(env_1.env.whatsappAuthDir);
+        const { state, saveCreds } = await (0, baileys_1.useMultiFileAuthState)(this.authDir);
         const { version } = await (0, baileys_1.fetchLatestBaileysVersion)();
         const socket = (0, baileys_1.default)({
             auth: state,
@@ -241,7 +254,7 @@ class WhatsAppClient {
         socket.ev.on('messages.upsert', (upsert) => {
             void this.handleMessagesUpsert(upsert);
         });
-        logger_1.logger.info('WhatsApp socket initialized');
+        logger_1.logger.info('WhatsApp socket initialized', { slotId: this.slotId, displayName: this.displayName });
     }
     async handleConnectionUpdate(update) {
         const { connection, qr, lastDisconnect } = update;
@@ -260,7 +273,11 @@ class WhatsAppClient {
             this.phone = (0, events_1.jidToPhone)(this.socket?.user?.id) || null;
             this.clearQr();
             this.scheduleAuthStateSync();
-            logger_1.logger.info('WhatsApp connection opened', { phone: this.phone });
+            logger_1.logger.info('WhatsApp connection opened', {
+                slotId: this.slotId,
+                displayName: this.displayName,
+                phone: this.phone
+            });
             return;
         }
         if (connection === 'close') {
@@ -269,11 +286,12 @@ class WhatsAppClient {
             const code = asDisconnectCode(lastDisconnect?.error);
             const reason = this.mapDisconnectReason(code);
             this.lastDisconnectReason = reason;
-            logger_1.logger.warn('WhatsApp connection closed', { code, reason });
+            logger_1.logger.warn('WhatsApp connection closed', { slotId: this.slotId, code, reason });
             const shouldForceRelogin = this.allowReconnect &&
                 (code === baileys_1.DisconnectReason.loggedOut || code === baileys_1.DisconnectReason.badSession);
             if (shouldForceRelogin) {
                 logger_1.logger.warn('Invalid WhatsApp session detected, forcing fresh login to generate new QR', {
+                    slotId: this.slotId,
                     code,
                     reason
                 });
@@ -284,6 +302,7 @@ class WhatsAppClient {
             // "connection_replaced". Do NOT wipe auth state in this case.
             if (this.allowReconnect && code === baileys_1.DisconnectReason.connectionReplaced) {
                 logger_1.logger.warn('WhatsApp connection replaced; preserving auth state and retrying later', {
+                    slotId: this.slotId,
                     code,
                     reason
                 });
@@ -376,7 +395,7 @@ class WhatsAppClient {
             rawType: (0, events_1.extractRawType)(message),
             textPreview: (0, events_1.extractMessageText)(message).slice(0, 50)
         });
-        const alreadyInFirestore = await (0, firestore_1.inboundMessageExists)(messageId, this.processedInboundIds);
+        const alreadyInFirestore = await (0, firestore_1.inboundMessageExists)(messageId, this.slotId, this.processedInboundIds);
         if (alreadyInFirestore) {
             this.rememberInbound(messageId);
             logger_1.logger.info('MSG_SKIP: already processed', { messageId });
@@ -458,6 +477,7 @@ class WhatsAppClient {
             return;
         }
         const inboundRecord = {
+            clientId: this.slotId,
             messageId,
             direction: 'inbound',
             ownerUid: binding.uid,
@@ -526,7 +546,7 @@ class WhatsAppClient {
                 const isFirstMessage = conversation.length === 0;
                 const isGreeting = isGreetingMessage(inboundText);
                 const isCapabilitiesQuestion = isCapabilitiesIntentMessage(inboundText);
-                const lastActivityAt = await (0, firestore_1.getLastConversationActivityByPhone)(ownerUid, remotePhone);
+                const lastActivityAt = await (0, firestore_1.getLastConversationActivityByPhone)(ownerUid, remotePhone, this.slotId);
                 const isConversationRestart = this.isConversationRestart(lastActivityAt, isFirstMessage);
                 const shouldSendCapabilitiesSummary = isGreeting || isFirstMessage || isConversationRestart || isCapabilitiesQuestion;
                 if (isFirstMessage) {
@@ -679,6 +699,7 @@ class WhatsAppClient {
                 const messageId = response?.key?.id ?? `generated_${Date.now()}`;
                 const now = new Date().toISOString();
                 const sentRecord = {
+                    clientId: this.slotId,
                     messageId,
                     direction,
                     ...(ownerUid ? { ownerUid } : {}),
@@ -711,6 +732,7 @@ class WhatsAppClient {
             }
         }
         const failedRecord = {
+            clientId: this.slotId,
             messageId: `failed_${Date.now()}`,
             direction,
             ...(ownerUid ? { ownerUid } : {}),
@@ -741,14 +763,14 @@ class WhatsAppClient {
             ? `${env_1.env.backendUrl}/api/whatsapp/qr-page?token=${env_1.env.whatsappApiToken}`
             : `/api/whatsapp/qr-page?token=${env_1.env.whatsappApiToken}`;
         logger_1.logger.info('==================================================');
-        logger_1.logger.info('  NOVO QR CODE DISPONIVEL â€” abra no navegador:');
+        logger_1.logger.info(`  NOVO QR CODE DISPONIVEL [${this.displayName}] - abra no navegador:`);
         logger_1.logger.info(`  ${qrPageUrl}`);
         logger_1.logger.info('==================================================');
         // ASCII art apenas para referÃªncia em ambientes de terminal local
         qrcode_terminal_1.default.generate(qr, { small: true });
         try {
             this.qrDataUrl = await qrcode_1.default.toDataURL(qr);
-            logger_1.logger.info('WhatsApp QR code updated');
+            logger_1.logger.info('WhatsApp QR code updated', { slotId: this.slotId });
         }
         catch (error) {
             this.qrDataUrl = null;
@@ -794,13 +816,16 @@ class WhatsAppClient {
                 this.socket.ws?.close();
                 this.socket = null;
             }
-            await (0, promises_1.rm)(env_1.env.whatsappAuthDir, { recursive: true, force: true });
-            await (0, promises_1.mkdir)(env_1.env.whatsappAuthDir, { recursive: true });
+            await (0, promises_1.rm)(this.authDir, { recursive: true, force: true });
+            await (0, promises_1.mkdir)(this.authDir, { recursive: true });
             try {
-                await (0, firestore_1.clearWhatsAppAuthSnapshot)();
+                await (0, firestore_1.clearWhatsAppAuthSnapshot)(this.slotId);
             }
             catch (error) {
-                logger_1.logger.error('Failed to clear invalid WhatsApp auth snapshot in Firestore', error);
+                logger_1.logger.error('Failed to clear invalid WhatsApp auth snapshot in Firestore', {
+                    slotId: this.slotId,
+                    error
+                });
             }
             if (this.allowReconnect) {
                 this.state = 'connecting';
@@ -837,7 +862,7 @@ class WhatsAppClient {
         }
         this.authSyncInFlight = true;
         try {
-            const files = await (0, promises_1.readdir)(env_1.env.whatsappAuthDir);
+            const files = await (0, promises_1.readdir)(this.authDir);
             const authFiles = files
                 .filter((filename) => filename.endsWith('.json'))
                 .sort((a, b) => a.localeCompare(b));
@@ -845,7 +870,7 @@ class WhatsAppClient {
                 return;
             }
             const snapshotFiles = await Promise.all(authFiles.map(async (filename) => {
-                const content = await (0, promises_1.readFile)((0, node_path_1.join)(env_1.env.whatsappAuthDir, filename));
+                const content = await (0, promises_1.readFile)((0, node_path_1.join)(this.authDir, filename));
                 return {
                     filename,
                     contentBase64: content.toString('base64')
@@ -855,9 +880,10 @@ class WhatsAppClient {
             if (hash === this.lastAuthSnapshotHash) {
                 return;
             }
-            await (0, firestore_1.saveWhatsAppAuthSnapshot)(snapshotFiles);
+            await (0, firestore_1.saveWhatsAppAuthSnapshot)(this.slotId, snapshotFiles);
             this.lastAuthSnapshotHash = hash;
             logger_1.logger.info('WhatsApp auth snapshot synced to Firestore', {
+                slotId: this.slotId,
                 fileCount: snapshotFiles.length
             });
         }
@@ -883,12 +909,12 @@ class WhatsAppClient {
         return hash.digest('hex');
     }
     async restoreAuthStateFromFirestoreIfNeeded() {
-        const currentFiles = await (0, promises_1.readdir)(env_1.env.whatsappAuthDir);
+        const currentFiles = await (0, promises_1.readdir)(this.authDir);
         const hasLocalCreds = currentFiles.some((filename) => filename.includes('creds'));
         if (hasLocalCreds) {
             return;
         }
-        const snapshotFiles = await (0, firestore_1.loadWhatsAppAuthSnapshot)();
+        const snapshotFiles = await (0, firestore_1.loadWhatsAppAuthSnapshot)(this.slotId);
         if (snapshotFiles.length === 0) {
             return;
         }
@@ -902,7 +928,7 @@ class WhatsAppClient {
                 const payload = Buffer.from(file.contentBase64, 'base64');
                 if (payload.length === 0)
                     continue;
-                await (0, promises_1.writeFile)((0, node_path_1.join)(env_1.env.whatsappAuthDir, safeName), payload);
+                await (0, promises_1.writeFile)((0, node_path_1.join)(this.authDir, safeName), payload);
                 restoredCount += 1;
             }
             catch (error) {
@@ -914,6 +940,7 @@ class WhatsAppClient {
         }
         if (restoredCount > 0) {
             logger_1.logger.info('Restored WhatsApp auth state from Firestore snapshot', {
+                slotId: this.slotId,
                 fileCount: restoredCount
             });
         }
@@ -1053,7 +1080,7 @@ class WhatsAppClient {
         if (cached)
             return cached;
         try {
-            const loaded = await (0, firestore_1.getRecentConversationByPhone)(uid, normalized, env_1.env.whatsappAiHistoryLimit);
+            const loaded = await (0, firestore_1.getRecentConversationByPhone)(uid, normalized, env_1.env.whatsappAiHistoryLimit, this.slotId);
             this.conversationByPhone.set(cacheKey, loaded);
             return loaded;
         }
@@ -1088,7 +1115,7 @@ class WhatsAppClient {
         return elapsedMinutes >= env_1.env.whatsappAiNewConversationMinutes;
     }
     conversationKey(uid, phone) {
-        return `${uid}:${phone}`;
+        return `${this.slotId}:${uid}:${phone}`;
     }
 }
 exports.WhatsAppClient = WhatsAppClient;

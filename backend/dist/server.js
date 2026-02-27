@@ -11,14 +11,14 @@ const health_1 = require("./routes/health");
 const qr_page_1 = require("./routes/qr-page");
 const whatsapp_1 = require("./routes/whatsapp");
 const ai_chat_1 = require("./routes/ai-chat");
-const client_1 = require("./whatsapp/client");
+const manager_1 = require("./whatsapp/manager");
 const app = (0, express_1.default)();
-const whatsappClient = new client_1.WhatsAppClient();
+const whatsappManager = new manager_1.WhatsAppClientsManager();
 app.use((0, cors_1.default)());
 app.use(express_1.default.json({ limit: '2mb' }));
 app.use(health_1.healthRouter);
-app.use((0, qr_page_1.createQrPageRouter)(whatsappClient));
-app.use('/api/whatsapp', (0, whatsapp_1.createWhatsAppRouter)(whatsappClient));
+app.use((0, qr_page_1.createQrPageRouter)(whatsappManager));
+app.use('/api/whatsapp', (0, whatsapp_1.createWhatsAppRouter)(whatsappManager));
 app.use('/api/ai', (0, ai_chat_1.createAiChatRouter)());
 app.use((error, _req, res, _next) => {
     logger_1.logger.error('Unhandled backend error', error);
@@ -28,8 +28,8 @@ app.use((error, _req, res, _next) => {
 const server = app.listen(env_1.env.port, () => {
     logger_1.logger.info('Backend server started', { port: env_1.env.port, nodeEnv: env_1.env.nodeEnv });
 });
-void whatsappClient.start().catch((error) => {
-    logger_1.logger.error('Failed to start WhatsApp client', error);
+void whatsappManager.startAll().catch((error) => {
+    logger_1.logger.error('Failed to start WhatsApp clients manager', error);
 });
 // Keep-alive: pings own /healthz every 5 minutes to prevent Render free-tier spin-down
 if (env_1.env.backendUrl) {
@@ -42,7 +42,7 @@ if (env_1.env.backendUrl) {
 const shutdown = async (signal) => {
     logger_1.logger.warn('Shutdown signal received — closing gracefully', { signal });
     server.close();
-    await whatsappClient.shutdown();
+    await whatsappManager.shutdownAll();
     // Brief pause so the WebSocket close frame is sent before the process exits
     await new Promise((resolve) => setTimeout(resolve, 500));
     process.exit(0);

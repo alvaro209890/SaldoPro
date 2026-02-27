@@ -6,16 +6,16 @@ import { healthRouter } from './routes/health';
 import { createQrPageRouter } from './routes/qr-page';
 import { createWhatsAppRouter } from './routes/whatsapp';
 import { createAiChatRouter } from './routes/ai-chat';
-import { WhatsAppClient } from './whatsapp/client';
+import { WhatsAppClientsManager } from './whatsapp/manager';
 
 const app = express();
-const whatsappClient = new WhatsAppClient();
+const whatsappManager = new WhatsAppClientsManager();
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use(healthRouter);
-app.use(createQrPageRouter(whatsappClient));
-app.use('/api/whatsapp', createWhatsAppRouter(whatsappClient));
+app.use(createQrPageRouter(whatsappManager));
+app.use('/api/whatsapp', createWhatsAppRouter(whatsappManager));
 app.use('/api/ai', createAiChatRouter());
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
@@ -28,8 +28,8 @@ const server = app.listen(env.port, () => {
   logger.info('Backend server started', { port: env.port, nodeEnv: env.nodeEnv });
 });
 
-void whatsappClient.start().catch((error) => {
-  logger.error('Failed to start WhatsApp client', error);
+void whatsappManager.startAll().catch((error) => {
+  logger.error('Failed to start WhatsApp clients manager', error);
 });
 
 // Keep-alive: pings own /healthz every 5 minutes to prevent Render free-tier spin-down
@@ -44,7 +44,7 @@ if (env.backendUrl) {
 const shutdown = async (signal: string): Promise<void> => {
   logger.warn('Shutdown signal received — closing gracefully', { signal });
   server.close();
-  await whatsappClient.shutdown();
+  await whatsappManager.shutdownAll();
   // Brief pause so the WebSocket close frame is sent before the process exits
   await new Promise((resolve) => setTimeout(resolve, 500));
   process.exit(0);

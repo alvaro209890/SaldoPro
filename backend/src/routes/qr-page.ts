@@ -1,24 +1,38 @@
-﻿import { Router } from 'express';
-import type { WhatsAppClient } from '../whatsapp/client';
-import { renderWhatsAppPage } from './whatsapp-page';
+import { Router } from 'express';
+import { WHATSAPP_SLOT_IDS, type WhatsAppClientsManager } from '../whatsapp/manager';
+import { renderWhatsAppPage, type WhatsAppSlotPageData } from './whatsapp-page';
 
-export function createQrPageRouter(client: WhatsAppClient): Router {
+function slotLabel(slotId: 'wa1' | 'wa2'): string {
+  return slotId === 'wa1' ? 'WhatsApp 1' : 'WhatsApp 2';
+}
+
+export function createQrPageRouter(manager: WhatsAppClientsManager): Router {
   const router = Router();
 
   router.get('/', async (_req, res) => {
-    const status = client.getStatus();
-    let payload: Awaited<ReturnType<WhatsAppClient['getQrPayload']>> | null = null;
+    const slots: WhatsAppSlotPageData[] = await Promise.all(
+      WHATSAPP_SLOT_IDS.map(async (slotId) => {
+        const status = manager.getStatusBySlot(slotId);
+        let payload: WhatsAppSlotPageData['payload'] = null;
 
-    if (!status.connected) {
-      try {
-        payload = await client.getQrPayload();
-      } catch {
-        payload = { available: false, reason: 'no_qr' };
-      }
-    }
+        if (!status.connected) {
+          try {
+            payload = await manager.getQrPayloadBySlot(slotId);
+          } catch {
+            payload = { available: false, reason: 'no_qr' };
+          }
+        }
+
+        return {
+          label: slotLabel(slotId),
+          status,
+          payload
+        };
+      })
+    );
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(renderWhatsAppPage({ status, payload }));
+    res.send(renderWhatsAppPage({ slots }));
   });
 
   return router;

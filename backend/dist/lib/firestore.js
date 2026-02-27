@@ -29,6 +29,7 @@ exports.saveWhatsAppAuthSnapshot = saveWhatsAppAuthSnapshot;
 exports.clearWhatsAppAuthSnapshot = clearWhatsAppAuthSnapshot;
 exports.getRecentConversationByPhone = getRecentConversationByPhone;
 exports.getLastConversationActivityByPhone = getLastConversationActivityByPhone;
+exports.getLastConversationClientIdByPhone = getLastConversationClientIdByPhone;
 const app_1 = require("firebase-admin/app");
 const firestore_1 = require("firebase-admin/firestore");
 const env_1 = require("../config/env");
@@ -37,7 +38,7 @@ const events_1 = require("../whatsapp/events");
 const COLLECTION_NAME = 'whatsappMessages';
 const BINDINGS_COLLECTION_NAME = 'whatsappBindings';
 const AUTH_STATE_COLLECTION_NAME = 'whatsappRuntime';
-const AUTH_STATE_DOC_ID = 'authState';
+const AUTH_STATE_DOC_ID_LEGACY = 'authState';
 const AUTH_STATE_FILES_SUBCOLLECTION = 'files';
 const PROFILE_SCAN_CACHE_TTL_MS = 15_000; // reduced to 15s so newly registered phones are picked up quickly
 const BINDING_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -49,13 +50,16 @@ function sanitizeDocId(value) {
 function authFileDocId(filename) {
     return Buffer.from(filename, 'utf8').toString('base64url');
 }
+function authStateDocId(slotId) {
+    return `authState_${slotId}`;
+}
 function getDocId(record) {
     const prefix = record.direction === 'inbound'
         ? 'in'
         : record.direction === 'outbound'
             ? 'out'
             : 'ar';
-    return `${prefix}_${sanitizeDocId(record.messageId)}`;
+    return `${record.clientId}_${prefix}_${sanitizeDocId(record.messageId)}`;
 }
 function initFirebaseAdmin() {
     if ((0, app_1.getApps)().length > 0)
@@ -74,13 +78,16 @@ async function saveWhatsAppMessage(record) {
     const docId = getDocId(record);
     await db.collection(COLLECTION_NAME).doc(docId).set(record, { merge: true });
 }
-async function inboundMessageExists(messageId, processedInMemory) {
+async function inboundMessageExists(messageId, clientId, processedInMemory) {
     // Avoid network call if we already know this ID from the in-process dedup set
     if (processedInMemory?.has(messageId))
         return true;
-    const docId = `in_${sanitizeDocId(messageId)}`;
-    const snap = await db.collection(COLLECTION_NAME).doc(docId).get();
-    return snap.exists;
+    const normalizedId = sanitizeDocId(messageId);
+    const docIds = clientId === 'wa1'
+        ? [`wa1_in_${normalizedId}`, `in_${normalizedId}`]
+        : [`${clientId}_in_${normalizedId}`];
+    const snapshots = await Promise.all(docIds.map((docId) => db.collection(COLLECTION_NAME).doc(docId).get()));
+    return snapshots.some((snap) => snap.exists);
 }
 async function saveMessageSafe(record) {
     try {
@@ -491,11 +498,11 @@ async function savePhoneBinding(phone, uid) {
     }
     bindingCache.delete(normalizedPhone);
 }
-async function loadWhatsAppAuthSnapshot() {
+async function loadAuthSnapshotByDocId(docId) {
     try {
         const filesSnap = await db
             .collection(AUTH_STATE_COLLECTION_NAME)
-            .doc(AUTH_STATE_DOC_ID)
+            .doc(docId)
             .collection(AUTH_STATE_FILES_SUBCOLLECTION)
             .get();
         return filesSnap.docs
@@ -511,11 +518,29 @@ async function loadWhatsAppAuthSnapshot() {
             .sort((a, b) => a.filename.localeCompare(b.filename));
     }
     catch (error) {
-        logger_1.logger.error('Failed to load WhatsApp auth snapshot from Firestore', error);
+        logger_1.logger.error('Failed to load WhatsApp auth snapshot from Firestore', { docId, error });
         return [];
     }
 }
-async function saveWhatsAppAuthSnapshot(files) {
+async function loadWhatsAppAuthSnapshot(slotId) {
+    const slotDocId = authStateDocId(slotId);
+    const slotSnapshot = await loadAuthSnapshotByDocId(slotDocId);
+    if (slotSnapshot.length > 0) {
+        return slotSnapshot;
+    }
+    if (slotId !== 'wa1') {
+        return [];
+    }
+    const legacySnapshot = await loadAuthSnapshotByDocId(AUTH_STATE_DOC_ID_LEGACY);
+    if (legacySnapshot.length > 0) {
+        logger_1.logger.info('Using legacy WhatsApp auth snapshot for wa1 fallback', {
+            legacyDocId: AUTH_STATE_DOC_ID_LEGACY,
+            fileCount: legacySnapshot.length
+        });
+    }
+    return legacySnapshot;
+}
+async function saveWhatsAppAuthSnapshot(slotId, files) {
     const now = new Date().toISOString();
     const normalized = files
         .map((file) => ({
@@ -523,7 +548,7 @@ async function saveWhatsAppAuthSnapshot(files) {
         contentBase64: file.contentBase64.trim()
     }))
         .filter((file) => file.filename.length > 0 && file.contentBase64.length > 0);
-    const rootRef = db.collection(AUTH_STATE_COLLECTION_NAME).doc(AUTH_STATE_DOC_ID);
+    const rootRef = db.collection(AUTH_STATE_COLLECTION_NAME).doc(authStateDocId(slotId));
     const filesRef = rootRef.collection(AUTH_STATE_FILES_SUBCOLLECTION);
     const existingSnap = await filesRef.get();
     const batch = db.batch();
@@ -548,8 +573,8 @@ async function saveWhatsAppAuthSnapshot(files) {
     }, { merge: true });
     await batch.commit();
 }
-async function clearWhatsAppAuthSnapshot() {
-    const rootRef = db.collection(AUTH_STATE_COLLECTION_NAME).doc(AUTH_STATE_DOC_ID);
+async function clearWhatsAppAuthSnapshot(slotId) {
+    const rootRef = db.collection(AUTH_STATE_COLLECTION_NAME).doc(authStateDocId(slotId));
     const filesRef = rootRef.collection(AUTH_STATE_FILES_SUBCOLLECTION);
     const filesSnap = await filesRef.get();
     const batch = db.batch();
@@ -562,7 +587,7 @@ async function clearWhatsAppAuthSnapshot() {
     }, { merge: true });
     await batch.commit();
 }
-async function getRecentConversationByPhone(uid, phone, limitCount) {
+async function getRecentConversationByPhone(uid, phone, limitCount, clientId) {
     if (!uid || uid.trim().length === 0)
         return [];
     const normalizedPhone = (0, events_1.normalizePhoneNumber)(phone);
@@ -572,6 +597,7 @@ async function getRecentConversationByPhone(uid, phone, limitCount) {
         db
             .collection(COLLECTION_NAME)
             .where('ownerUid', '==', uid)
+            .where('clientId', '==', clientId)
             .where('from', '==', normalizedPhone)
             .orderBy('createdAt', 'desc')
             .limit(limitCount)
@@ -579,6 +605,7 @@ async function getRecentConversationByPhone(uid, phone, limitCount) {
         db
             .collection(COLLECTION_NAME)
             .where('ownerUid', '==', uid)
+            .where('clientId', '==', clientId)
             .where('to', '==', normalizedPhone)
             .orderBy('createdAt', 'desc')
             .limit(limitCount)
@@ -593,6 +620,8 @@ async function getRecentConversationByPhone(uid, phone, limitCount) {
             if (typeof data.createdAt !== 'string' || data.createdAt.length === 0)
                 continue;
             if (data.ownerUid !== uid)
+                continue;
+            if (data.clientId !== clientId)
                 continue;
             const hasImage = Boolean(data.metadata?.hasImage);
             const text = typeof data.text === 'string' ? data.text.trim() : '';
@@ -620,16 +649,16 @@ async function getRecentConversationByPhone(uid, phone, limitCount) {
 // Last conversation activity cache — avoids 2 Firestore queries per message.
 // ---------------------------------------------------------------------------
 const lastActivityCache = new Map();
-function lastActivityCacheKey(uid, phone) {
-    return `${uid}:${phone}`;
+function lastActivityCacheKey(uid, phone, clientId) {
+    return `${uid}:${phone}:${clientId}`;
 }
-async function getLastConversationActivityByPhone(uid, phone) {
+async function getLastConversationActivityByPhone(uid, phone, clientId) {
     if (!uid || uid.trim().length === 0)
         return null;
     const normalizedPhone = (0, events_1.normalizePhoneNumber)(phone);
     if (normalizedPhone.length < 10)
         return null;
-    const cacheKey = lastActivityCacheKey(uid, normalizedPhone);
+    const cacheKey = lastActivityCacheKey(uid, normalizedPhone, clientId);
     const cached = lastActivityCache.get(cacheKey);
     if (cached && Date.now() - cached.cachedAt <= LAST_ACTIVITY_CACHE_TTL_MS) {
         return cached.activity;
@@ -639,6 +668,7 @@ async function getLastConversationActivityByPhone(uid, phone) {
             db
                 .collection(COLLECTION_NAME)
                 .where('ownerUid', '==', uid)
+                .where('clientId', '==', clientId)
                 .where('from', '==', normalizedPhone)
                 .orderBy('createdAt', 'desc')
                 .limit(1)
@@ -646,6 +676,7 @@ async function getLastConversationActivityByPhone(uid, phone) {
             db
                 .collection(COLLECTION_NAME)
                 .where('ownerUid', '==', uid)
+                .where('clientId', '==', clientId)
                 .where('to', '==', normalizedPhone)
                 .orderBy('createdAt', 'desc')
                 .limit(1)
@@ -669,6 +700,59 @@ async function getLastConversationActivityByPhone(uid, phone) {
     }
     catch (error) {
         logger_1.logger.warn('getLastConversationActivityByPhone failed (index may still be building)', error);
+        return null;
+    }
+}
+function asSlotId(value) {
+    return value === 'wa1' || value === 'wa2' ? value : null;
+}
+async function getLastConversationClientIdByPhone(uid, phone) {
+    if (!uid || uid.trim().length === 0)
+        return null;
+    const normalizedPhone = (0, events_1.normalizePhoneNumber)(phone);
+    if (normalizedPhone.length < 10)
+        return null;
+    try {
+        const [inboundSnap, outboundSnap] = await Promise.all([
+            db
+                .collection(COLLECTION_NAME)
+                .where('ownerUid', '==', uid)
+                .where('from', '==', normalizedPhone)
+                .orderBy('createdAt', 'desc')
+                .limit(5)
+                .get(),
+            db
+                .collection(COLLECTION_NAME)
+                .where('ownerUid', '==', uid)
+                .where('to', '==', normalizedPhone)
+                .orderBy('createdAt', 'desc')
+                .limit(5)
+                .get()
+        ]);
+        let latestTimestamp = '';
+        let latestSlot = null;
+        const inspect = (snap) => {
+            for (const doc of snap.docs) {
+                const data = doc.data();
+                if (data.status === 'failed')
+                    continue;
+                if (typeof data.createdAt !== 'string' || data.createdAt.length === 0)
+                    continue;
+                const slotId = asSlotId(data.clientId);
+                if (!slotId)
+                    continue;
+                if (data.createdAt > latestTimestamp) {
+                    latestTimestamp = data.createdAt;
+                    latestSlot = slotId;
+                }
+            }
+        };
+        inspect(inboundSnap);
+        inspect(outboundSnap);
+        return latestSlot;
+    }
+    catch (error) {
+        logger_1.logger.warn('getLastConversationClientIdByPhone failed (index may still be building)', error);
         return null;
     }
 }

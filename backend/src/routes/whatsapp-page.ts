@@ -4,9 +4,14 @@ type QrPayload =
   | { available: true; qrPngBase64: string; expiresInSec: number }
   | { available: false; reason: 'already_connected' | 'no_qr' | 'expired' };
 
-interface RenderWhatsAppPageInput {
+export interface WhatsAppSlotPageData {
+  label: string;
   status: RuntimeStatus;
   payload: QrPayload | null;
+}
+
+interface RenderWhatsAppPageInput {
+  slots: WhatsAppSlotPageData[];
 }
 
 function escapeHtml(value: string): string {
@@ -25,51 +30,72 @@ function formatState(status: RuntimeStatus): string {
   return status.state;
 }
 
-function buildStatusPanel(status: RuntimeStatus): string {
-  const state = escapeHtml(formatState(status));
-  const phone = status.phone ? escapeHtml(status.phone) : '-';
-  const reason = status.lastDisconnectReason ? escapeHtml(status.lastDisconnectReason) : '-';
-
-  return `
-    <section class="status-panel">
-      <h2>Estado da Conexao</h2>
-      <p><strong>Status:</strong> ${state}</p>
-      <p><strong>Numero:</strong> ${phone}</p>
-      <p><strong>Ultimo motivo:</strong> ${reason}</p>
-    </section>`;
-}
-
-export function renderWhatsAppPage({ status, payload }: RenderWhatsAppPageInput): string {
-  let refreshSec = status.connected ? 10 : 3;
-  let dynamicBlock = '';
-
+function renderDynamicBlock(status: RuntimeStatus, payload: QrPayload | null): string {
   if (status.connected) {
-    dynamicBlock = '';
-  } else if (payload?.available) {
-    dynamicBlock = `
+    return '<section class="ok-block"><p class="hint">Conexao ativa.</p></section>';
+  }
+
+  if (payload?.available) {
+    return `
       <section class="qr-block">
         <img src="${payload.qrPngBase64}" alt="WhatsApp QR Code" />
         <p class="expires">Expira em: <strong>${payload.expiresInSec}s</strong></p>
         <p class="hint">Abra o WhatsApp -> Dispositivos conectados -> Conectar dispositivo</p>
       </section>`;
-  } else {
-    refreshSec = 2;
-    const reason = payload?.available === false ? payload.reason : 'no_qr';
-    const reasonText =
-      reason === 'expired'
-        ? 'QR expirado. Gerando um novo...'
-        : reason === 'already_connected'
-          ? 'WhatsApp ja conectado.'
-          : 'Aguardando geracao do QR...';
-
-    dynamicBlock = `
-      <section class="wait-block">
-        <div class="spinner"></div>
-        <p class="hint">${escapeHtml(reasonText)}</p>
-      </section>`;
   }
 
-  const statusPanel = buildStatusPanel(status);
+  const reason = payload?.available === false ? payload.reason : 'no_qr';
+  const reasonText =
+    reason === 'expired'
+      ? 'QR expirado. Gerando um novo...'
+      : reason === 'already_connected'
+        ? 'WhatsApp ja conectado.'
+        : 'Aguardando geracao do QR...';
+
+  return `
+    <section class="wait-block">
+      <div class="spinner"></div>
+      <p class="hint">${escapeHtml(reasonText)}</p>
+    </section>`;
+}
+
+function renderSlotCard(slot: WhatsAppSlotPageData): string {
+  const state = escapeHtml(formatState(slot.status));
+  const phone = slot.status.phone ? escapeHtml(slot.status.phone) : '-';
+  const reason = slot.status.lastDisconnectReason ? escapeHtml(slot.status.lastDisconnectReason) : '-';
+  const title = escapeHtml(slot.label);
+  const slotBadge = escapeHtml(slot.status.slotId.toUpperCase());
+
+  return `
+    <article class="slot-card">
+      <header class="slot-header">
+        <h2>${title}</h2>
+        <span class="slot-badge">${slotBadge}</span>
+      </header>
+      <section class="status-panel">
+        <p><strong>Status:</strong> ${state}</p>
+        <p><strong>Numero:</strong> ${phone}</p>
+        <p><strong>Ultimo motivo:</strong> ${reason}</p>
+      </section>
+      ${renderDynamicBlock(slot.status, slot.payload)}
+    </article>`;
+}
+
+function computeRefreshSec(slots: WhatsAppSlotPageData[]): number {
+  if (slots.every((slot) => slot.status.connected)) {
+    return 10;
+  }
+
+  if (slots.some((slot) => !slot.status.connected && (!slot.payload || slot.payload.available === false))) {
+    return 2;
+  }
+
+  return 3;
+}
+
+export function renderWhatsAppPage({ slots }: RenderWhatsAppPageInput): string {
+  const refreshSec = computeRefreshSec(slots);
+  const cards = slots.map((slot) => renderSlotCard(slot)).join('\n');
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -82,34 +108,59 @@ export function renderWhatsAppPage({ status, payload }: RenderWhatsAppPageInput)
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: Arial, sans-serif;
-      background: #0f172a;
+      background: linear-gradient(180deg, #0f172a 0%, #111827 100%);
       color: #f8fafc;
       min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 16px;
+      display: grid;
+      justify-items: center;
+      gap: 20px;
       padding: 24px;
     }
     h1 { font-size: 1.35rem; color: #e2e8f0; }
-    .status-panel {
+    .cards {
       width: 100%;
-      max-width: 360px;
-      border: 1px solid #334155;
-      border-radius: 12px;
-      background: #111827;
-      padding: 14px 16px;
+      max-width: 900px;
       display: grid;
-      gap: 6px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
     }
-    .status-panel h2 {
-      font-size: 0.95rem;
-      margin-bottom: 4px;
+    .slot-card {
+      border: 1px solid #334155;
+      border-radius: 14px;
+      background: #0b1220;
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+    .slot-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .slot-header h2 {
+      font-size: 1rem;
       color: #cbd5e1;
     }
+    .slot-badge {
+      font-size: 0.72rem;
+      letter-spacing: 0.04em;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: #1e293b;
+      color: #93c5fd;
+    }
+    .status-panel {
+      border: 1px solid #1f2937;
+      border-radius: 10px;
+      background: #111827;
+      padding: 10px 11px;
+      display: grid;
+      gap: 5px;
+    }
     .status-panel p {
-      font-size: 0.88rem;
+      font-size: 0.84rem;
       color: #94a3b8;
     }
     .qr-block {
@@ -118,28 +169,30 @@ export function renderWhatsAppPage({ status, payload }: RenderWhatsAppPageInput)
       justify-items: center;
     }
     img {
-      width: 280px;
-      height: 280px;
+      width: min(100%, 260px);
+      aspect-ratio: 1 / 1;
       background: #ffffff;
-      padding: 16px;
+      padding: 14px;
       border-radius: 12px;
       display: block;
     }
-    .expires { font-size: 0.9rem; color: #94a3b8; }
+    .expires { font-size: 0.85rem; color: #94a3b8; }
     .hint {
-      font-size: 0.85rem;
+      font-size: 0.8rem;
       color: #94a3b8;
       text-align: center;
-      max-width: 320px;
+      max-width: 260px;
     }
-    .wait-block {
+    .wait-block, .ok-block {
       display: grid;
       gap: 8px;
       justify-items: center;
+      min-height: 64px;
+      align-content: center;
     }
     .spinner {
-      width: 48px;
-      height: 48px;
+      width: 36px;
+      height: 36px;
       border: 4px solid #1f2937;
       border-top-color: #38bdf8;
       border-radius: 50%;
@@ -149,14 +202,15 @@ export function renderWhatsAppPage({ status, payload }: RenderWhatsAppPageInput)
     footer {
       font-size: 0.75rem;
       color: #64748b;
-      margin-top: 8px;
+      margin-top: 4px;
     }
   </style>
 </head>
 <body>
   <h1>SaldoPro - WhatsApp</h1>
-  ${statusPanel}
-  ${dynamicBlock}
+  <section class="cards">
+    ${cards}
+  </section>
   <footer>Atualiza automaticamente</footer>
 </body>
 </html>`;

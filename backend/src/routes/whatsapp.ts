@@ -1,18 +1,51 @@
-﻿import { Router } from 'express';
+import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { env } from '../config/env';
 import { getPhoneBinding, isPhoneAllowedForUid } from '../lib/firestore';
 import { logger } from '../lib/logger';
-import { WhatsAppClient } from '../whatsapp/client';
+import type { WhatsAppSlotId } from '../types/whatsapp';
 import { normalizePhoneNumber } from '../whatsapp/events';
-import { renderWhatsAppPage } from './whatsapp-page';
+import { WHATSAPP_SLOT_IDS, isWhatsAppSlotId, type WhatsAppClientsManager } from '../whatsapp/manager';
+import { renderWhatsAppPage, type WhatsAppSlotPageData } from './whatsapp-page';
 
 interface SendMessageBody {
   to?: string;
   text?: string;
+  clientId?: WhatsAppSlotId | string;
 }
 
-export function createWhatsAppRouter(client: WhatsAppClient): Router {
+interface ResetSessionBody {
+  slotId?: WhatsAppSlotId | string;
+}
+
+function slotLabel(slotId: WhatsAppSlotId): string {
+  return slotId === 'wa1' ? 'WhatsApp 1' : 'WhatsApp 2';
+}
+
+async function buildSlotsPageData(manager: WhatsAppClientsManager): Promise<WhatsAppSlotPageData[]> {
+  return Promise.all(
+    WHATSAPP_SLOT_IDS.map(async (slotId) => {
+      const status = manager.getStatusBySlot(slotId);
+      let payload: WhatsAppSlotPageData['payload'] = null;
+
+      if (!status.connected) {
+        try {
+          payload = await manager.getQrPayloadBySlot(slotId);
+        } catch {
+          payload = { available: false, reason: 'no_qr' };
+        }
+      }
+
+      return {
+        label: slotLabel(slotId),
+        status,
+        payload
+      };
+    })
+  );
+}
+
+export function createWhatsAppRouter(manager: WhatsAppClientsManager): Router {
   const router = Router();
 
   // QR display page - browser-accessible with token as query param (no Bearer header needed)
@@ -23,31 +56,21 @@ export function createWhatsAppRouter(client: WhatsAppClient): Router {
       return;
     }
 
-    const status = client.getStatus();
-    let payload: Awaited<ReturnType<WhatsAppClient['getQrPayload']>> | null = null;
-
-    if (!status.connected) {
-      try {
-        payload = await client.getQrPayload();
-      } catch {
-        payload = { available: false, reason: 'no_qr' };
-      }
-    }
-
+    const slots = await buildSlotsPageData(manager);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(renderWhatsAppPage({ status, payload }));
+    res.send(renderWhatsAppPage({ slots }));
   });
 
   router.use(requireAuth);
 
   router.get('/status', (_req, res) => {
-    res.json(client.getStatus());
+    res.json({ slots: manager.getStatuses() });
   });
 
   router.get('/qr', async (_req, res, next) => {
     try {
-      const payload = await client.getQrPayload();
-      res.json(payload);
+      const payloads = await manager.getQrPayloads();
+      res.json({ slots: payloads });
     } catch (error) {
       next(error);
     }
@@ -55,9 +78,10 @@ export function createWhatsAppRouter(client: WhatsAppClient): Router {
 
   router.post('/send', async (req, res, next) => {
     try {
-      const body = req.body as SendMessageBody;
+      const body = (req.body ?? {}) as SendMessageBody;
       const to = body.to?.trim() ?? '';
       const text = body.text?.trim() ?? '';
+      const clientId = typeof body.clientId === 'string' ? body.clientId.trim() : undefined;
 
       if (!to || !text) {
         res.status(400).json({ error: '`to` and `text` are required' });
@@ -68,6 +92,13 @@ export function createWhatsAppRouter(client: WhatsAppClient): Router {
         res.status(400).json({ error: `Text exceeds max length (${env.maxMessageLength})` });
         return;
       }
+
+      if (clientId && !isWhatsAppSlotId(clientId)) {
+        res.status(400).json({ error: '`clientId` must be `wa1` or `wa2`' });
+        return;
+      }
+      const resolvedClientId: WhatsAppSlotId | undefined =
+        clientId && isWhatsAppSlotId(clientId) ? clientId : undefined;
 
       const normalizedTarget = normalizePhoneNumber(to);
       const binding = await getPhoneBinding(normalizedTarget);
@@ -82,20 +113,37 @@ export function createWhatsAppRouter(client: WhatsAppClient): Router {
         return;
       }
 
-      const result = await client.sendText(to, text, binding.uid);
+      const result = await manager.sendTextWithRouting({
+        to,
+        text,
+        ownerUid: binding.uid,
+        ...(resolvedClientId ? { clientId: resolvedClientId } : {})
+      });
+
       res.json({
         ok: true,
-        messageId: result.messageId
+        messageId: result.messageId,
+        clientId: result.clientId
       });
     } catch (error) {
       next(error);
     }
   });
 
-  router.post('/session/reset', async (_req, res, next) => {
+  router.post('/session/reset', async (req, res, next) => {
     try {
-      await client.resetSession();
-      res.json({ ok: true });
+      const body = (req.body ?? {}) as ResetSessionBody;
+      const slotValue = typeof body.slotId === 'string' ? body.slotId.trim() : '';
+
+      if (slotValue && !isWhatsAppSlotId(slotValue)) {
+        res.status(400).json({ error: '`slotId` must be `wa1` or `wa2` when provided' });
+        return;
+      }
+      const resolvedSlotId: WhatsAppSlotId | undefined =
+        slotValue && isWhatsAppSlotId(slotValue) ? slotValue : undefined;
+
+      await manager.resetSession(resolvedSlotId);
+      res.json({ ok: true, slotId: resolvedSlotId ?? null });
     } catch (error) {
       next(error);
     }

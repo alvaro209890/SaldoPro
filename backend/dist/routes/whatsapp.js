@@ -7,8 +7,31 @@ const env_1 = require("../config/env");
 const firestore_1 = require("../lib/firestore");
 const logger_1 = require("../lib/logger");
 const events_1 = require("../whatsapp/events");
+const manager_1 = require("../whatsapp/manager");
 const whatsapp_page_1 = require("./whatsapp-page");
-function createWhatsAppRouter(client) {
+function slotLabel(slotId) {
+    return slotId === 'wa1' ? 'WhatsApp 1' : 'WhatsApp 2';
+}
+async function buildSlotsPageData(manager) {
+    return Promise.all(manager_1.WHATSAPP_SLOT_IDS.map(async (slotId) => {
+        const status = manager.getStatusBySlot(slotId);
+        let payload = null;
+        if (!status.connected) {
+            try {
+                payload = await manager.getQrPayloadBySlot(slotId);
+            }
+            catch {
+                payload = { available: false, reason: 'no_qr' };
+            }
+        }
+        return {
+            label: slotLabel(slotId),
+            status,
+            payload
+        };
+    }));
+}
+function createWhatsAppRouter(manager) {
     const router = (0, express_1.Router)();
     // QR display page - browser-accessible with token as query param (no Bearer header needed)
     router.get('/qr-page', async (req, res) => {
@@ -17,27 +40,18 @@ function createWhatsAppRouter(client) {
             res.status(401).send('Unauthorized');
             return;
         }
-        const status = client.getStatus();
-        let payload = null;
-        if (!status.connected) {
-            try {
-                payload = await client.getQrPayload();
-            }
-            catch {
-                payload = { available: false, reason: 'no_qr' };
-            }
-        }
+        const slots = await buildSlotsPageData(manager);
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        res.send((0, whatsapp_page_1.renderWhatsAppPage)({ status, payload }));
+        res.send((0, whatsapp_page_1.renderWhatsAppPage)({ slots }));
     });
     router.use(auth_1.requireAuth);
     router.get('/status', (_req, res) => {
-        res.json(client.getStatus());
+        res.json({ slots: manager.getStatuses() });
     });
     router.get('/qr', async (_req, res, next) => {
         try {
-            const payload = await client.getQrPayload();
-            res.json(payload);
+            const payloads = await manager.getQrPayloads();
+            res.json({ slots: payloads });
         }
         catch (error) {
             next(error);
@@ -45,9 +59,10 @@ function createWhatsAppRouter(client) {
     });
     router.post('/send', async (req, res, next) => {
         try {
-            const body = req.body;
+            const body = (req.body ?? {});
             const to = body.to?.trim() ?? '';
             const text = body.text?.trim() ?? '';
+            const clientId = typeof body.clientId === 'string' ? body.clientId.trim() : undefined;
             if (!to || !text) {
                 res.status(400).json({ error: '`to` and `text` are required' });
                 return;
@@ -56,6 +71,11 @@ function createWhatsAppRouter(client) {
                 res.status(400).json({ error: `Text exceeds max length (${env_1.env.maxMessageLength})` });
                 return;
             }
+            if (clientId && !(0, manager_1.isWhatsAppSlotId)(clientId)) {
+                res.status(400).json({ error: '`clientId` must be `wa1` or `wa2`' });
+                return;
+            }
+            const resolvedClientId = clientId && (0, manager_1.isWhatsAppSlotId)(clientId) ? clientId : undefined;
             const normalizedTarget = (0, events_1.normalizePhoneNumber)(to);
             const binding = await (0, firestore_1.getPhoneBinding)(normalizedTarget);
             if (!binding) {
@@ -67,20 +87,33 @@ function createWhatsAppRouter(client) {
                 res.status(403).json({ error: 'Target phone is not whitelisted' });
                 return;
             }
-            const result = await client.sendText(to, text, binding.uid);
+            const result = await manager.sendTextWithRouting({
+                to,
+                text,
+                ownerUid: binding.uid,
+                ...(resolvedClientId ? { clientId: resolvedClientId } : {})
+            });
             res.json({
                 ok: true,
-                messageId: result.messageId
+                messageId: result.messageId,
+                clientId: result.clientId
             });
         }
         catch (error) {
             next(error);
         }
     });
-    router.post('/session/reset', async (_req, res, next) => {
+    router.post('/session/reset', async (req, res, next) => {
         try {
-            await client.resetSession();
-            res.json({ ok: true });
+            const body = (req.body ?? {});
+            const slotValue = typeof body.slotId === 'string' ? body.slotId.trim() : '';
+            if (slotValue && !(0, manager_1.isWhatsAppSlotId)(slotValue)) {
+                res.status(400).json({ error: '`slotId` must be `wa1` or `wa2` when provided' });
+                return;
+            }
+            const resolvedSlotId = slotValue && (0, manager_1.isWhatsAppSlotId)(slotValue) ? slotValue : undefined;
+            await manager.resetSession(resolvedSlotId);
+            res.json({ ok: true, slotId: resolvedSlotId ?? null });
         }
         catch (error) {
             next(error);

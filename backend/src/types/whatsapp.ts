@@ -1,7 +1,9 @@
 export type MessageDirection = 'inbound' | 'outbound' | 'auto_reply';
 export type MessageStatus = 'received' | 'sent' | 'failed';
+export type WhatsAppSlotId = 'wa1' | 'wa2';
 
 export interface WhatsAppMessageRecord {
+  clientId: WhatsAppSlotId;
   messageId: string;
   direction: MessageDirection;
   ownerUid?: string;
@@ -23,6 +25,7 @@ export interface WhatsAppMessageRecord {
 }
 
 export interface RuntimeStatus {
+  slotId: WhatsAppSlotId;
   connected: boolean;
   state: 'open' | 'connecting' | 'close';
   phone: string | null;

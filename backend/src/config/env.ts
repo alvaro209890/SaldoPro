@@ -37,6 +37,10 @@ function getOptional(name: string): string | null {
   return value.trim();
 }
 
+const whatsappAuthDirBase =
+  process.env.WHATSAPP_AUTH_DIR?.trim() ||
+  '/opt/render/project/src/backend/.baileys_auth';
+
 export const env = {
   port: parsePort(process.env.PORT, 10000),
   nodeEnv: process.env.NODE_ENV ?? 'development',
@@ -45,9 +49,9 @@ export const env = {
   whatsappAutoReplyText:
     process.env.WHATSAPP_AUTO_REPLY_TEXT?.trim() ||
     'Recebemos sua mensagem. Em breve retornamos.',
-  whatsappAuthDir:
-    process.env.WHATSAPP_AUTH_DIR?.trim() ||
-    '/opt/render/project/src/backend/.baileys_auth',
+  whatsappAuthDir: whatsappAuthDirBase,
+  whatsappAuthDirWa1: process.env.WHATSAPP_AUTH_DIR_WA1?.trim() || `${whatsappAuthDirBase}_wa1`,
+  whatsappAuthDirWa2: process.env.WHATSAPP_AUTH_DIR_WA2?.trim() || `${whatsappAuthDirBase}_wa2`,
   firebaseProjectId: getRequired('FIREBASE_PROJECT_ID'),
   firebaseClientEmail: getRequired('FIREBASE_CLIENT_EMAIL'),
   firebasePrivateKey: getRequired('FIREBASE_PRIVATE_KEY'),
