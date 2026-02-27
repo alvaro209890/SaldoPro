@@ -114,6 +114,7 @@ class WhatsAppClient {
     sentByBotOrder = [];
     conversationByPhone = new Map();
     badMacByJid = new Map();
+    lidToPhoneJid = new Map();
     authSyncTimer = null;
     authSyncInFlight = false;
     authSyncQueued = false;
@@ -245,8 +246,8 @@ class WhatsAppClient {
             auth: state,
             version,
             printQRInTerminal: false,
-            // Ignore status broadcasts at socket level to reduce noisy decrypt failures.
-            shouldIgnoreJid: (jid) => (0, events_1.isStatusJid)(jid),
+            // Ignore status & groups at socket level: this bot only handles 1:1 chats.
+            shouldIgnoreJid: (jid) => (0, events_1.isStatusJid)(jid) || (0, events_1.isGroupJid)(jid),
             browser: ['SaldoPro', 'Render', '1.0.0']
         });
         this.socket = socket;
@@ -259,6 +260,15 @@ class WhatsAppClient {
         });
         socket.ev.on('messages.upsert', (upsert) => {
             void this.handleMessagesUpsert(upsert);
+        });
+        socket.ev.on('chats.phoneNumberShare', (event) => {
+            this.rememberLidMapping(event.lid, event.jid, 'phone_number_share');
+        });
+        socket.ev.on('contacts.upsert', (contacts) => {
+            this.absorbContactLidMappings(contacts, 'contacts_upsert');
+        });
+        socket.ev.on('contacts.update', (contacts) => {
+            this.absorbContactLidMappings(contacts, 'contacts_update');
         });
         logger_1.logger.info('WhatsApp socket initialized', { slotId: this.slotId, displayName: this.displayName });
     }
@@ -383,9 +393,18 @@ class WhatsAppClient {
             return;
         if (this.alreadyProcessedInbound(messageId))
             return;
-        const remoteJid = key.remoteJid ?? '';
+        const remoteJid = this.resolveIncomingRemoteJid(key);
         if (!remoteJid || (0, events_1.isStatusJid)(remoteJid) || (0, events_1.isGroupJid)(remoteJid))
             return;
+        if (remoteJid.endsWith('@lid')) {
+            this.rememberInbound(messageId);
+            logger_1.logger.warn('MSG_SKIP: unresolved LID remoteJid (waiting mapping)', {
+                slotId: this.slotId,
+                messageId,
+                remoteJid
+            });
+            return;
+        }
         if (!message.message && this.hasLidIdentity(key)) {
             await this.registerBadMac(message, 'empty_payload_with_lid');
             this.rememberInbound(messageId);
@@ -1051,6 +1070,71 @@ class WhatsAppClient {
                 peerJids,
                 error: error instanceof Error ? error.message : 'unknown'
             });
+        }
+    }
+    resolveIncomingRemoteJid(key) {
+        const enriched = key;
+        const remoteJid = key.remoteJid ?? '';
+        const candidates = [remoteJid, enriched.remoteJidAlt, enriched.participantPn, key.participant];
+        for (const candidate of candidates) {
+            const normalized = this.normalizePhoneJidCandidate(candidate);
+            if (normalized) {
+                if (remoteJid.endsWith('@lid')) {
+                    this.rememberLidMapping(remoteJid, normalized, 'message_candidate');
+                }
+                return normalized;
+            }
+        }
+        if (remoteJid.endsWith('@lid')) {
+            return this.lidToPhoneJid.get(remoteJid) ?? remoteJid;
+        }
+        return remoteJid;
+    }
+    normalizePhoneJidCandidate(jid) {
+        if (!jid)
+            return null;
+        if ((0, events_1.isStatusJid)(jid) || (0, events_1.isGroupJid)(jid) || jid.endsWith('@lid'))
+            return null;
+        const phone = (0, events_1.jidToPhone)(jid);
+        if (phone.length < 10)
+            return null;
+        try {
+            return (0, events_1.normalizePhoneToJid)(phone);
+        }
+        catch {
+            return null;
+        }
+    }
+    rememberLidMapping(lidJid, phoneJid, source) {
+        if (!lidJid || !lidJid.endsWith('@lid'))
+            return;
+        const normalizedPhoneJid = this.normalizePhoneJidCandidate(phoneJid);
+        if (!normalizedPhoneJid)
+            return;
+        const previous = this.lidToPhoneJid.get(lidJid);
+        this.lidToPhoneJid.set(lidJid, normalizedPhoneJid);
+        if (previous !== normalizedPhoneJid) {
+            logger_1.logger.info('LID mapping updated', {
+                slotId: this.slotId,
+                source,
+                lidJid,
+                phoneJid: normalizedPhoneJid
+            });
+        }
+    }
+    absorbContactLidMappings(contacts, source) {
+        for (const contact of contacts) {
+            const contactId = contact.id ?? null;
+            const lidRaw = contact.lid ?? null;
+            const lidJid = lidRaw
+                ? lidRaw.includes('@')
+                    ? lidRaw
+                    : `${lidRaw}@lid`
+                : contactId?.endsWith('@lid')
+                    ? contactId
+                    : null;
+            const phoneJid = contactId && !contactId.endsWith('@lid') ? contactId : null;
+            this.rememberLidMapping(lidJid, phoneJid, source);
         }
     }
     triggerSoftReconnectAfterBadMac(remoteJid) {

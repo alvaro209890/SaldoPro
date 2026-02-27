@@ -97,6 +97,8 @@ interface ConversationEntry {
 interface MessageKeyWithLid extends proto.IMessageKey {
   senderLid?: string | null;
   participantLid?: string | null;
+  participantPn?: string | null;
+  remoteJidAlt?: string | null;
 }
 
 const IMAGE_ONLY_FALLBACK_TEXT = 'Analise a imagem enviada e registre o lancamento corretamente.';
@@ -107,7 +109,10 @@ const MESSAGE_QUEUE_CONCURRENCY = 3;
 const COMPOSING_REFRESH_MS = 4000;
 /** If the same JID hits repeated Bad MAC in a short window, perform a soft reconnect. */
 const BAD_MAC_WINDOW_MS = 2 * 60 * 1000;
-const BAD_MAC_RECONNECT_THRESHOLD = 3;
+const BAD_MAC_RECONNECT_THRESHOLD = 1;
+/** How long to keep unresolvable-LID messages buffered before discarding. */
+const LID_BUFFER_TTL_MS = 30_000;
+const LID_BUFFER_MAX_PER_JID = 5;
 
 interface WhatsAppClientOptions {
   slotId: WhatsAppSlotId;
@@ -135,12 +140,16 @@ export class WhatsAppClient {
   private readonly sentByBotOrder: string[] = [];
   private readonly conversationByPhone = new Map<string, ConversationEntry[]>();
   private readonly badMacByJid = new Map<string, { count: number; lastAt: number }>();
+  private readonly lidToPhoneJid = new Map<string, string>();
   private authSyncTimer: NodeJS.Timeout | null = null;
   private authSyncInFlight = false;
   private authSyncQueued = false;
   private lastAuthSnapshotHash: string | null = null;
   private recoveringInvalidSession = false;
   private readonly aiCallTimestamps = new Map<string, number[]>();
+
+  // --- LID message buffer: store messages with unresolved LID for later replay ---
+  private readonly pendingLidMessages = new Map<string, { message: proto.IWebMessageInfo; bufferedAt: number }[]>();
 
   // --- Message processing queue ---
   private readonly messageQueue: Array<() => Promise<void>> = [];
@@ -287,8 +296,8 @@ export class WhatsAppClient {
       auth: state,
       version,
       printQRInTerminal: false,
-      // Ignore status broadcasts at socket level to reduce noisy decrypt failures.
-      shouldIgnoreJid: (jid) => isStatusJid(jid),
+      // Ignore status & groups at socket level: this bot only handles 1:1 chats.
+      shouldIgnoreJid: (jid) => isStatusJid(jid) || isGroupJid(jid),
       browser: ['SaldoPro', 'Render', '1.0.0']
     });
 
@@ -303,6 +312,15 @@ export class WhatsAppClient {
     });
     socket.ev.on('messages.upsert', (upsert) => {
       void this.handleMessagesUpsert(upsert as { type: string; messages: proto.IWebMessageInfo[] });
+    });
+    socket.ev.on('chats.phoneNumberShare', (event) => {
+      this.rememberLidMapping(event.lid, event.jid, 'phone_number_share');
+    });
+    socket.ev.on('contacts.upsert', (contacts) => {
+      this.absorbContactLidMappings(contacts, 'contacts_upsert');
+    });
+    socket.ev.on('contacts.update', (contacts) => {
+      this.absorbContactLidMappings(contacts, 'contacts_update');
     });
 
     logger.info('WhatsApp socket initialized', { slotId: this.slotId, displayName: this.displayName });
@@ -452,8 +470,20 @@ export class WhatsAppClient {
 
     if (this.alreadyProcessedInbound(messageId)) return;
 
-    const remoteJid = key.remoteJid ?? '';
+    const remoteJid = this.resolveIncomingRemoteJid(key);
     if (!remoteJid || isStatusJid(remoteJid) || isGroupJid(remoteJid)) return;
+    if (remoteJid.endsWith('@lid')) {
+      // Buffer the message — do NOT mark as processed so it can be replayed
+      this.bufferLidMessage(remoteJid, message);
+      logger.warn('MSG_BUFFER: unresolved LID remoteJid, buffered for retry', {
+        slotId: this.slotId,
+        messageId,
+        remoteJid,
+        fromMe: Boolean(key.fromMe),
+        pendingCount: this.pendingLidMessages.get(remoteJid)?.length ?? 0
+      });
+      return;
+    }
 
     if (!message.message && this.hasLidIdentity(key)) {
       await this.registerBadMac(message, 'empty_payload_with_lid');
@@ -466,20 +496,29 @@ export class WhatsAppClient {
       return;
     }
 
-    const isSelfChat = jidToPhone(remoteJid) === this.phone;
+    // Self-chat detection: compare via phone number AND via the socket's own LID
+    const isSelfChatByPhone = jidToPhone(remoteJid) === this.phone;
+    const isSelfChatByLid = this.isOwnLid(key.remoteJid ?? '');
+    const isSelfChat = isSelfChatByPhone || isSelfChatByLid;
 
     if (key.fromMe) {
       if (!isSelfChat || this.sentByBotIds.has(messageId)) {
         logger.info('MSG_SKIP: fromMe message blocked', {
           messageId,
           reason: this.sentByBotIds.has(messageId) ? 'sent_by_bot' : 'not_self_chat',
-          remoteJid
+          remoteJid,
+          isSelfChatByPhone,
+          isSelfChatByLid,
+          selfPhone: this.phone,
+          remotePhone: jidToPhone(remoteJid)
         });
         return;
       }
       logger.info('MSG_SELF: processing self-chat message for AI testing', {
         messageId,
-        phone: this.phone
+        phone: this.phone,
+        isSelfChatByPhone,
+        isSelfChatByLid
       });
     }
 
@@ -1190,6 +1229,168 @@ export class WhatsAppClient {
         error: error instanceof Error ? error.message : 'unknown'
       });
     }
+  }
+
+  private resolveIncomingRemoteJid(key: proto.IMessageKey): string {
+    const enriched = key as MessageKeyWithLid;
+    const remoteJid = key.remoteJid ?? '';
+    const candidates = [remoteJid, enriched.remoteJidAlt, enriched.participantPn, key.participant];
+
+    for (const candidate of candidates) {
+      const normalized = this.normalizePhoneJidCandidate(candidate);
+      if (normalized) {
+        if (remoteJid.endsWith('@lid')) {
+          this.rememberLidMapping(remoteJid, normalized, 'message_candidate');
+        }
+        return normalized;
+      }
+    }
+
+    if (remoteJid.endsWith('@lid')) {
+      return this.lidToPhoneJid.get(remoteJid) ?? remoteJid;
+    }
+
+    return remoteJid;
+  }
+
+  private normalizePhoneJidCandidate(jid: string | null | undefined): string | null {
+    if (!jid) return null;
+    if (isStatusJid(jid) || isGroupJid(jid) || jid.endsWith('@lid')) return null;
+
+    const phone = jidToPhone(jid);
+    if (phone.length < 10) return null;
+
+    try {
+      return normalizePhoneToJid(phone);
+    } catch {
+      return null;
+    }
+  }
+
+  private rememberLidMapping(
+    lidJid: string | null | undefined,
+    phoneJid: string | null | undefined,
+    source: 'phone_number_share' | 'contacts_upsert' | 'contacts_update' | 'message_candidate'
+  ): void {
+    if (!lidJid || !lidJid.endsWith('@lid')) return;
+
+    const normalizedPhoneJid = this.normalizePhoneJidCandidate(phoneJid);
+    if (!normalizedPhoneJid) return;
+
+    const previous = this.lidToPhoneJid.get(lidJid);
+    this.lidToPhoneJid.set(lidJid, normalizedPhoneJid);
+
+    if (previous !== normalizedPhoneJid) {
+      logger.info('LID mapping updated', {
+        slotId: this.slotId,
+        source,
+        lidJid,
+        phoneJid: normalizedPhoneJid
+      });
+    }
+
+    // Replay buffered messages that were waiting for this LID mapping
+    this.replayBufferedLidMessages(lidJid);
+  }
+
+  private absorbContactLidMappings(
+    contacts: Array<{ id?: string | null; lid?: string | null }>,
+    source: 'contacts_upsert' | 'contacts_update'
+  ): void {
+    for (const contact of contacts) {
+      const contactId = contact.id ?? null;
+      const lidRaw = contact.lid ?? null;
+      const lidJid = lidRaw
+        ? lidRaw.includes('@')
+          ? lidRaw
+          : `${lidRaw}@lid`
+        : contactId?.endsWith('@lid')
+          ? contactId
+          : null;
+      const phoneJid = contactId && !contactId.endsWith('@lid') ? contactId : null;
+      this.rememberLidMapping(lidJid, phoneJid, source);
+    }
+  }
+
+  /**
+   * Buffer a message whose remoteJid is an unresolved @lid.
+   * When the LID→phone mapping arrives (via contacts.upsert, phone_number_share, etc.),
+   * `replayBufferedLidMessages` will re-enqueue them.
+   */
+  private bufferLidMessage(lidJid: string, message: proto.IWebMessageInfo): void {
+    const now = Date.now();
+    let entries = this.pendingLidMessages.get(lidJid);
+    if (!entries) {
+      entries = [];
+      this.pendingLidMessages.set(lidJid, entries);
+    }
+
+    // Evict expired entries
+    const fresh = entries.filter((e) => now - e.bufferedAt < LID_BUFFER_TTL_MS);
+
+    // Cap per-JID buffer to avoid memory leaks
+    if (fresh.length >= LID_BUFFER_MAX_PER_JID) {
+      logger.warn('LID buffer full for JID, dropping oldest', {
+        slotId: this.slotId,
+        lidJid,
+        dropped: fresh[0]?.message.key?.id
+      });
+      fresh.shift();
+    }
+
+    fresh.push({ message, bufferedAt: now });
+    this.pendingLidMessages.set(lidJid, fresh);
+  }
+
+  /**
+   * When a LID→phone mapping arrives, replay any buffered messages for that LID.
+   * The messages are re-enqueued into the normal processing queue.
+   */
+  private replayBufferedLidMessages(lidJid: string): void {
+    const entries = this.pendingLidMessages.get(lidJid);
+    if (!entries || entries.length === 0) return;
+
+    this.pendingLidMessages.delete(lidJid);
+
+    const validEntries = entries.filter((e) => Date.now() - e.bufferedAt < LID_BUFFER_TTL_MS);
+    if (validEntries.length === 0) return;
+
+    logger.info('LID_REPLAY: replaying buffered messages after LID mapping resolved', {
+      slotId: this.slotId,
+      lidJid,
+      resolvedTo: this.lidToPhoneJid.get(lidJid) ?? 'unknown',
+      count: validEntries.length,
+      messageIds: validEntries.map((e) => e.message.key?.id ?? 'unknown')
+    });
+
+    for (const entry of validEntries) {
+      this.enqueueMessage(entry.message);
+    }
+  }
+
+  /**
+   * Check if a JID (possibly @lid) corresponds to the bot's own user identity.
+   * Used for self-chat detection when the remoteJid is LID-based.
+   */
+  private isOwnLid(jid: string): boolean {
+    if (!jid || !this.socket?.user) return false;
+
+    // The socket's user object may itself have a LID property
+    const socketUser = this.socket.user as { id?: string; lid?: string };
+    if (socketUser.lid) {
+      const ownLidJid = socketUser.lid.includes('@') ? socketUser.lid : `${socketUser.lid}@lid`;
+      if (jid === ownLidJid) return true;
+    }
+
+    // Also check via the LID→phone mapping: if this LID resolves to our own phone, it's self
+    if (jid.endsWith('@lid')) {
+      const resolved = this.lidToPhoneJid.get(jid);
+      if (resolved && this.phone) {
+        return jidToPhone(resolved) === this.phone;
+      }
+    }
+
+    return false;
   }
 
   private triggerSoftReconnectAfterBadMac(remoteJid: string): void {
