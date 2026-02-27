@@ -17,22 +17,41 @@ const AuthContext = createContext<AuthContextType>({
 export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [user, setUser] = useState<User | null>(null);
     const [loading, setLoading] = useState(true);
+    const [displayName, setDisplayName] = useState<string | null>(null);
 
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
             setUser(currentUser);
+            setDisplayName(currentUser?.displayName || null);
             setLoading(false);
         });
 
         return unsubscribe;
     }, []);
 
+    useEffect(() => {
+        if (!user || displayName) return;
+
+        let cancelled = false;
+        void user.reload().then(() => {
+            if (cancelled) return;
+            setDisplayName(auth.currentUser?.displayName || null);
+        }).catch(() => {
+            if (cancelled) return;
+            setDisplayName(user.displayName || null);
+        });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [user, displayName]);
+
     return (
         <AuthContext.Provider
             value={{
                 user,
                 loading,
-                displayName: user?.displayName || null,
+                displayName,
             }}
         >
             {!loading && children}

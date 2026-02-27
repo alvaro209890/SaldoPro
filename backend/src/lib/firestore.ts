@@ -333,6 +333,21 @@ export async function saveMessageSafe(record: WhatsAppMessageRecord): Promise<vo
 }
 
 async function ensureGlobalCategoriesSeed(): Promise<void> {
+  // app_categories.uid references app_users(uid), so the synthetic global owner
+  // must always exist before seeding shared categories.
+  const { error: ensureGlobalUserError } = await db
+    .from('app_users')
+    .upsert(
+      {
+        uid: GLOBAL_CATEGORIES_UID,
+        email: null,
+        display_name: 'Global Categories',
+        created_at: new Date().toISOString()
+      },
+      { onConflict: 'uid' }
+    );
+  assertNoError(ensureGlobalUserError, 'ensureGlobalCategoriesSeed.ensureGlobalUser');
+
   const { count, error: countError } = await db
     .from('app_categories')
     .select('*', { count: 'exact', head: true })

@@ -11,6 +11,7 @@ import { BACKEND_URL } from '@/config/backend';
 export async function registerUser(email: string, password: string, displayName: string, phone: string) {
     const cred = await createUserWithEmailAndPassword(auth, email, password);
     await updateProfile(cred.user, { displayName });
+    await cred.user.reload();
     const idToken = await cred.user.getIdToken();
 
     const response = await fetch(`${BACKEND_URL}/api/data/bootstrap`, {
@@ -36,6 +37,7 @@ export async function registerUser(email: string, password: string, displayName:
 
 export async function loginUser(email: string, password: string) {
     const cred = await signInWithEmailAndPassword(auth, email, password);
+    await cred.user.reload();
     return cred.user;
 }
 

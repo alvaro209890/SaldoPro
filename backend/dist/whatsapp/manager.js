@@ -171,7 +171,7 @@ class WhatsAppClientsManager {
             if (!this.running)
                 return;
             if (!acquired) {
-                logger_1.logger.info('WhatsApp lock is held by another instance. Waiting before retry.', {
+                logger_1.logger.debug('WhatsApp lock is held by another instance. Waiting before retry.', {
                     slotId: ACTIVE_SLOT,
                     instanceId: this.instanceId
                 });
