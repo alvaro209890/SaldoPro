@@ -740,90 +740,30 @@ export class WhatsAppClient {
 
       const stopTypingPresence = this.startTypingPresence(remoteJid);
       try {
-        const conversation = await this.getConversationHistory(ownerUid, remotePhone);
-        const isFirstMessage = conversation.length === 0;
-        const isGreeting = isGreetingMessage(inboundText);
-        const isCapabilitiesQuestion = isCapabilitiesIntentMessage(inboundText);
-        const lastActivityAt = await getLastConversationActivityByPhone(ownerUid, remotePhone);
-        const isConversationRestart = this.isConversationRestart(lastActivityAt, isFirstMessage);
-        const shouldSendCapabilitiesSummary =
-          isGreeting || isFirstMessage || isConversationRestart || isCapabilitiesQuestion;
+        // Wrap the entire AI pipeline in a global timeout to prevent infinite "typing..."
+        const AI_PIPELINE_TIMEOUT_MS = 45_000;
+        const aiPipelineResult = await Promise.race([
+          this.runAiPipeline(ownerUid, remotePhone, inboundText, imageDataUrl, audioDataUrl),
+          sleep(AI_PIPELINE_TIMEOUT_MS).then(() => {
+            throw new Error(`AI pipeline timed out after ${AI_PIPELINE_TIMEOUT_MS}ms`);
+          })
+        ]);
 
-        if (isFirstMessage) {
-          logger.info('MSG_WELCOME: first message detected, AI will introduce itself', {
-            uid: ownerUid,
-            phone: remotePhone
-          });
-        }
-
-        // Build AI messages from history (text only)
-        const aiMessages: GroqChatMessage[] = conversation.map((entry) => ({
-          role: entry.role,
-          content: entry.content
-        }));
-
-        // Always add the current message at the end with the image/audio if present
-        let finalContent = inboundText.trim();
-        if (!finalContent) {
-          if (imageDataUrl) finalContent = 'Analise a imagem enviada e registre o lançamento corretamente.';
-          else if (audioDataUrl) finalContent = 'Transcreva e interprete o audio enviado, e execute a acao de registrar ou responder.';
-        }
-
-        aiMessages.push({
-          role: 'user',
-          content: finalContent,
-          ...(imageDataUrl ? { imageDataUrl } : {}),
-          ...(audioDataUrl ? { audioDataUrl } : {})
-        });
-
-        logger.info('MSG_AI_CONTEXT: sending to AI', {
-          historyCount: conversation.length,
-          totalMessages: aiMessages.length,
-          hasImage: Boolean(imageDataUrl),
-          hasAudio: Boolean(audioDataUrl),
-          isGreeting,
-          isCapabilitiesQuestion,
-          isConversationRestart,
-          shouldSendCapabilitiesSummary
-        });
-
-        this.recordAiCall(ownerUid);
-
-        const aiReply = await processWhatsAppAIMessage(ownerUid, aiMessages, {
-          isFirstMessage,
-          isGreeting,
-          isCapabilitiesQuestion,
-          isConversationRestart,
-          shouldSendCapabilitiesSummary
-        });
-
-        // Save user message AFTER AI processes — enrich media messages with AI-extracted context
-        if (inboundText.trim() || imageDataUrl || audioDataUrl) {
-          let textForHistory = inboundText.trim();
-          if (!textForHistory && aiReply.trim()) {
-            const mediaType = imageDataUrl ? 'Imagem' : 'Audio';
-            const firstLine = aiReply.trim().split('\n').find((l) => l.replace(/[*_~`]/g, '').trim().length > 0) || '';
-            const cleaned = firstLine.replace(/[*_~`]/g, '').trim().slice(0, 120);
-            textForHistory = cleaned ? `[${mediaType}] ${cleaned}` : `${mediaType} enviado no WhatsApp.`;
-          } else if (!textForHistory) {
-            textForHistory = imageDataUrl ? 'Imagem enviada no WhatsApp.' : 'Audio enviado no WhatsApp.';
-          }
-          await this.appendConversationMessage(ownerUid, remotePhone, {
-            role: 'user',
-            content: textForHistory
-          });
-        }
-
-        if (aiReply.trim()) {
-          await this.sendWithRetry(remoteJid, aiReply.trim(), 'auto_reply', ownerUid);
+        if (aiPipelineResult.aiReply.trim()) {
+          await this.sendWithRetry(remoteJid, aiPipelineResult.aiReply.trim(), 'auto_reply', ownerUid);
           await this.appendConversationMessage(ownerUid, remotePhone, {
             role: 'assistant',
-            content: aiReply.trim()
+            content: aiPipelineResult.aiReply.trim()
           });
           return;
         }
       } catch (error) {
-        logger.error('Failed to process AI WhatsApp message', error);
+        logger.error('MSG_AI_ERROR: Failed to process AI WhatsApp message', {
+          uid: ownerUid,
+          phone: remotePhone,
+          error: error instanceof Error ? error.message : 'unknown',
+          stack: error instanceof Error ? error.stack : undefined
+        });
         // Send friendly error message instead of silent failure
         const errorMsg = 'Desculpe, estou com dificuldade para processar agora. Tente novamente em instantes.';
         try {
@@ -845,6 +785,101 @@ export class WhatsAppClient {
         content: env.whatsappAutoReplyText.trim()
       });
     }
+  }
+
+  /**
+   * Runs the full AI processing pipeline with logging at each step.
+   * Extracted so the caller can wrap it in a global timeout.
+   */
+  private async runAiPipeline(
+    ownerUid: string,
+    remotePhone: string,
+    inboundText: string,
+    imageDataUrl: string | null,
+    audioDataUrl: string | null
+  ): Promise<{ aiReply: string }> {
+    logger.info('MSG_PIPELINE_START: loading conversation history', { uid: ownerUid, phone: remotePhone });
+    const conversation = await this.getConversationHistory(ownerUid, remotePhone);
+    const isFirstMessage = conversation.length === 0;
+    const isGreeting = isGreetingMessage(inboundText);
+    const isCapabilitiesQuestion = isCapabilitiesIntentMessage(inboundText);
+    const lastActivityAt = await getLastConversationActivityByPhone(ownerUid, remotePhone);
+    const isConversationRestart = this.isConversationRestart(lastActivityAt, isFirstMessage);
+    const shouldSendCapabilitiesSummary =
+      isGreeting || isFirstMessage || isConversationRestart || isCapabilitiesQuestion;
+
+    if (isFirstMessage) {
+      logger.info('MSG_WELCOME: first message detected, AI will introduce itself', {
+        uid: ownerUid,
+        phone: remotePhone
+      });
+    }
+
+    // Build AI messages from history (text only)
+    const aiMessages: GroqChatMessage[] = conversation.map((entry) => ({
+      role: entry.role,
+      content: entry.content
+    }));
+
+    // Always add the current message at the end with the image/audio if present
+    let finalContent = inboundText.trim();
+    if (!finalContent) {
+      if (imageDataUrl) finalContent = 'Analise a imagem enviada e registre o lançamento corretamente.';
+      else if (audioDataUrl) finalContent = 'Transcreva e interprete o audio enviado, e execute a acao de registrar ou responder.';
+    }
+
+    aiMessages.push({
+      role: 'user',
+      content: finalContent,
+      ...(imageDataUrl ? { imageDataUrl } : {}),
+      ...(audioDataUrl ? { audioDataUrl } : {})
+    });
+
+    logger.info('MSG_AI_CONTEXT: sending to AI', {
+      historyCount: conversation.length,
+      totalMessages: aiMessages.length,
+      hasImage: Boolean(imageDataUrl),
+      hasAudio: Boolean(audioDataUrl),
+      isGreeting,
+      isCapabilitiesQuestion,
+      isConversationRestart,
+      shouldSendCapabilitiesSummary
+    });
+
+    this.recordAiCall(ownerUid);
+
+    logger.info('MSG_PIPELINE_AI_CALL: calling processWhatsAppAIMessage', { uid: ownerUid });
+    const aiReply = await processWhatsAppAIMessage(ownerUid, aiMessages, {
+      isFirstMessage,
+      isGreeting,
+      isCapabilitiesQuestion,
+      isConversationRestart,
+      shouldSendCapabilitiesSummary
+    });
+    logger.info('MSG_PIPELINE_AI_DONE: AI response received', {
+      uid: ownerUid,
+      replyLength: aiReply.length,
+      replyPreview: aiReply.slice(0, 80)
+    });
+
+    // Save user message AFTER AI processes — enrich media messages with AI-extracted context
+    if (inboundText.trim() || imageDataUrl || audioDataUrl) {
+      let textForHistory = inboundText.trim();
+      if (!textForHistory && aiReply.trim()) {
+        const mediaType = imageDataUrl ? 'Imagem' : 'Audio';
+        const firstLine = aiReply.trim().split('\n').find((l) => l.replace(/[*_~`]/g, '').trim().length > 0) || '';
+        const cleaned = firstLine.replace(/[*_~`]/g, '').trim().slice(0, 120);
+        textForHistory = cleaned ? `[${mediaType}] ${cleaned}` : `${mediaType} enviado no WhatsApp.`;
+      } else if (!textForHistory) {
+        textForHistory = imageDataUrl ? 'Imagem enviada no WhatsApp.' : 'Audio enviado no WhatsApp.';
+      }
+      await this.appendConversationMessage(ownerUid, remotePhone, {
+        role: 'user',
+        content: textForHistory
+      });
+    }
+
+    return { aiReply };
   }
 
   private async sendAutoReply(remoteJid: string, ownerUid?: string): Promise<boolean> {
