@@ -10,6 +10,16 @@ function getRequired(name: string): string {
   return value;
 }
 
+function getRequiredAny(...names: string[]): string {
+  for (const name of names) {
+    const value = process.env[name];
+    if (value && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  throw new Error(`Missing required environment variable: one of ${names.join(', ')}`);
+}
+
 function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined) return fallback;
   return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
@@ -53,7 +63,7 @@ export const env = {
   whatsappAuthDirWa1: process.env.WHATSAPP_AUTH_DIR_WA1?.trim() || `${whatsappAuthDirBase}_wa1`,
   whatsappAuthDirWa2: process.env.WHATSAPP_AUTH_DIR_WA2?.trim() || `${whatsappAuthDirBase}_wa2`,
   supabaseUrl: getRequired('SUPABASE_URL'),
-  supabaseServiceRoleKey: getRequired('SUPABASE_SERVICE_ROLE_KEY'),
+  supabaseServiceRoleKey: getRequiredAny('SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_SECRET_KEY'),
   firebaseProjectId: getRequired('FIREBASE_PROJECT_ID'),
   firebaseClientEmail: getRequired('FIREBASE_CLIENT_EMAIL'),
   firebasePrivateKey: getRequired('FIREBASE_PRIVATE_KEY'),
