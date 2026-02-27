@@ -435,6 +435,20 @@ export async function bootstrapUserData(uid: string, input: BootstrapUserInput):
       assertNoError(error, 'bootstrapUserData.settingsUpdatePhone');
     }
   }
+
+  // Pre-create WhatsApp binding at signup/bootstrap time.
+  // This avoids relying on first inbound metadata resolution for new accounts.
+  if (normalizedPhone.length >= 10) {
+    try {
+      await savePhoneBinding(normalizedPhone, uid);
+    } catch (error) {
+      logger.warn('bootstrapUserData: failed to pre-bind WhatsApp phone', {
+        uid,
+        phone: normalizedPhone,
+        error: error instanceof Error ? error.message : 'unknown'
+      });
+    }
+  }
   await ensureGlobalCategoriesSeed();
 
   allowedNumbersCache.delete(uid);
