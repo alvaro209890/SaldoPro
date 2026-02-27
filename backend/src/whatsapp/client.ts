@@ -94,12 +94,20 @@ interface ConversationEntry {
   content: string;
 }
 
+interface MessageKeyWithLid extends proto.IMessageKey {
+  senderLid?: string | null;
+  participantLid?: string | null;
+}
+
 const IMAGE_ONLY_FALLBACK_TEXT = 'Analise a imagem enviada e registre o lancamento corretamente.';
 
 /** Max number of messages processed concurrently by the AI pipeline. */
 const MESSAGE_QUEUE_CONCURRENCY = 3;
 /** Refresh typing presence periodically while AI processing is running. */
 const COMPOSING_REFRESH_MS = 4000;
+/** If the same JID hits repeated Bad MAC in a short window, perform a soft reconnect. */
+const BAD_MAC_WINDOW_MS = 2 * 60 * 1000;
+const BAD_MAC_RECONNECT_THRESHOLD = 3;
 
 interface WhatsAppClientOptions {
   slotId: WhatsAppSlotId;
@@ -126,6 +134,7 @@ export class WhatsAppClient {
   private readonly sentByBotIds = new Set<string>();
   private readonly sentByBotOrder: string[] = [];
   private readonly conversationByPhone = new Map<string, ConversationEntry[]>();
+  private readonly badMacByJid = new Map<string, { count: number; lastAt: number }>();
   private authSyncTimer: NodeJS.Timeout | null = null;
   private authSyncInFlight = false;
   private authSyncQueued = false;
@@ -321,6 +330,7 @@ export class WhatsAppClient {
       this.connected = true;
       this.lastDisconnectReason = null;
       this.phone = jidToPhone(this.socket?.user?.id) || null;
+      this.badMacByJid.clear();
       this.clearQr();
       this.scheduleAuthStateSync();
       logger.info('WhatsApp connection opened', {
@@ -401,8 +411,13 @@ export class WhatsAppClient {
         const errorMsg = error instanceof Error ? error.message : '';
         if (errorMsg.includes('Bad MAC')) {
           // Bad MAC is often transient/noisy (e.g. status updates), do not nuke auth session.
+          const remoteJid = message.key?.remoteJid ?? 'unknown';
+          const messageId = message.key?.id ?? 'unknown';
+          await this.registerBadMac(message, errorMsg);
           logger.warn('Bad MAC decryption error detected; ignoring message without session reset', {
             slotId: this.slotId,
+            remoteJid,
+            messageId,
             error: error instanceof Error ? error.message : 'unknown'
           });
           return;
@@ -439,6 +454,17 @@ export class WhatsAppClient {
 
     const remoteJid = key.remoteJid ?? '';
     if (!remoteJid || isStatusJid(remoteJid) || isGroupJid(remoteJid)) return;
+
+    if (!message.message && this.hasLidIdentity(key)) {
+      await this.registerBadMac(message, 'empty_payload_with_lid');
+      this.rememberInbound(messageId);
+      logger.warn('MSG_SKIP: missing payload with LID identity (possible decrypt failure)', {
+        slotId: this.slotId,
+        messageId,
+        remoteJid
+      });
+      return;
+    }
 
     const isSelfChat = jidToPhone(remoteJid) === this.phone;
 
@@ -920,6 +946,7 @@ export class WhatsAppClient {
       this.clearAuthSyncTimer();
       this.authSyncQueued = false;
       this.lastAuthSnapshotHash = null;
+      this.badMacByJid.clear();
       this.clearQr();
       this.phone = null;
 
@@ -1068,6 +1095,129 @@ export class WhatsAppClient {
     }
   }
 
+  private async registerBadMac(message: proto.IWebMessageInfo, errorMessage: string): Promise<void> {
+    const key = message.key as MessageKeyWithLid | undefined;
+    const remoteJid = key?.remoteJid ?? 'unknown';
+    const messageId = key?.id ?? 'unknown';
+
+    const now = Date.now();
+    const previous = this.badMacByJid.get(remoteJid);
+    const count =
+      previous && now - previous.lastAt <= BAD_MAC_WINDOW_MS
+        ? previous.count + 1
+        : 1;
+
+    this.badMacByJid.set(remoteJid, { count, lastAt: now });
+
+    logger.warn('Bad MAC counter updated', {
+      slotId: this.slotId,
+      remoteJid,
+      messageId,
+      count,
+      threshold: BAD_MAC_RECONNECT_THRESHOLD,
+      errorMessage
+    });
+
+    if (count < BAD_MAC_RECONNECT_THRESHOLD) {
+      return;
+    }
+
+    this.badMacByJid.set(remoteJid, { count: 0, lastAt: now });
+    await this.clearSignalSessionsAfterBadMac(message);
+    this.triggerSoftReconnectAfterBadMac(remoteJid);
+  }
+
+  private hasLidIdentity(key: proto.IMessageKey): boolean {
+    const enriched = key as MessageKeyWithLid;
+    return Boolean(enriched.senderLid || enriched.participantLid);
+  }
+
+  private extractBadMacPeerJids(message: proto.IWebMessageInfo): string[] {
+    const key = message.key as MessageKeyWithLid | undefined;
+    if (!key) return [];
+
+    const candidates = [key.remoteJid, key.participant, key.senderLid, key.participantLid];
+
+    return [
+      ...new Set(
+        candidates.filter(
+          (jid): jid is string =>
+            typeof jid === 'string' &&
+            jid.includes('@') &&
+            !isStatusJid(jid) &&
+            !isGroupJid(jid)
+        )
+      )
+    ];
+  }
+
+  private async clearSignalSessionsAfterBadMac(message: proto.IWebMessageInfo): Promise<void> {
+    const socket = this.socket;
+    if (!socket) return;
+
+    const peerJids = this.extractBadMacPeerJids(message);
+    if (peerJids.length === 0) return;
+
+    const sessionsToClear: Record<string, null> = {};
+    for (const jid of peerJids) {
+      try {
+        const signalAddress = socket.signalRepository.jidToSignalProtocolAddress(jid);
+        sessionsToClear[signalAddress] = null;
+      } catch (error) {
+        logger.warn('Failed deriving Signal address for Bad MAC session cleanup', {
+          slotId: this.slotId,
+          jid,
+          error: error instanceof Error ? error.message : 'unknown'
+        });
+      }
+    }
+
+    const sessionIds = Object.keys(sessionsToClear);
+    if (sessionIds.length === 0) return;
+
+    try {
+      await socket.authState.keys.set({ session: sessionsToClear });
+      this.scheduleAuthStateSync();
+      logger.warn('Cleared Signal sessions after repeated Bad MAC', {
+        slotId: this.slotId,
+        sessionIds,
+        peerJids
+      });
+    } catch (error) {
+      logger.warn('Failed clearing Signal sessions after Bad MAC', {
+        slotId: this.slotId,
+        peerJids,
+        error: error instanceof Error ? error.message : 'unknown'
+      });
+    }
+  }
+
+  private triggerSoftReconnectAfterBadMac(remoteJid: string): void {
+    if (!this.allowReconnect) return;
+    if (this.reconnectTimer) return;
+
+    logger.warn('Triggering soft reconnect after repeated Bad MAC', {
+      slotId: this.slotId,
+      remoteJid
+    });
+
+    this.connected = false;
+    this.state = 'connecting';
+    this.lastDisconnectReason = 'bad_mac_reconnect';
+
+    try {
+      (this.socket as { ws?: { close: () => void } } | null)?.ws?.close();
+    } catch (error) {
+      logger.warn('Failed closing websocket during soft reconnect', {
+        slotId: this.slotId,
+        error: error instanceof Error ? error.message : 'unknown'
+      });
+    }
+
+    this.socket = null;
+    this.scheduleReconnect(1500);
+  }
+
   private mapDisconnectReason(code: number | null): string {
     if (code === null) return 'unknown';
     if (code === DisconnectReason.loggedOut) return 'logged_out';
@@ -1134,12 +1284,23 @@ export class WhatsAppClient {
     logger.info('Ignoring WhatsApp message from non-authorized number', { from: normalizedPhone });
   }
 
+  private getMediaDownloadContext():
+    | { reuploadRequest: (msg: proto.IWebMessageInfo) => Promise<proto.IWebMessageInfo>; logger: WASocket['logger'] }
+    | undefined {
+    const socket = this.socket;
+    if (!socket) return undefined;
+    return {
+      reuploadRequest: socket.updateMediaMessage,
+      logger: socket.logger
+    };
+  }
+
   private async extractInboundImageDataUrl(message: proto.IWebMessageInfo): Promise<string | null> {
     if (!isImageMessage(message)) return null;
 
     const mimeType = getImageMimeType(message) || 'image/jpeg';
     try {
-      const mediaBuffer = await downloadMediaMessage(message, 'buffer', {});
+      const mediaBuffer = await downloadMediaMessage(message, 'buffer', {}, this.getMediaDownloadContext());
       if (!mediaBuffer || mediaBuffer.length === 0) {
         return null;
       }
@@ -1155,6 +1316,10 @@ export class WhatsAppClient {
       const base64 = mediaBuffer.toString('base64');
       return `data:${mimeType};base64,${base64}`;
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : '';
+      if (errorMsg.includes('Bad MAC')) {
+        await this.registerBadMac(message, errorMsg);
+      }
       logger.error('Failed to download inbound WhatsApp image', error);
       return null;
     }
@@ -1169,7 +1334,7 @@ export class WhatsAppClient {
 
     const mimeType = getAudioMimeType(message) || 'audio/ogg';
     try {
-      const mediaBuffer = await downloadMediaMessage(message, 'buffer', {});
+      const mediaBuffer = await downloadMediaMessage(message, 'buffer', {}, this.getMediaDownloadContext());
       if (!mediaBuffer || mediaBuffer.length === 0) {
         logger.warn('AUDIO_EXTRACT_FAIL: buffer is empty');
         return null;
@@ -1189,6 +1354,10 @@ export class WhatsAppClient {
       logger.info('AUDIO_EXTRACT_SUCCESS', { size: mediaBuffer.length, mimeType });
       return `data:${mimeType};base64,${base64}`;
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : '';
+      if (errorMsg.includes('Bad MAC')) {
+        await this.registerBadMac(message, errorMsg);
+      }
       logger.error('AUDIO_EXTRACT_ERROR: Failed to download inbound WhatsApp audio', error);
       return null;
     }
