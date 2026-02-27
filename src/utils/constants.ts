@@ -31,6 +31,12 @@ export const PAYMENT_METHOD_LABELS: Record<string, string> = {
     boleto: 'Boleto',
 };
 
+export const FREQUENCY_LABELS: Record<string, string> = {
+    weekly: 'Semanal',
+    monthly: 'Mensal',
+    yearly: 'Anual',
+};
+
 export const CHART_COLORS = [
     '#6366f1', '#8b5cf6', '#ec4899', '#f43f5e',
     '#f97316', '#eab308', '#10b981', '#06b6d4',

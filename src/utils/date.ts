@@ -38,6 +38,17 @@ export function getDaysInMonth(monthKey: string): number {
     return new Date(year, month, 0).getDate();
 }
 
+export function advanceDate(dateStr: string, frequency: 'weekly' | 'monthly' | 'yearly'): string {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const d = new Date(year, month - 1, day);
+
+    if (frequency === 'weekly') d.setDate(d.getDate() + 7);
+    else if (frequency === 'monthly') d.setMonth(d.getMonth() + 1);
+    else if (frequency === 'yearly') d.setFullYear(d.getFullYear() + 1);
+
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 export function getMonthDates(monthKey: string): string[] {
     const days = getDaysInMonth(monthKey);
     const dates: string[] = [];

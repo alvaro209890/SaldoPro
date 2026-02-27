@@ -100,3 +100,32 @@ export interface ReminderFormData {
     type: 'payable' | 'receivable';
     status: 'pending' | 'paid';
 }
+
+export type RecurringFrequency = 'weekly' | 'monthly' | 'yearly';
+
+export interface RecurringTransaction {
+    id: string;
+    type: 'income' | 'expense';
+    amount: number;
+    category: string;
+    description: string;
+    paymentMethod: PaymentMethod;
+    frequency: RecurringFrequency;
+    startDate: string;       // YYYY-MM-DD
+    endDate: string | null;  // YYYY-MM-DD or null for indefinite
+    nextDueDate: string;     // YYYY-MM-DD
+    active: boolean;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface RecurringTransactionFormData {
+    type: 'income' | 'expense';
+    amount: number;
+    category: string;
+    description: string;
+    paymentMethod: PaymentMethod;
+    frequency: RecurringFrequency;
+    startDate: string;
+    endDate: string;
+}

@@ -79,9 +79,18 @@ function isCapabilitiesIntentMessage(text) {
         /\bquais?\s+(suas\s+)?(funcoes|funcionalidades|capacidades)\b/.test(normalized) ||
         /\b(o que|oq)\s+faz\b/.test(normalized));
 }
+const UNDO_KEYWORDS = ['desfaz', 'desfazer', 'desfaca', 'cancela', 'cancelar', 'errou', 'errei', 'anula', 'anular', 'desfizer'];
+function isUndoMessage(text) {
+    const normalized = normalizeForGreeting(text);
+    if (!normalized || normalized.length > 120)
+        return false;
+    return UNDO_KEYWORDS.some((kw) => normalized.includes(kw));
+}
 const IMAGE_ONLY_FALLBACK_TEXT = 'Analise a imagem enviada e registre o lancamento corretamente.';
 /** Max number of messages processed concurrently by the AI pipeline. */
 const MESSAGE_QUEUE_CONCURRENCY = 3;
+/** Refresh typing presence periodically while AI processing is running. */
+const COMPOSING_REFRESH_MS = 4000;
 class WhatsAppClient {
     socket = null;
     state = 'connecting';
@@ -262,22 +271,23 @@ class WhatsAppClient {
             this.lastDisconnectReason = reason;
             logger_1.logger.warn('WhatsApp connection closed', { code, reason });
             const shouldForceRelogin = this.allowReconnect &&
-                (code === baileys_1.DisconnectReason.loggedOut ||
-                    code === baileys_1.DisconnectReason.badSession ||
-                    code === baileys_1.DisconnectReason.connectionReplaced);
+                (code === baileys_1.DisconnectReason.loggedOut || code === baileys_1.DisconnectReason.badSession);
             if (shouldForceRelogin) {
-                const delayMs = code === baileys_1.DisconnectReason.connectionReplaced ? 5000 : 0;
-                logger_1.logger.warn('Invalid/replaced WhatsApp session detected, forcing fresh login to generate new QR', {
+                logger_1.logger.warn('Invalid WhatsApp session detected, forcing fresh login to generate new QR', {
                     code,
-                    reason,
-                    delayMs
+                    reason
                 });
-                if (delayMs > 0) {
-                    setTimeout(() => void this.recoverFromInvalidSession(), delayMs);
-                }
-                else {
-                    void this.recoverFromInvalidSession();
-                }
+                void this.recoverFromInvalidSession();
+                return;
+            }
+            // In Render deploys, two instances can overlap briefly and trigger
+            // "connection_replaced". Do NOT wipe auth state in this case.
+            if (this.allowReconnect && code === baileys_1.DisconnectReason.connectionReplaced) {
+                logger_1.logger.warn('WhatsApp connection replaced; preserving auth state and retrying later', {
+                    code,
+                    reason
+                });
+                this.scheduleReconnect(20000);
                 return;
             }
             const shouldReconnect = this.allowReconnect &&
@@ -497,6 +507,20 @@ class WhatsAppClient {
                 }
                 return;
             }
+            // Quick undo: detect "desfaz", "cancela", "errou" etc. and revert last action
+            if (isUndoMessage(inboundText)) {
+                try {
+                    const undoReply = await (0, assistant_1.undoLastAction)(ownerUid);
+                    await this.sendWithRetry(remoteJid, undoReply, 'auto_reply', ownerUid);
+                    await this.appendConversationMessage(ownerUid, remotePhone, { role: 'user', content: inboundText.trim() });
+                    await this.appendConversationMessage(ownerUid, remotePhone, { role: 'assistant', content: undoReply });
+                    return;
+                }
+                catch (undoError) {
+                    logger_1.logger.error('Failed to process undo action', undoError);
+                }
+            }
+            const stopTypingPresence = this.startTypingPresence(remoteJid);
             try {
                 const conversation = await this.getConversationHistory(ownerUid, remotePhone);
                 const isFirstMessage = conversation.length === 0;
@@ -540,17 +564,6 @@ class WhatsAppClient {
                     isConversationRestart,
                     shouldSendCapabilitiesSummary
                 });
-                // Save user message to conversation cache for future context
-                if (inboundText.trim() || imageDataUrl || audioDataUrl) {
-                    let textForHistory = inboundText.trim();
-                    if (!textForHistory) {
-                        textForHistory = imageDataUrl ? 'Imagem enviada no WhatsApp.' : 'Audio enviado no WhatsApp.';
-                    }
-                    await this.appendConversationMessage(ownerUid, remotePhone, {
-                        role: 'user',
-                        content: textForHistory
-                    });
-                }
                 this.recordAiCall(ownerUid);
                 const aiReply = await (0, assistant_1.processWhatsAppAIMessage)(ownerUid, aiMessages, {
                     isFirstMessage,
@@ -559,6 +572,23 @@ class WhatsAppClient {
                     isConversationRestart,
                     shouldSendCapabilitiesSummary
                 });
+                // Save user message AFTER AI processes — enrich media messages with AI-extracted context
+                if (inboundText.trim() || imageDataUrl || audioDataUrl) {
+                    let textForHistory = inboundText.trim();
+                    if (!textForHistory && aiReply.trim()) {
+                        const mediaType = imageDataUrl ? 'Imagem' : 'Audio';
+                        const firstLine = aiReply.trim().split('\n').find((l) => l.replace(/[*_~`]/g, '').trim().length > 0) || '';
+                        const cleaned = firstLine.replace(/[*_~`]/g, '').trim().slice(0, 120);
+                        textForHistory = cleaned ? `[${mediaType}] ${cleaned}` : `${mediaType} enviado no WhatsApp.`;
+                    }
+                    else if (!textForHistory) {
+                        textForHistory = imageDataUrl ? 'Imagem enviada no WhatsApp.' : 'Audio enviado no WhatsApp.';
+                    }
+                    await this.appendConversationMessage(ownerUid, remotePhone, {
+                        role: 'user',
+                        content: textForHistory
+                    });
+                }
                 if (aiReply.trim()) {
                     await this.sendWithRetry(remoteJid, aiReply.trim(), 'auto_reply', ownerUid);
                     await this.appendConversationMessage(ownerUid, remotePhone, {
@@ -579,6 +609,9 @@ class WhatsAppClient {
                     logger_1.logger.error('Failed to send AI error fallback message', sendError);
                 }
                 return;
+            }
+            finally {
+                stopTypingPresence();
             }
         }
         if (!env_1.env.whatsappAutoReplyEnabled)
@@ -604,6 +637,36 @@ class WhatsAppClient {
             logger_1.logger.error('Failed to send WhatsApp auto-reply', error);
             return false;
         }
+    }
+    startTypingPresence(remoteJid) {
+        let stopped = false;
+        const sendPresence = async (presence) => {
+            if (!this.socket || !this.connected)
+                return;
+            try {
+                await this.socket.sendPresenceUpdate(presence, remoteJid);
+            }
+            catch (error) {
+                logger_1.logger.warn('Failed to update WhatsApp presence', {
+                    presence,
+                    remoteJid,
+                    error: error instanceof Error ? error.message : 'unknown'
+                });
+            }
+        };
+        void sendPresence('composing');
+        const interval = setInterval(() => {
+            if (stopped)
+                return;
+            void sendPresence('composing');
+        }, COMPOSING_REFRESH_MS);
+        return () => {
+            if (stopped)
+                return;
+            stopped = true;
+            clearInterval(interval);
+            void sendPresence('paused');
+        };
     }
     async sendWithRetry(jid, text, direction, ownerUid) {
         if (!this.socket) {
@@ -697,17 +760,17 @@ class WhatsAppClient {
         this.qrDataUrl = null;
         this.qrGeneratedAt = null;
     }
-    scheduleReconnect() {
+    scheduleReconnect(delayMs = 2000) {
         if (this.reconnectTimer)
             return;
-        logger_1.logger.info('Scheduling WhatsApp reconnect in 2 seconds');
+        logger_1.logger.info('Scheduling WhatsApp reconnect', { delayMs });
         this.reconnectTimer = setTimeout(() => {
             this.reconnectTimer = null;
             void this.connect().catch((error) => {
                 logger_1.logger.error('Reconnect attempt failed', error);
                 this.scheduleReconnect();
             });
-        }, 2000);
+        }, delayMs);
     }
     clearReconnectTimer() {
         if (!this.reconnectTimer)

@@ -12,6 +12,7 @@ import {
     Wallet,
     Sparkles,
     Bell,
+    Repeat,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -26,6 +27,7 @@ const NAV_ITEMS = [
     { label: 'Categorias', path: '/app/categories', icon: Tags },
     { label: 'Relatórios', path: '/app/reports', icon: PieChart },
     { label: 'Lembretes', path: '/app/reminders', icon: Bell },
+    { label: 'Recorrentes', path: '/app/recurring', icon: Repeat },
     { label: 'Configurações', path: '/app/settings', icon: Settings },
 ];
 

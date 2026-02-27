@@ -92,7 +92,7 @@ export function createAiChatRouter(): Router {
 
             res.json({
                 reply: result.reply,
-                actionObject: result.actionObject
+                actionObjects: result.actionObjects
             });
         } catch (error) {
             logger.error('Web AI chat error', {

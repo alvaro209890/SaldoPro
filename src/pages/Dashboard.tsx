@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTransactions } from '@/hooks/useTransactions';
+import { useRecurringTransactions } from '@/hooks/useRecurringTransactions';
 import { useCategories } from '@/hooks/useCategories';
 import { useSettings } from '@/hooks/useSettings';
 import { getCurrentMonthKey } from '@/utils/date';
@@ -24,8 +25,17 @@ export function Dashboard() {
     const { transactions, loading: txLoading, add, update, remove } = useTransactions(monthKey);
     const { categories, loading: catLoading } = useCategories();
     const { settings, loading: setLoading } = useSettings();
+    const { generateOverdueTransactions, loading: recurringLoading } = useRecurringTransactions();
 
     const isLoading = txLoading || catLoading || setLoading;
+
+    // Generate overdue recurring transactions on dashboard load
+    useEffect(() => {
+        if (!recurringLoading) {
+            generateOverdueTransactions();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [recurringLoading]);
 
     const { income, expense, balance } = useMemo(() => {
         let incomeAcc = 0;

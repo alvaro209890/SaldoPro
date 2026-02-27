@@ -47,6 +47,78 @@ function isLightweightContext(context) {
         context.isConversationRestart ||
         context.shouldSendCapabilitiesSummary);
 }
+/**
+ * Detects whether the last user message is a query/conversation that does NOT
+ * require action capabilities (add/update/delete transactions).
+ * When true, a compact system prompt is used to save tokens.
+ */
+function isQueryOnlyIntent(messages, context) {
+    // Media messages always need the full prompt
+    const lastMsg = messages[messages.length - 1];
+    if (!lastMsg || lastMsg.imageDataUrl || lastMsg.audioDataUrl)
+        return false;
+    // Greetings/first messages are conversational and should use compact mode
+    if (isLightweightContext(context))
+        return true;
+    const text = lastMsg.content
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .trim();
+    if (!text)
+        return false;
+    // Action verbs → needs full prompt
+    if (/\b(gastei|paguei|comprei|recebi|ganhei|registr|lanca|adiciona|coloca|bota|paga|gasta|receb|todo mes|toda semana|mensal|semanal|anual|edita|altera|muda|exclui|delet|apaga|remove)\b/.test(text)) {
+        return false;
+    }
+    // Explicit query patterns → compact prompt
+    if (/\b(quanto|qual|quais|como|onde|quando|quem|porque|por ?que|mostr|resum|saldo|total|relat|analise|dica|conselho|sugest|explica|ajuda|me fala|me diz|me conta)\b/.test(text)) {
+        return true;
+    }
+    // Short messages without numbers are likely conversational
+    if (text.length < 60 && !/\d/.test(text))
+        return true;
+    return false;
+}
+function detectPromptMode(messages, context) {
+    return isQueryOnlyIntent(messages, context) ? 'compact_query' : 'full_financial';
+}
+function buildPromptByMode(mode, context) {
+    return mode === 'compact_query' ? buildCompactSystemPrompt(context) : buildSystemPrompt(context);
+}
+function enforceActionByPromptMode(actions, mode) {
+    if (mode === 'compact_query') {
+        return [{ action: 'none' }];
+    }
+    return actions.length > 0 ? actions : [{ action: 'none' }];
+}
+/**
+ * Compact system prompt for query-only messages.
+ * No action formats, no transaction IDs, just financial summary + reply instructions.
+ */
+function buildCompactSystemPrompt(context) {
+    const { profile, settings, categories, recentTransactions } = context;
+    const userName = profile.displayName?.split(' ')[0] || '';
+    const userInfo = userName ? `Nome do usuario: ${userName}.` : '';
+    const today = new Date().toISOString().split('T')[0];
+    const financialSummary = buildFinancialSummary(recentTransactions, settings);
+    const categoryNames = categories.map((c) => c.name).join(', ');
+    return `Voce e o SaldoPro, assistente financeiro pessoal via WhatsApp.
+${userInfo}
+
+Responda a pergunta ou duvida do usuario com base no contexto financeiro abaixo.
+Seja natural, objetivo e util. Nao inclua IDs tecnicos.
+
+${financialSummary}
+
+Categorias: ${categoryNames || '(nenhuma)'}
+Data de hoje: ${today}
+Moeda: ${settings.currency}
+${settings.budget > 0 ? `Orcamento mensal: ${formatCurrency(settings.budget, settings.currency)}` : ''}
+
+FORMATO: Retorne SEMPRE um JSON valido com exatamente duas chaves:
+{"reply":"sua resposta aqui","actionObjects":[{"action":"none"}]}`;
+}
 function buildSystemPrompt(context) {
     const { profile, settings, categories, recentTransactions } = context;
     const userName = profile.displayName?.split(' ')[0] || '';
@@ -138,6 +210,12 @@ COMPREENSAO DE LINGUAGEM NATURAL
   - "meu salario e 3000" = informacao contextual, NAO transacao
   - "quanto gastei esse mes?" = pergunta, responda com resumo
 - REGRA: quando o usuario usa verbos no passado (gastei, paguei, comprei, recebi, ganhei) com um valor, SEMPRE registre automaticamente. Nao pergunte "quer registrar?". Apenas registre e confirme.
+- TRANSACOES RECORRENTES: quando o usuario mencionar frequencia, use "add_recurring_transaction" em vez de "add_transaction":
+  - Palavras-chave: "todo mes", "toda semana", "mensal", "semanal", "anual", "todo ano", "semanalmente", "mensalmente", "por mes", "por semana"
+  - "pago 500 de aluguel todo mes" = add_recurring_transaction, frequency "monthly"
+  - "gasto 50 por semana no transporte" = add_recurring_transaction, frequency "weekly"
+  - "recebo 3000 de salario mensalmente" = add_recurring_transaction, frequency "monthly"
+  - "pago 1200 de seguro por ano" = add_recurring_transaction, frequency "yearly"
 
 REGRAS DE RESUMO DE CAPACIDADES
 - ${summaryInstruction}
@@ -146,6 +224,7 @@ REGRAS DE RESUMO DE CAPACIDADES
 
 QUANDO RESUMIR CAPACIDADES, PRIORIZE ESTES ITENS
 - Registrar despesas e receitas por texto.
+- Criar transacoes recorrentes (mensal, semanal, anual) para gastos fixos.
 - Ler comprovante/recibo em imagem e sugerir ou registrar lancamento.
 - Mostrar resumo do mes (receitas, despesas e saldo).
 - Ajudar no controle de orcamento e alertar excesso de gastos.
@@ -156,21 +235,24 @@ QUANDO RESUMIR CAPACIDADES, PRIORIZE ESTES ITENS
 REGRAS TECNICAS (OBRIGATORIO)
 1) Retorne SEMPRE um JSON valido com exatamente duas chaves:
    - "reply": string com texto para WhatsApp.
-   - "actionObject": objeto com uma das acoes abaixo.
+   - "actionObjects": array de objetos de acao (AIAction[]).
 2) Nao escreva nada antes nem depois do JSON. A resposta inteira deve ser o JSON.
-3) Para registrar gasto/receita: use "add_transaction". Quando o usuario usa verbos de acao no passado (gastei, paguei, comprei, recebi, ganhei) com valor, REGISTRE AUTOMATICAMENTE sem perguntar.
-4) Para conversas gerais, duvidas, orientacoes e informacoes: use {"action":"none"}.
-5) Se faltar o VALOR (nao a categoria ou data), pergunte no "reply" e use action none. Se faltar categoria, escolha a mais adequada. Se faltar data, use hoje.
-6) NUNCA registre transacao quando o usuario usa frases descritivas/informativas ('minhas despesas sao', 'meu gasto mensal e', 'tenho de conta').
+3) Para registrar gasto/receita unico: use "add_transaction". Quando o usuario usa verbos de acao no passado (gastei, paguei, comprei, recebi, ganhei) com valor, REGISTRE AUTOMATICAMENTE sem perguntar.
+4) Para registrar gasto/receita recorrente (todo mes, semanal, etc.): use "add_recurring_transaction" com o campo "frequency".
+5) Para conversas gerais, duvidas, orientacoes e informacoes: use {"action":"none"}.
+6) Se faltar o VALOR (nao a categoria ou data), pergunte no "reply" e use action none. Se faltar categoria, escolha a mais adequada. Se faltar data, use hoje.
+7) NUNCA registre transacao quando o usuario usa frases descritivas/informativas ('minhas despesas sao', 'meu gasto mensal e', 'tenho de conta').
+8) Se o usuario citar MULTIPLAS transacoes na mesma mensagem, adicione MULTIPLOS objetos em "actionObjects", na mesma ordem em que aparecem.
 
 FORMATOS DE ACTIONOBJECT
 - {"action":"none"}
 - {"action":"add_transaction","type":"expense|income","amount":15.5,"description":"Lanche","categoryId":"id","date":"YYYY-MM-DD","paymentMethod":"pix|credit|debit|cash|transfer|boleto"}
+- {"action":"add_recurring_transaction","type":"expense|income","amount":500,"description":"Aluguel","categoryId":"id","date":"YYYY-MM-DD","paymentMethod":"pix","frequency":"weekly|monthly|yearly","endDate":null}
 - {"action":"update_transaction","id":"transaction_id","changes":{"amount":20}}
 - {"action":"delete_transaction","id":"transaction_id"}
 
 EXEMPLO DE RESPOSTA (formato exato):
-{"reply":"Lancamento registrado! Despesa de R$ 50,00 em Alimentacao.","actionObject":{"action":"add_transaction","type":"expense","amount":50,"description":"Mercado","categoryId":"alimentacao","date":"${today}","paymentMethod":"pix"}}
+{"reply":"Lancamentos registrados!","actionObjects":[{"action":"add_transaction","type":"expense","amount":50,"description":"Mercado","categoryId":"alimentacao","date":"${today}","paymentMethod":"pix"},{"action":"add_transaction","type":"expense","amount":15,"description":"Uber","categoryId":"transporte","date":"${today}","paymentMethod":"pix"}]}
 
 ${financialContextBlock}`;
 }
@@ -212,7 +294,7 @@ function sanitizeReply(text) {
     return trimmed;
 }
 /**
- * Validates that a parsed actionObject has the correct field types.
+ * Validates that a parsed action has the correct field types.
  * Returns a sanitized action or falls back to { action: 'none' }.
  */
 function validateAction(raw) {
@@ -254,7 +336,47 @@ function validateAction(raw) {
             return { action: 'none' };
         return { action: 'delete_transaction', id };
     }
+    if (action === 'add_recurring_transaction') {
+        const type = obj.type;
+        const amount = Number(obj.amount);
+        const description = typeof obj.description === 'string' ? obj.description : '';
+        const categoryId = typeof obj.categoryId === 'string' ? obj.categoryId : '';
+        const date = typeof obj.date === 'string' ? obj.date : '';
+        const paymentMethod = typeof obj.paymentMethod === 'string' ? obj.paymentMethod : 'pix';
+        const frequency = obj.frequency;
+        const endDate = typeof obj.endDate === 'string' ? obj.endDate : null;
+        if (type !== 'income' && type !== 'expense')
+            return { action: 'none' };
+        if (!Number.isFinite(amount) || amount <= 0)
+            return { action: 'none' };
+        if (frequency !== 'weekly' && frequency !== 'monthly' && frequency !== 'yearly')
+            return { action: 'none' };
+        return {
+            action: 'add_recurring_transaction',
+            type,
+            amount,
+            description,
+            categoryId,
+            date,
+            paymentMethod: paymentMethod,
+            frequency,
+            endDate,
+        };
+    }
     return { action: 'none' };
+}
+/**
+ * Validates an AI action list payload.
+ * Accepts both new format (array) and legacy single-object format.
+ */
+function validateActions(raw) {
+    const list = Array.isArray(raw) ? raw : [raw];
+    const sanitized = list
+        .map((entry) => validateAction(entry))
+        .filter((action) => action.action !== 'none');
+    if (sanitized.length > 0)
+        return sanitized;
+    return [{ action: 'none' }];
 }
 /**
  * Ordered list of Groq models to try. When one hits rate limit (429),
@@ -293,7 +415,7 @@ function isServerErrorStatus(status) {
 /**
  * Attempt a single Groq model call. Returns the result or throws.
  */
-async function callGroqModel(modelId, systemPrompt, formattedMessages, isVisionRequest) {
+async function callGroqModel(modelId, systemPrompt, formattedMessages, isVisionRequest, promptMode) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), env_1.env.groqTimeoutMs);
     const startTime = Date.now();
@@ -344,22 +466,26 @@ async function callGroqModel(modelId, systemPrompt, formattedMessages, isVisionR
                 });
                 return {
                     reply: sanitizeReply(content).slice(0, env_1.env.maxMessageLength),
-                    actionObject: { action: 'none' }
+                    actionObjects: [{ action: 'none' }]
                 };
             }
             throw new Error('Groq response is not valid JSON');
         }
         const reply = cleanAiReply(sanitizeReply((parsed.reply ?? '').toString()));
-        const finalAction = validateAction(parsed.actionObject);
+        const rawActionPayload = parsed.actionObjects
+            ?? parsed.actionObject;
+        const finalActions = validateActions(rawActionPayload);
+        const enforcedActions = enforceActionByPromptMode(finalActions, promptMode);
         logger_1.logger.info('Groq model response parsed successfully', {
             model: modelId,
             elapsedMs,
-            actionType: finalAction.action,
+            actionCount: enforcedActions.length,
+            actionTypes: enforcedActions.map((a) => a.action),
             replyLength: reply.length
         });
         return {
             reply: reply || 'Nao consegui entender. Pode reformular?',
-            actionObject: finalAction
+            actionObjects: enforcedActions
         };
     }
     catch (error) {
@@ -399,7 +525,9 @@ async function queryGroqAssistant(messages, context) {
         }
         return { role: message.role, content: message.content };
     });
-    const systemPrompt = buildSystemPrompt(context);
+    const promptMode = detectPromptMode(messages, context);
+    const systemPrompt = buildPromptByMode(promptMode, context);
+    logger_1.logger.info('AI prompt mode selected', { provider: 'groq', promptMode, isVisionRequest });
     // Filter models: for vision requests, only use vision-capable models
     const modelsToTry = isVisionRequest
         ? GROQ_MODEL_CHAIN.filter((m) => m.vision)
@@ -409,7 +537,7 @@ async function queryGroqAssistant(messages, context) {
     for (const model of modelsToTry) {
         try {
             logger_1.logger.info('Groq: trying model', { model: model.id, isVisionRequest });
-            const result = await callGroqModel(model.id, systemPrompt, formattedMessages, isVisionRequest);
+            const result = await callGroqModel(model.id, systemPrompt, formattedMessages, isVisionRequest, promptMode);
             logger_1.logger.info('Groq: model succeeded', { model: model.id });
             return result;
         }
@@ -454,7 +582,7 @@ async function queryGroqAssistant(messages, context) {
             lastError: lastGroqError instanceof Error ? lastGroqError.message : 'unknown'
         });
         try {
-            return await queryGeminiAssistant(messages, context);
+            return await queryGeminiAssistant(messages, context, promptMode);
         }
         catch (geminiError) {
             logger_1.logger.error('Gemini fallback also failed', {
@@ -470,10 +598,12 @@ async function queryGroqAssistant(messages, context) {
  * Fallback to Gemini 2.5 Flash when Groq is unavailable.
  * Uses Google's Generative Language API format.
  */
-async function queryGeminiAssistant(messages, context) {
-    const systemPrompt = buildSystemPrompt(context);
+async function queryGeminiAssistant(messages, context, promptModeOverride) {
+    const promptMode = promptModeOverride ?? detectPromptMode(messages, context);
+    const systemPrompt = buildPromptByMode(promptMode, context);
     const lastMessage = messages[messages.length - 1];
     const isVisionRequest = Boolean(lastMessage?.imageDataUrl);
+    logger_1.logger.info('AI prompt mode selected', { provider: 'gemini', promptMode, isVisionRequest });
     // Convert messages to Gemini format
     const geminiContents = [];
     for (const msg of messages) {
@@ -546,20 +676,24 @@ async function queryGeminiAssistant(messages, context) {
             });
             return {
                 reply: fallbackReply || 'Nao consegui entender. Pode reformular?',
-                actionObject: { action: 'none' }
+                actionObjects: [{ action: 'none' }]
             };
         }
         const reply = cleanAiReply(sanitizeReply((parsed.reply ?? '').toString()));
-        const finalAction = validateAction(parsed.actionObject);
+        const rawActionPayload = parsed.actionObjects
+            ?? parsed.actionObject;
+        const finalActions = validateActions(rawActionPayload);
+        const enforcedActions = enforceActionByPromptMode(finalActions, promptMode);
         logger_1.logger.info('Gemini response parsed successfully', {
             model: env_1.env.geminiModel,
             elapsedMs,
-            actionType: finalAction.action,
+            actionCount: enforcedActions.length,
+            actionTypes: enforcedActions.map((a) => a.action),
             replyLength: reply.length
         });
         return {
             reply: reply || 'Nao consegui entender. Pode reformular?',
-            actionObject: finalAction
+            actionObjects: enforcedActions
         };
     }
     catch (error) {

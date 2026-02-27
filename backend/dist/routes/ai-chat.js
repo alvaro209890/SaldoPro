@@ -63,7 +63,7 @@ function createAiChatRouter() {
             const result = await (0, groq_1.queryGroqAssistant)(groqMessages, context);
             res.json({
                 reply: result.reply,
-                actionObject: result.actionObject
+                actionObjects: result.actionObjects
             });
         }
         catch (error) {

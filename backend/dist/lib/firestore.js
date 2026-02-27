@@ -10,6 +10,13 @@ exports.getRecentTransactions = getRecentTransactions;
 exports.addUserTransaction = addUserTransaction;
 exports.updateUserTransaction = updateUserTransaction;
 exports.deleteUserTransaction = deleteUserTransaction;
+exports.getUserTransactionById = getUserTransactionById;
+exports.restoreUserTransaction = restoreUserTransaction;
+exports.addRecurringTransaction = addRecurringTransaction;
+exports.getActiveRecurringTransactions = getActiveRecurringTransactions;
+exports.deleteRecurringTransaction = deleteRecurringTransaction;
+exports.updateRecurringTransactionBackend = updateRecurringTransactionBackend;
+exports.generateOverdueRecurringTransactions = generateOverdueRecurringTransactions;
 exports.getAllowedWhatsAppNumbers = getAllowedWhatsAppNumbers;
 exports.invalidateAllowedNumbersCacheForUid = invalidateAllowedNumbersCacheForUid;
 exports.isPhoneAllowedForUid = isPhoneAllowedForUid;
@@ -148,6 +155,101 @@ async function updateUserTransaction(uid, transactionId, changes) {
 }
 async function deleteUserTransaction(uid, transactionId) {
     await db.collection('users').doc(uid).collection('transactions').doc(transactionId).delete();
+}
+async function getUserTransactionById(uid, transactionId) {
+    const snap = await db.collection('users').doc(uid).collection('transactions').doc(transactionId).get();
+    if (!snap.exists)
+        return null;
+    return {
+        id: snap.id,
+        ...snap.data()
+    };
+}
+async function restoreUserTransaction(uid, transactionId, transaction) {
+    await db.collection('users').doc(uid).collection('transactions').doc(transactionId).set({
+        ...transaction,
+        monthKey: monthKeyFromDate(transaction.date),
+        updatedAt: new Date().toISOString()
+    });
+}
+function advanceDateBackend(dateStr, frequency) {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const d = new Date(year, month - 1, day);
+    if (frequency === 'weekly')
+        d.setDate(d.getDate() + 7);
+    else if (frequency === 'monthly')
+        d.setMonth(d.getMonth() + 1);
+    else if (frequency === 'yearly')
+        d.setFullYear(d.getFullYear() + 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+async function addRecurringTransaction(uid, input) {
+    const now = new Date().toISOString();
+    const ref = await db.collection('users').doc(uid).collection('recurringTransactions').add({
+        ...input,
+        nextDueDate: input.startDate,
+        active: true,
+        createdAt: now,
+        updatedAt: now,
+    });
+    return ref.id;
+}
+async function getActiveRecurringTransactions(uid) {
+    const snap = await db
+        .collection('users')
+        .doc(uid)
+        .collection('recurringTransactions')
+        .where('active', '==', true)
+        .get();
+    return snap.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+    }));
+}
+async function deleteRecurringTransaction(uid, recurringId) {
+    await db
+        .collection('users')
+        .doc(uid)
+        .collection('recurringTransactions')
+        .doc(recurringId)
+        .delete();
+}
+async function updateRecurringTransactionBackend(uid, recurringId, changes) {
+    await db
+        .collection('users')
+        .doc(uid)
+        .collection('recurringTransactions')
+        .doc(recurringId)
+        .update({
+        ...changes,
+        updatedAt: new Date().toISOString(),
+    });
+}
+async function generateOverdueRecurringTransactions(uid) {
+    const today = new Date().toISOString().split('T')[0];
+    const active = await getActiveRecurringTransactions(uid);
+    let generated = 0;
+    for (const rt of active) {
+        let nextDate = rt.nextDueDate;
+        while (nextDate <= today) {
+            await addUserTransaction(uid, {
+                type: rt.type,
+                amount: rt.amount,
+                date: nextDate,
+                category: rt.category,
+                description: rt.description,
+                paymentMethod: rt.paymentMethod,
+            });
+            generated++;
+            nextDate = advanceDateBackend(nextDate, rt.frequency);
+        }
+        const updates = { nextDueDate: nextDate };
+        if (rt.endDate && nextDate > rt.endDate) {
+            updates.active = false;
+        }
+        await updateRecurringTransactionBackend(uid, rt.id, updates);
+    }
+    return generated;
 }
 // ---------------------------------------------------------------------------
 // Per-UID allowed numbers cache — avoids repeated Firestore reads per message.

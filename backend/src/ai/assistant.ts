@@ -2,12 +2,18 @@
 import {
   addUserTransaction,
   deleteUserTransaction,
+  getUserTransactionById,
   getRecentTransactions,
   getUserCategories,
   getUserProfile,
   getUserSettings,
+  restoreUserTransaction,
   updateUserTransaction,
+  addRecurringTransaction as addRecurringTransactionDb,
+  deleteRecurringTransaction as deleteRecurringTransactionDb,
+  generateOverdueRecurringTransactions,
   type CreateTransactionInput,
+  type CreateRecurringTransactionInput,
   type UserCategory,
   type UserProfileBackend,
   type UserSettingsBackend,
@@ -30,6 +36,7 @@ const VALID_PAYMENT_METHODS: PaymentMethod[] = [
   'transfer',
   'boleto'
 ];
+const MAX_ACTIONS_PER_MESSAGE = 10;
 
 // ---------------------------------------------------------------------------
 // Financial context cache — avoids repeated Firestore reads for active users.
@@ -66,6 +73,78 @@ function invalidateContextCache(uid: string): void {
   financialContextCache.delete(uid);
 }
 
+// ---------------------------------------------------------------------------
+// Last-action tracking for quick undo
+// ---------------------------------------------------------------------------
+const UNDO_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+interface UndoableAction {
+  actionKind: 'added' | 'added_recurring' | 'updated' | 'deleted';
+  /** ID of the created/modified/deleted resource */
+  resourceId: string;
+  timestamp: number;
+  deletedTransaction?: Omit<UserTransaction, 'id'>;
+}
+
+const lastActionByUid = new Map<string, UndoableAction>();
+
+function trackUndoableAction(
+  uid: string,
+  action: Omit<UndoableAction, 'timestamp'> & { timestamp?: number }
+): void {
+  lastActionByUid.set(uid, { ...action, timestamp: action.timestamp ?? Date.now() });
+}
+
+/**
+ * Undo the last action for a user. Returns a human-friendly message.
+ * Supports quick undo for add/add_recurring/delete.
+ */
+export async function undoLastAction(uid: string): Promise<string> {
+  const entry = lastActionByUid.get(uid);
+  if (!entry) {
+    return 'Nao encontrei nenhuma acao recente para desfazer.';
+  }
+
+  if (Date.now() - entry.timestamp > UNDO_TTL_MS) {
+    lastActionByUid.delete(uid);
+    return 'A ultima acao foi ha mais de 5 minutos e nao pode mais ser desfeita.';
+  }
+
+  try {
+    if (entry.actionKind === 'added') {
+      await deleteUserTransaction(uid, entry.resourceId);
+      invalidateContextCache(uid);
+      lastActionByUid.delete(uid);
+      return '↩️ *Acao desfeita!*\n\nA ultima transacao registrada foi excluida com sucesso.';
+    }
+
+    if (entry.actionKind === 'added_recurring') {
+      await deleteRecurringTransactionDb(uid, entry.resourceId);
+      invalidateContextCache(uid);
+      lastActionByUid.delete(uid);
+      return '↩️ *Acao desfeita!*\n\nA transacao recorrente criada foi excluida com sucesso.';
+    }
+
+    if (entry.actionKind === 'deleted') {
+      if (!entry.deletedTransaction) {
+        lastActionByUid.delete(uid);
+        return 'Nao consegui restaurar a ultima exclusao porque os dados originais nao estavam disponiveis.';
+      }
+
+      await restoreUserTransaction(uid, entry.resourceId, entry.deletedTransaction);
+      invalidateContextCache(uid);
+      lastActionByUid.delete(uid);
+      return '↩️ *Acao desfeita!*\n\nA transacao excluida foi restaurada com sucesso.';
+    }
+
+    lastActionByUid.delete(uid);
+    return 'Desculpe, essa acao ainda nao pode ser desfeita automaticamente.';
+  } catch (error) {
+    logger.error('Failed to undo last action', error);
+    return 'Ocorreu um erro ao tentar desfazer a acao. Tente novamente.';
+  }
+}
+
 interface AddedTransactionReceipt {
   transactionId: string;
   transactionCode: string;
@@ -89,9 +168,22 @@ interface DeletedTransactionReceipt {
   deletedAt: string;
 }
 
+interface AddedRecurringTransactionReceipt {
+  recurringId: string;
+  type: 'income' | 'expense';
+  amount: number;
+  description: string;
+  categoryName: string;
+  paymentMethod: PaymentMethod;
+  frequency: 'weekly' | 'monthly' | 'yearly';
+  startDate: string;
+  recordedAt: string;
+}
+
 type ActionExecutionResult =
   | { kind: 'none' }
   | { kind: 'added'; receipt: AddedTransactionReceipt }
+  | { kind: 'added_recurring'; receipt: AddedRecurringTransactionReceipt }
   | { kind: 'updated'; receipt: UpdatedTransactionReceipt }
   | { kind: 'deleted'; receipt: DeletedTransactionReceipt }
   | { kind: 'error'; message: string };
@@ -149,6 +241,11 @@ function paymentMethodLabel(value: PaymentMethod): string {
     boleto: 'Boleto'
   };
   return labels[value] ?? value;
+}
+
+function frequencyLabel(freq: 'weekly' | 'monthly' | 'yearly'): string {
+  const labels = { weekly: 'Semanal', monthly: 'Mensal', yearly: 'Anual' };
+  return labels[freq] ?? freq;
 }
 
 function transactionTypeLabel(value: 'income' | 'expense'): string {
@@ -245,6 +342,75 @@ function buildDeletedTransactionMessage(
   return lines.join('\n');
 }
 
+function buildAddedRecurringTransactionMessage(
+  receipt: AddedRecurringTransactionReceipt,
+  aiReply: string,
+  currency: string
+): string {
+  const typeEmoji = receipt.type === 'income' ? '📥' : '📤';
+  const lines = [
+    `${typeEmoji} *${transactionTypeLabel(receipt.type)} recorrente criada*`,
+    '',
+    `*${formatCurrency(receipt.amount, currency)}* - ${receipt.description}`,
+    `${receipt.categoryName} | ${paymentMethodLabel(receipt.paymentMethod)}`,
+    `Frequencia: ${frequencyLabel(receipt.frequency)} | Inicio: ${formatDateBRFromYmd(receipt.startDate)}`
+  ];
+
+  const cleanAiReply = aiReply.trim();
+  if (cleanAiReply.length > 0) {
+    lines.push('', cleanAiReply);
+  }
+
+  return lines.join('\n');
+}
+
+function buildMultiActionMessage(
+  results: ActionExecutionResult[],
+  aiReply: string,
+  currency: string
+): string {
+  const lines: string[] = ['✅ *Acoes processadas:*', ''];
+
+  for (const result of results) {
+    if (result.kind === 'added') {
+      lines.push(
+        `- ${transactionTypeLabel(result.receipt.type)}: ${formatCurrency(result.receipt.amount, currency)} - ${result.receipt.description} (Cod: ${result.receipt.transactionCode})`
+      );
+      continue;
+    }
+
+    if (result.kind === 'added_recurring') {
+      lines.push(
+        `- ${transactionTypeLabel(result.receipt.type)} recorrente: ${formatCurrency(result.receipt.amount, currency)} - ${result.receipt.description} (${frequencyLabel(result.receipt.frequency)})`
+      );
+      continue;
+    }
+
+    if (result.kind === 'updated') {
+      lines.push(
+        `- Transacao atualizada (Cod: ${result.receipt.transactionCode}) - Campos: ${result.receipt.changedFields.map(fieldLabel).join(', ')}`
+      );
+      continue;
+    }
+
+    if (result.kind === 'deleted') {
+      lines.push(`- Transacao excluida (Cod: ${result.receipt.transactionCode})`);
+      continue;
+    }
+
+    if (result.kind === 'error') {
+      lines.push(`- Aviso: ${result.message}`);
+    }
+  }
+
+  const cleanAiReply = aiReply.trim();
+  if (cleanAiReply.length > 0) {
+    lines.push('', cleanAiReply);
+  }
+
+  return lines.join('\n');
+}
+
 export interface ProcessWhatsAppAIOptions {
   isFirstMessage?: boolean;
   isGreeting?: boolean;
@@ -294,6 +460,18 @@ export async function processWhatsAppAIMessage(
       getUserProfile(uid)
     ]);
     setCachedContext(uid, { categories, recentTransactions, settings, profile });
+
+    // Generate overdue recurring transactions when context is freshly loaded
+    try {
+      const generatedCount = await generateOverdueRecurringTransactions(uid);
+      if (generatedCount > 0) {
+        logger.info('Generated overdue recurring transactions', { uid, count: generatedCount });
+        recentTransactions = await getRecentTransactions(uid, env.whatsappAiRecentTransactions);
+        setCachedContext(uid, { categories, recentTransactions, settings, profile });
+      }
+    } catch (error) {
+      logger.error('Failed to generate overdue recurring transactions', error);
+    }
   }
 
   const context: UserFinancialContext = {
@@ -309,29 +487,61 @@ export async function processWhatsAppAIMessage(
   };
 
   const ai = await queryGroqAssistant(sanitizedMessages, context);
-  const actionResult = await executeAction(uid, ai.actionObject, categories);
+  const actionResults = await executeActions(uid, ai.actionObjects, categories);
+  const actionableResults = actionResults.filter((result) => result.kind !== 'none');
 
-  if (actionResult.kind === 'added') {
-    return buildAddedTransactionMessage(actionResult.receipt, ai.reply, settings.currency)
-      .slice(0, env.maxMessageLength);
+  if (actionableResults.length === 0) {
+    return `${ai.reply}`.slice(0, env.maxMessageLength);
   }
 
-  if (actionResult.kind === 'updated') {
-    return buildUpdatedTransactionMessage(actionResult.receipt, ai.reply)
-      .slice(0, env.maxMessageLength);
+  if (actionableResults.length === 1) {
+    const [actionResult] = actionableResults;
+
+    if (actionResult.kind === 'added') {
+      return buildAddedTransactionMessage(actionResult.receipt, ai.reply, settings.currency)
+        .slice(0, env.maxMessageLength);
+    }
+
+    if (actionResult.kind === 'added_recurring') {
+      return buildAddedRecurringTransactionMessage(actionResult.receipt, ai.reply, settings.currency)
+        .slice(0, env.maxMessageLength);
+    }
+
+    if (actionResult.kind === 'updated') {
+      return buildUpdatedTransactionMessage(actionResult.receipt, ai.reply)
+        .slice(0, env.maxMessageLength);
+    }
+
+    if (actionResult.kind === 'deleted') {
+      return buildDeletedTransactionMessage(actionResult.receipt, ai.reply)
+        .slice(0, env.maxMessageLength);
+    }
+
+    if (actionResult.kind === 'error') {
+      const baseReply = ai.reply.trim() || 'Nao consegui concluir a acao solicitada.';
+      return `${baseReply}\n\nAviso: ${actionResult.message}`.slice(0, env.maxMessageLength);
+    }
   }
 
-  if (actionResult.kind === 'deleted') {
-    return buildDeletedTransactionMessage(actionResult.receipt, ai.reply)
-      .slice(0, env.maxMessageLength);
-  }
+  return buildMultiActionMessage(actionableResults, ai.reply, settings.currency)
+    .slice(0, env.maxMessageLength);
+}
 
-  if (actionResult.kind === 'error') {
-    const baseReply = ai.reply.trim() || 'Nao consegui concluir a acao solicitada.';
-    return `${baseReply}\n\nAviso: ${actionResult.message}`.slice(0, env.maxMessageLength);
-  }
+async function executeActions(
+  uid: string,
+  actions: AIAction[],
+  categories: UserCategory[]
+): Promise<ActionExecutionResult[]> {
+  const safeActions = Array.isArray(actions) && actions.length > 0
+    ? actions.slice(0, MAX_ACTIONS_PER_MESSAGE)
+    : [{ action: 'none' as const }];
 
-  return `${ai.reply}`.slice(0, env.maxMessageLength);
+  const results: ActionExecutionResult[] = [];
+  for (const action of safeActions) {
+    const result = await executeAction(uid, action, categories);
+    results.push(result);
+  }
+  return results;
 }
 
 async function executeAction(
@@ -367,6 +577,7 @@ async function executeAction(
 
       const transactionId = await addUserTransaction(uid, payload);
       invalidateContextCache(uid);
+      trackUndoableAction(uid, { actionKind: 'added', resourceId: transactionId });
       const categoryName = categories.find((c) => c.id === category)?.name ?? category;
 
       return {
@@ -429,6 +640,7 @@ async function executeAction(
         }>
       );
       invalidateContextCache(uid);
+      trackUndoableAction(uid, { actionKind: 'updated', resourceId: action.id });
 
       return {
         kind: 'updated',
@@ -444,8 +656,20 @@ async function executeAction(
       if (!action.id || typeof action.id !== 'string') {
         return { kind: 'none' };
       }
+
+      const existing = await getUserTransactionById(uid, action.id);
+      if (!existing) {
+        return { kind: 'none' };
+      }
+
+      const { id: existingId, ...deletedTransaction } = existing;
       await deleteUserTransaction(uid, action.id);
       invalidateContextCache(uid);
+      trackUndoableAction(uid, {
+        actionKind: 'deleted',
+        resourceId: existingId,
+        deletedTransaction
+      });
 
       return {
         kind: 'deleted',
@@ -453,6 +677,50 @@ async function executeAction(
           transactionCode: toFriendlyTransactionCode(action.id),
           deletedAt: new Date().toISOString()
         }
+      };
+    }
+
+    if (action.action === 'add_recurring_transaction') {
+      if (!Number.isFinite(action.amount) || action.amount <= 0) {
+        return { kind: 'none' };
+      }
+
+      const categoryExists = categories.find((c) => c.id === action.categoryId);
+      const fallbackCategory = categories.find((c) => c.type === action.type);
+      const category = categoryExists?.id ?? fallbackCategory?.id;
+      if (!category) {
+        return { kind: 'none' };
+      }
+
+      const payload: CreateRecurringTransactionInput = {
+        type: action.type,
+        amount: Number(action.amount),
+        description: (action.description || 'Recorrente via WhatsApp').toString().slice(0, 120),
+        category,
+        paymentMethod: normalizePaymentMethod(action.paymentMethod),
+        frequency: action.frequency,
+        startDate: normalizeDate(action.date),
+        endDate: action.endDate ?? null,
+      };
+
+      const recurringId = await addRecurringTransactionDb(uid, payload);
+      invalidateContextCache(uid);
+      trackUndoableAction(uid, { actionKind: 'added_recurring', resourceId: recurringId });
+      const categoryName = categories.find((c) => c.id === category)?.name ?? category;
+
+      return {
+        kind: 'added_recurring',
+        receipt: {
+          recurringId,
+          type: payload.type,
+          amount: payload.amount,
+          description: payload.description,
+          categoryName,
+          paymentMethod: payload.paymentMethod as PaymentMethod,
+          frequency: payload.frequency,
+          startDate: payload.startDate,
+          recordedAt: new Date().toISOString(),
+        },
       };
     }
   } catch (error) {

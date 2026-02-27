@@ -147,26 +147,54 @@ export function AIAssistant() {
 
             const aiResponse = await chatWithAI(recentHistory, categories, transactions);
 
-            // Execute action if not 'none'
-            if (aiResponse.parsedAction.action === 'add_transaction') {
-                const action = aiResponse.parsedAction;
-                await add({
-                    type: action.type,
-                    amount: action.amount,
-                    description: action.description,
-                    category: action.categoryId,
-                    date: action.date,
-                    paymentMethod: action.paymentMethod
-                });
-                toast.success('Transação adicionada pela IA!');
-            } else if (aiResponse.parsedAction.action === 'update_transaction') {
-                const action = aiResponse.parsedAction;
-                await update(action.id, action.changes);
-                toast.success('Transação atualizada pela IA!');
-            } else if (aiResponse.parsedAction.action === 'delete_transaction') {
-                const action = aiResponse.parsedAction;
-                await remove(action.id);
-                toast.success('Transação excluída pela IA!');
+            const actionsToApply = aiResponse.parsedActions?.length > 0
+                ? aiResponse.parsedActions
+                : [aiResponse.parsedAction];
+
+            let addedCount = 0;
+            let updatedCount = 0;
+            let deletedCount = 0;
+
+            for (const action of actionsToApply) {
+                if (action.action === 'add_transaction') {
+                    await add({
+                        type: action.type,
+                        amount: action.amount,
+                        description: action.description,
+                        category: action.categoryId,
+                        date: action.date,
+                        paymentMethod: action.paymentMethod
+                    });
+                    addedCount += 1;
+                    continue;
+                }
+
+                if (action.action === 'update_transaction') {
+                    await update(action.id, action.changes);
+                    updatedCount += 1;
+                    continue;
+                }
+
+                if (action.action === 'delete_transaction') {
+                    await remove(action.id);
+                    deletedCount += 1;
+                }
+            }
+
+            if (addedCount > 0) {
+                toast.success(addedCount === 1
+                    ? 'Transacao adicionada pela IA!'
+                    : `${addedCount} transacoes adicionadas pela IA!`);
+            }
+            if (updatedCount > 0) {
+                toast.success(updatedCount === 1
+                    ? 'Transacao atualizada pela IA!'
+                    : `${updatedCount} transacoes atualizadas pela IA!`);
+            }
+            if (deletedCount > 0) {
+                toast.success(deletedCount === 1
+                    ? 'Transacao excluida pela IA!'
+                    : `${deletedCount} transacoes excluidas pela IA!`);
             }
 
             // 4. Save assistant reply to Firebase
@@ -407,3 +435,4 @@ export function AIAssistant() {
         </div>
     );
 }
+

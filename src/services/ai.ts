@@ -1,7 +1,7 @@
 import type { Category, Transaction, PaymentMethod } from '@/types';
 import { auth } from '@/firebase/config';
 
-// Backend URL — defaults to localhost for development
+// Backend URL - defaults to localhost for development
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:10000';
 
 export type Role = 'user' | 'assistant' | 'system';
@@ -41,6 +41,7 @@ export type AIAction = AIActionAdd | AIActionUpdate | AIActionDelete | AIActionN
 
 export interface AIChatResponse {
     message: string;
+    parsedActions: AIAction[];
     parsedAction: AIAction;
 }
 
@@ -52,7 +53,7 @@ export async function chatWithAI(
     // Get Firebase ID token for authentication
     const user = auth.currentUser;
     if (!user) {
-        throw new Error('Você precisa estar logado para usar o assistente de IA.');
+        throw new Error('Voce precisa estar logado para usar o assistente de IA.');
     }
 
     const idToken = await user.getIdToken();
@@ -91,13 +92,24 @@ export async function chatWithAI(
     if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: 'Erro desconhecido' }));
         console.error('[AI] Backend error:', response.status, errorData);
-        throw new Error(errorData.error || 'Falha ao comunicar com a inteligência artificial.');
+        throw new Error(errorData.error || 'Falha ao comunicar com a inteligencia artificial.');
     }
 
-    const data = await response.json() as { reply: string; actionObject: AIAction };
+    const data = await response.json() as {
+        reply: string;
+        actionObjects?: AIAction[];
+        actionObject?: AIAction;
+    };
+
+    const firstAction = Array.isArray(data.actionObjects) && data.actionObjects.length > 0
+        ? data.actionObjects[0]
+        : (data.actionObject || { action: 'none' as const });
 
     return {
-        message: data.reply || 'Não entendi direito, pode repetir?',
-        parsedAction: data.actionObject || { action: 'none' }
+        message: data.reply || 'Nao entendi direito, pode repetir?',
+        parsedActions: Array.isArray(data.actionObjects) && data.actionObjects.length > 0
+            ? data.actionObjects
+            : [firstAction],
+        parsedAction: firstAction
     };
 }

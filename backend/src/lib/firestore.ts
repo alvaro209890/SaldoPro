@@ -203,6 +203,153 @@ export async function deleteUserTransaction(uid: string, transactionId: string):
   await db.collection('users').doc(uid).collection('transactions').doc(transactionId).delete();
 }
 
+export async function getUserTransactionById(uid: string, transactionId: string): Promise<UserTransaction | null> {
+  const snap = await db.collection('users').doc(uid).collection('transactions').doc(transactionId).get();
+  if (!snap.exists) return null;
+  return {
+    id: snap.id,
+    ...(snap.data() as Omit<UserTransaction, 'id'>)
+  };
+}
+
+export async function restoreUserTransaction(
+  uid: string,
+  transactionId: string,
+  transaction: Omit<UserTransaction, 'id'>
+): Promise<void> {
+  await db.collection('users').doc(uid).collection('transactions').doc(transactionId).set({
+    ...transaction,
+    monthKey: monthKeyFromDate(transaction.date),
+    updatedAt: new Date().toISOString()
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Recurring Transactions
+// ---------------------------------------------------------------------------
+
+export interface CreateRecurringTransactionInput {
+  type: 'income' | 'expense';
+  amount: number;
+  description: string;
+  category: string;
+  paymentMethod: 'pix' | 'credit' | 'debit' | 'cash' | 'transfer' | 'boleto';
+  frequency: 'weekly' | 'monthly' | 'yearly';
+  startDate: string;
+  endDate: string | null;
+}
+
+export interface UserRecurringTransaction {
+  id: string;
+  type: 'income' | 'expense';
+  amount: number;
+  category: string;
+  description: string;
+  paymentMethod: 'pix' | 'credit' | 'debit' | 'cash' | 'transfer' | 'boleto';
+  frequency: 'weekly' | 'monthly' | 'yearly';
+  startDate: string;
+  endDate: string | null;
+  nextDueDate: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function advanceDateBackend(dateStr: string, frequency: 'weekly' | 'monthly' | 'yearly'): string {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const d = new Date(year, month - 1, day);
+  if (frequency === 'weekly') d.setDate(d.getDate() + 7);
+  else if (frequency === 'monthly') d.setMonth(d.getMonth() + 1);
+  else if (frequency === 'yearly') d.setFullYear(d.getFullYear() + 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+export async function addRecurringTransaction(
+  uid: string,
+  input: CreateRecurringTransactionInput
+): Promise<string> {
+  const now = new Date().toISOString();
+  const ref = await db.collection('users').doc(uid).collection('recurringTransactions').add({
+    ...input,
+    nextDueDate: input.startDate,
+    active: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return ref.id;
+}
+
+export async function getActiveRecurringTransactions(
+  uid: string
+): Promise<UserRecurringTransaction[]> {
+  const snap = await db
+    .collection('users')
+    .doc(uid)
+    .collection('recurringTransactions')
+    .where('active', '==', true)
+    .get();
+  return snap.docs.map((d) => ({
+    id: d.id,
+    ...(d.data() as Omit<UserRecurringTransaction, 'id'>),
+  }));
+}
+
+export async function deleteRecurringTransaction(
+  uid: string,
+  recurringId: string
+): Promise<void> {
+  await db
+    .collection('users')
+    .doc(uid)
+    .collection('recurringTransactions')
+    .doc(recurringId)
+    .delete();
+}
+
+export async function updateRecurringTransactionBackend(
+  uid: string,
+  recurringId: string,
+  changes: Partial<Omit<UserRecurringTransaction, 'id' | 'createdAt'>>
+): Promise<void> {
+  await db
+    .collection('users')
+    .doc(uid)
+    .collection('recurringTransactions')
+    .doc(recurringId)
+    .update({
+      ...changes,
+      updatedAt: new Date().toISOString(),
+    });
+}
+
+export async function generateOverdueRecurringTransactions(uid: string): Promise<number> {
+  const today = new Date().toISOString().split('T')[0];
+  const active = await getActiveRecurringTransactions(uid);
+  let generated = 0;
+
+  for (const rt of active) {
+    let nextDate = rt.nextDueDate;
+    while (nextDate <= today) {
+      await addUserTransaction(uid, {
+        type: rt.type,
+        amount: rt.amount,
+        date: nextDate,
+        category: rt.category,
+        description: rt.description,
+        paymentMethod: rt.paymentMethod,
+      });
+      generated++;
+      nextDate = advanceDateBackend(nextDate, rt.frequency);
+    }
+    const updates: Partial<Omit<UserRecurringTransaction, 'id' | 'createdAt'>> = { nextDueDate: nextDate };
+    if (rt.endDate && nextDate > rt.endDate) {
+      updates.active = false;
+    }
+    await updateRecurringTransactionBackend(uid, rt.id, updates);
+  }
+  return generated;
+}
+
 // ---------------------------------------------------------------------------
 // Per-UID allowed numbers cache — avoids repeated Firestore reads per message.
 // ---------------------------------------------------------------------------

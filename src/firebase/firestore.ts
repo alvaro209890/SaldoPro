@@ -11,7 +11,7 @@ import {
     type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './config';
-import type { Transaction, Category, UserSettings, StoredChatMessage, ChatSession, Reminder } from '@/types';
+import type { Transaction, Category, UserSettings, StoredChatMessage, ChatSession, Reminder, RecurringTransaction } from '@/types';
 import { generateMonthKey } from '@/utils/date';
 
 // ─── Transactions ────────────────────────────────────────────
@@ -322,6 +322,62 @@ export async function updateReminder(
 
 export async function deleteReminder(uid: string, reminderId: string) {
     const ref = doc(db, 'users', uid, 'reminders', reminderId);
+    return deleteDoc(ref);
+}
+
+// ─── Recurring Transactions ─────────────────────────────────
+
+export function onRecurringTransactionsSnapshot(
+    uid: string,
+    callback: (items: RecurringTransaction[]) => void,
+    onError?: (error: Error) => void
+): Unsubscribe {
+    const ref = collection(db, 'users', uid, 'recurringTransactions');
+    const q = query(ref, orderBy('nextDueDate', 'asc'));
+
+    return onSnapshot(
+        q,
+        (snap) => {
+            const items = snap.docs.map((d) => ({
+                id: d.id,
+                ...d.data(),
+            })) as RecurringTransaction[];
+            callback(items);
+        },
+        (error) => {
+            console.error('Error fetching recurring transactions:', error);
+            if (onError) onError(error);
+        }
+    );
+}
+
+export async function addRecurringTransaction(
+    uid: string,
+    data: Omit<RecurringTransaction, 'id' | 'createdAt' | 'updatedAt'>
+) {
+    const ref = collection(db, 'users', uid, 'recurringTransactions');
+    const now = new Date().toISOString();
+    return addDoc(ref, {
+        ...data,
+        createdAt: now,
+        updatedAt: now,
+    });
+}
+
+export async function updateRecurringTransaction(
+    uid: string,
+    recurringId: string,
+    data: Partial<Omit<RecurringTransaction, 'id' | 'createdAt'>>
+) {
+    const ref = doc(db, 'users', uid, 'recurringTransactions', recurringId);
+    return updateDoc(ref, {
+        ...data,
+        updatedAt: new Date().toISOString(),
+    });
+}
+
+export async function deleteRecurringTransaction(uid: string, recurringId: string) {
+    const ref = doc(db, 'users', uid, 'recurringTransactions', recurringId);
     return deleteDoc(ref);
 }
 
