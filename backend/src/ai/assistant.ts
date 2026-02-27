@@ -234,10 +234,10 @@ function formatDateTimeBR(value: string): string {
 function paymentMethodLabel(value: PaymentMethod): string {
   const labels: Record<PaymentMethod, string> = {
     pix: 'PIX',
-    credit: 'Cartao de credito',
-    debit: 'Cartao de debito',
+    credit: 'Cartão de crédito',
+    debit: 'Cartão de débito',
     cash: 'Dinheiro',
-    transfer: 'Transferencia',
+    transfer: 'Transferência',
     boleto: 'Boleto'
   };
   return labels[value] ?? value;
@@ -271,6 +271,17 @@ function toFriendlyTransactionCode(transactionId: string): string {
   return `TX-${hash}`;
 }
 
+function buildEditDeleteHint(transactionCodes: string[]): string {
+  const uniqueCodes = [...new Set(transactionCodes.filter((code) => code.trim().length > 0))];
+
+  if (uniqueCodes.length === 1) {
+    const code = uniqueCodes[0];
+    return `Se quiser excluir, digite "excluir ${code}". Se quiser editar, me diga o que deseja alterar na transação ${code}.`;
+  }
+
+  return 'Se quiser excluir, digite "excluir" e informe o código da transação. Se quiser editar, me diga o que deseja alterar em cada transação.';
+}
+
 function buildAddedTransactionMessage(
   receipt: AddedTransactionReceipt,
   aiReply: string,
@@ -282,7 +293,7 @@ function buildAddedTransactionMessage(
     '',
     `*${formatCurrency(receipt.amount, currency)}* - ${receipt.description}`,
     `${receipt.categoryName} | ${paymentMethodLabel(receipt.paymentMethod)} | ${formatDateBRFromYmd(receipt.transactionDate)}`,
-    `Cod: ${receipt.transactionCode}`
+    `Código: ${receipt.transactionCode}`
   ];
 
   const cleanAiReply = aiReply.trim();
@@ -290,13 +301,14 @@ function buildAddedTransactionMessage(
     lines.push('', cleanAiReply);
   }
 
+  lines.push('', buildEditDeleteHint([receipt.transactionCode]));
   return lines.join('\n');
 }
 
 function fieldLabel(field: string): string {
   const labels: Record<string, string> = {
     amount: 'Valor',
-    description: 'Descricao',
+    description: 'Descrição',
     category: 'Categoria',
     date: 'Data',
     type: 'Tipo',
@@ -310,10 +322,10 @@ function buildUpdatedTransactionMessage(
   aiReply: string
 ): string {
   const lines = [
-    `✏️ *Transacao atualizada*`,
+    `✏️ *Transação atualizada*`,
     '',
     `Alterado: ${receipt.changedFields.map(fieldLabel).join(', ')}`,
-    `Cod: ${receipt.transactionCode}`
+    `Código: ${receipt.transactionCode}`
   ];
 
   const cleanAiReply = aiReply.trim();
@@ -321,6 +333,7 @@ function buildUpdatedTransactionMessage(
     lines.push('', cleanAiReply);
   }
 
+  lines.push('', buildEditDeleteHint([receipt.transactionCode]));
   return lines.join('\n');
 }
 
@@ -329,9 +342,9 @@ function buildDeletedTransactionMessage(
   aiReply: string
 ): string {
   const lines = [
-    `🗑️ *Transacao excluida*`,
+    `🗑️ *Transação excluída*`,
     '',
-    `Cod: ${receipt.transactionCode}`
+    `Código: ${receipt.transactionCode}`
   ];
 
   const cleanAiReply = aiReply.trim();
@@ -339,6 +352,7 @@ function buildDeletedTransactionMessage(
     lines.push('', cleanAiReply);
   }
 
+  lines.push('', 'Se quiser registrar novamente, é só me dizer os dados da transação.');
   return lines.join('\n');
 }
 
@@ -353,7 +367,7 @@ function buildAddedRecurringTransactionMessage(
     '',
     `*${formatCurrency(receipt.amount, currency)}* - ${receipt.description}`,
     `${receipt.categoryName} | ${paymentMethodLabel(receipt.paymentMethod)}`,
-    `Frequencia: ${frequencyLabel(receipt.frequency)} | Inicio: ${formatDateBRFromYmd(receipt.startDate)}`
+    `Frequência: ${frequencyLabel(receipt.frequency)} | Início: ${formatDateBRFromYmd(receipt.startDate)}`
   ];
 
   const cleanAiReply = aiReply.trim();
@@ -361,6 +375,7 @@ function buildAddedRecurringTransactionMessage(
     lines.push('', cleanAiReply);
   }
 
+  lines.push('', 'Para editar, me diga o que você quer alterar na recorrência. Para excluir, digite "excluir recorrente".');
   return lines.join('\n');
 }
 
@@ -369,12 +384,14 @@ function buildMultiActionMessage(
   aiReply: string,
   currency: string
 ): string {
-  const lines: string[] = ['✅ *Acoes processadas:*', ''];
+  const lines: string[] = ['✅ *Ações processadas:*', ''];
+  const transactionCodes: string[] = [];
 
   for (const result of results) {
     if (result.kind === 'added') {
+      transactionCodes.push(result.receipt.transactionCode);
       lines.push(
-        `- ${transactionTypeLabel(result.receipt.type)}: ${formatCurrency(result.receipt.amount, currency)} - ${result.receipt.description} (Cod: ${result.receipt.transactionCode})`
+        `- ${transactionTypeLabel(result.receipt.type)}: ${formatCurrency(result.receipt.amount, currency)} - ${result.receipt.description} (Código: ${result.receipt.transactionCode})`
       );
       continue;
     }
@@ -387,14 +404,16 @@ function buildMultiActionMessage(
     }
 
     if (result.kind === 'updated') {
+      transactionCodes.push(result.receipt.transactionCode);
       lines.push(
-        `- Transacao atualizada (Cod: ${result.receipt.transactionCode}) - Campos: ${result.receipt.changedFields.map(fieldLabel).join(', ')}`
+        `- Transação atualizada (Código: ${result.receipt.transactionCode}) - Campos: ${result.receipt.changedFields.map(fieldLabel).join(', ')}`
       );
       continue;
     }
 
     if (result.kind === 'deleted') {
-      lines.push(`- Transacao excluida (Cod: ${result.receipt.transactionCode})`);
+      transactionCodes.push(result.receipt.transactionCode);
+      lines.push(`- Transação excluída (Código: ${result.receipt.transactionCode})`);
       continue;
     }
 
@@ -408,6 +427,7 @@ function buildMultiActionMessage(
     lines.push('', cleanAiReply);
   }
 
+  lines.push('', buildEditDeleteHint(transactionCodes));
   return lines.join('\n');
 }
 

@@ -311,6 +311,9 @@ ESTILO DE RESPOSTA
 
 COMPREENSAO DE LINGUAGEM NATURAL
 - O usuario pode escrever de forma informal, com erros de digitacao ou abreviacoes. Interprete com boa vontade.
+- SE A MENSAGEM TIVER IMAGEM/COMPROVANTE: analise a imagem e extraia valor, data, forma de pagamento e descricao.
+- NUNCA diga "nao consigo ver/visualizar imagem" quando houver imagem enviada.
+- Se houver valor identificado no comprovante, registre automaticamente a transacao (add_transaction), mesmo sem categoria explicita.
 - VERBOS DE ACAO = REGISTRAR AUTOMATICAMENTE (use add_transaction, NAO pergunte se quer registrar):
   - "gastei 50 no mercado" = registrar despesa de R$50 em supermercado
   - "recebi 1500" = registrar receita de R$1500
@@ -526,6 +529,118 @@ function cleanAiReply(raw: string): string {
     .trim();
 }
 
+function normalizeTextForMatch(text: string): string {
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function parseBrazilianAmount(text: string): number | null {
+  const explicitCurrency = text.match(/r\$\s*([\d.,]+)/i)?.[1];
+  const labeledAmount = text.match(/\b(?:valor|total|pagamento)\s*[:\-]?\s*(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2}|\d+\.\d{2})\b/i)?.[1];
+  const fallbackDecimal = text.match(/\b(\d+[.,]\d{2})\b/)?.[1];
+
+  const raw = explicitCurrency ?? labeledAmount ?? fallbackDecimal;
+  if (!raw) return null;
+
+  let normalized = raw.replace(/\s/g, '');
+  const hasComma = normalized.includes(',');
+  const hasDot = normalized.includes('.');
+
+  if (hasComma && hasDot) {
+    normalized = normalized.replace(/\./g, '').replace(',', '.');
+  } else if (hasComma) {
+    normalized = normalized.replace(',', '.');
+  }
+
+  const amount = Number(normalized);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return amount;
+}
+
+function parseDateFromText(text: string): string | null {
+  const iso = text.match(/\b(\d{4}-\d{2}-\d{2})\b/)?.[1];
+  if (iso) return iso;
+
+  const dmy = text.match(/\b(\d{2})[\/\-](\d{2})[\/\-](\d{4})\b/);
+  if (dmy) {
+    const day = dmy[1];
+    const month = dmy[2];
+    const year = dmy[3];
+    return `${year}-${month}-${day}`;
+  }
+
+  return null;
+}
+
+function detectPaymentMethod(text: string): PaymentMethod {
+  const normalized = normalizeTextForMatch(text);
+  if (normalized.includes('pix')) return 'pix';
+  if (normalized.includes('credito') || normalized.includes('cartao de credito')) return 'credit';
+  if (normalized.includes('debito') || normalized.includes('cartao de debito')) return 'debit';
+  if (normalized.includes('dinheiro')) return 'cash';
+  if (normalized.includes('transferencia') || normalized.includes('ted') || normalized.includes('doc')) return 'transfer';
+  if (normalized.includes('boleto')) return 'boleto';
+  return 'pix';
+}
+
+function detectTransactionType(text: string): 'income' | 'expense' {
+  const normalized = normalizeTextForMatch(text);
+  if (/\b(recebi|recebido|salario|ganhei|entrada|deposito)\b/.test(normalized)) return 'income';
+  return 'expense';
+}
+
+function extractDescriptionFromText(text: string): string {
+  const labeledDescription = text.match(/\b(?:descricao|estabelecimento|loja|empresa|favorecido|recebedor)\s*[:\-]\s*([^\n,.;]+)/i)?.[1];
+  if (labeledDescription) {
+    const value = labeledDescription.trim().slice(0, 120);
+    if (value.length > 0) return value;
+  }
+  return 'Lancamento via comprovante';
+}
+
+function stripVisionContradictions(reply: string): string {
+  const normalized = normalizeTextForMatch(reply);
+  if (
+    normalized.includes('nao consigo visualizar imagens') ||
+    normalized.includes('nao consigo ver imagens') ||
+    normalized.includes('nao consigo analisar imagem')
+  ) {
+    return 'Comprovante analisado. Extrai os dados e vou registrar para voce.';
+  }
+  return reply;
+}
+
+function buildVisionFallbackResult(content: string): GroqAssistantResult {
+  const amount = parseBrazilianAmount(content);
+  const date = parseDateFromText(content) ?? new Date().toISOString().split('T')[0];
+  const paymentMethod = detectPaymentMethod(content);
+  const type = detectTransactionType(content);
+  const description = extractDescriptionFromText(content);
+
+  if (amount && amount > 0) {
+    return {
+      reply: 'Comprovante analisado. Vou registrar a transacao agora.',
+      actionObjects: [{
+        action: 'add_transaction',
+        type,
+        amount,
+        description,
+        categoryId: '',
+        date,
+        paymentMethod
+      }]
+    };
+  }
+
+  const sanitized = stripVisionContradictions(sanitizeReply(content)).slice(0, env.maxMessageLength);
+  return {
+    reply: sanitized || 'Consegui analisar a imagem, mas preciso do valor para registrar a transacao.',
+    actionObjects: [{ action: 'none' }]
+  };
+}
+
 /** Determines if the HTTP status code means we should try the next model (429) or retry same (5xx). */
 function isRateLimitStatus(status: number): boolean {
   return status === 429;
@@ -597,14 +712,13 @@ async function callGroqModel(
       parsed = parseAssistantPayload(content);
     } catch {
       if (isVisionRequest) {
-        logger.warn('Groq vision response is not valid JSON, using raw content as reply', {
+        const fallback = buildVisionFallbackResult(content);
+        logger.warn('Groq vision response is not valid JSON, applying structured fallback', {
           model: modelId,
-          contentPreview: content.slice(0, 100)
+          contentPreview: content.slice(0, 100),
+          fallbackAction: fallback.actionObjects[0]?.action ?? 'none'
         });
-        return {
-          reply: sanitizeReply(content).slice(0, env.maxMessageLength),
-          actionObjects: [{ action: 'none' }]
-        };
+        return fallback;
       }
       throw new Error('Groq response is not valid JSON');
     }
@@ -845,6 +959,15 @@ async function queryGeminiAssistant(
     try {
       parsed = parseAssistantPayload(content);
     } catch {
+      if (isVisionRequest) {
+        const fallback = buildVisionFallbackResult(content);
+        logger.warn('Gemini vision response not parseable as JSON, applying structured fallback', {
+          contentPreview: content.slice(0, 80),
+          fallbackAction: fallback.actionObjects[0]?.action ?? 'none'
+        });
+        return fallback;
+      }
+
       // Couldn't parse as JSON — treat raw content as reply but sanitize first
       const fallbackReply = sanitizeReply(content).trim().slice(0, env.maxMessageLength);
       logger.warn('Gemini response not parseable as JSON, using sanitized fallback', {
