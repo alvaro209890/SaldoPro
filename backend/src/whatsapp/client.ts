@@ -301,7 +301,10 @@ export class WhatsAppClient {
       printQRInTerminal: false,
       // Ignore status & groups at socket level: this bot only handles 1:1 chats.
       shouldIgnoreJid: (jid) => isStatusJid(jid) || isGroupJid(jid),
-      browser: ['SaldoPro', 'Render', '1.0.0']
+      // IMPORTANT: Each slot needs a UNIQUE browser fingerprint. If both use the same
+      // identifier, WhatsApp may treat them as duplicate linked devices from the same
+      // machine and invalidate each other's Signal sessions → Bad MAC errors.
+      browser: [`SaldoPro-${this.slotId.toUpperCase()}`, 'Render', '1.0.0']
     });
 
     this.socket = socket;
