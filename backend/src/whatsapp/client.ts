@@ -599,7 +599,22 @@ export class WhatsAppClient {
     });
 
     if (binding) {
-      const stillAllowed = await isPhoneAllowedForUid(binding.uid, remotePhone);
+      let stillAllowed: boolean;
+      try {
+        stillAllowed = await isPhoneAllowedForUid(binding.uid, remotePhone);
+      } catch (allowedError) {
+        logger.error('MSG_ALLOWED_CHECK_ERROR: isPhoneAllowedForUid threw, treating as allowed to avoid silent drop', {
+          phone: remotePhone,
+          uid: binding.uid,
+          error: allowedError instanceof Error ? allowedError.message : 'unknown'
+        });
+        stillAllowed = true;
+      }
+      logger.info('MSG_ALLOWED: phone permission check result', {
+        phone: remotePhone,
+        uid: binding.uid,
+        stillAllowed
+      });
       if (!stillAllowed) {
         logger.info('MSG_STALE_BINDING: old binding no longer allowed, dropping to re-resolve', {
           phone: remotePhone,
@@ -729,7 +744,7 @@ export class WhatsAppClient {
         const isFirstMessage = conversation.length === 0;
         const isGreeting = isGreetingMessage(inboundText);
         const isCapabilitiesQuestion = isCapabilitiesIntentMessage(inboundText);
-        const lastActivityAt = await getLastConversationActivityByPhone(ownerUid, remotePhone, this.slotId);
+        const lastActivityAt = await getLastConversationActivityByPhone(ownerUid, remotePhone);
         const isConversationRestart = this.isConversationRestart(lastActivityAt, isFirstMessage);
         const shouldSendCapabilitiesSummary =
           isGreeting || isFirstMessage || isConversationRestart || isCapabilitiesQuestion;
@@ -1682,8 +1697,7 @@ export class WhatsAppClient {
       const loaded = await getRecentConversationByPhone(
         uid,
         normalized,
-        env.whatsappAiHistoryLimit,
-        this.slotId
+        env.whatsappAiHistoryLimit
       );
       this.conversationByPhone.set(cacheKey, loaded);
       return loaded;
@@ -1724,7 +1738,8 @@ export class WhatsAppClient {
   }
 
   private conversationKey(uid: string, phone: string): string {
-    return `${this.slotId}:${uid}:${phone}`;
+    // Shared across slots so conversation context is not lost when messages arrive on a different number
+    return `${uid}:${phone}`;
   }
 }
 

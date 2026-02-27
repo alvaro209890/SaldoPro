@@ -19,7 +19,7 @@ interface ResetSessionBody {
 }
 
 function slotLabel(slotId: WhatsAppSlotId): string {
-  return slotId === 'wa1' ? 'WhatsApp 1' : 'WhatsApp 2';
+  return slotId === 'wa1' ? 'WhatsApp' : 'WhatsApp 2';
 }
 
 async function buildSlotsPageData(manager: WhatsAppClientsManager): Promise<WhatsAppSlotPageData[]> {

@@ -798,18 +798,19 @@ export async function getRecentConversationByPhone(
   uid: string,
   phone: string,
   limitCount: number,
-  clientId: WhatsAppSlotId
+  _clientId?: WhatsAppSlotId
 ): Promise<WhatsAppConversationMessage[]> {
   if (!uid || uid.trim().length === 0) return [];
 
   const normalizedPhone = normalizePhoneNumber(phone);
   if (normalizedPhone.length < 10) return [];
 
+  // Query WITHOUT clientId filter so conversation history works across both WhatsApp slots.
+  // This ensures the AI always sees the full conversation regardless of which number received the message.
   const [inboundSnap, outboundSnap] = await Promise.all([
     db
       .collection(COLLECTION_NAME)
       .where('ownerUid', '==', uid)
-      .where('clientId', '==', clientId)
       .where('from', '==', normalizedPhone)
       .orderBy('createdAt', 'desc')
       .limit(limitCount)
@@ -817,7 +818,6 @@ export async function getRecentConversationByPhone(
     db
       .collection(COLLECTION_NAME)
       .where('ownerUid', '==', uid)
-      .where('clientId', '==', clientId)
       .where('to', '==', normalizedPhone)
       .orderBy('createdAt', 'desc')
       .limit(limitCount)
@@ -831,7 +831,6 @@ export async function getRecentConversationByPhone(
       if (data.status === 'failed') continue;
       if (typeof data.createdAt !== 'string' || data.createdAt.length === 0) continue;
       if (data.ownerUid !== uid) continue;
-      if (data.clientId !== clientId) continue;
 
       const hasImage = Boolean(data.metadata?.hasImage);
       const text = typeof data.text === 'string' ? data.text.trim() : '';
@@ -863,32 +862,32 @@ export async function getRecentConversationByPhone(
 // ---------------------------------------------------------------------------
 const lastActivityCache = new Map<string, { activity: string | null; cachedAt: number }>();
 
-function lastActivityCacheKey(uid: string, phone: string, clientId: WhatsAppSlotId): string {
-  return `${uid}:${phone}:${clientId}`;
+function lastActivityCacheKey(uid: string, phone: string): string {
+  return `${uid}:${phone}`;
 }
 
 export async function getLastConversationActivityByPhone(
   uid: string,
   phone: string,
-  clientId: WhatsAppSlotId
+  _clientId?: WhatsAppSlotId
 ): Promise<string | null> {
   if (!uid || uid.trim().length === 0) return null;
 
   const normalizedPhone = normalizePhoneNumber(phone);
   if (normalizedPhone.length < 10) return null;
 
-  const cacheKey = lastActivityCacheKey(uid, normalizedPhone, clientId);
+  const cacheKey = lastActivityCacheKey(uid, normalizedPhone);
   const cached = lastActivityCache.get(cacheKey);
   if (cached && Date.now() - cached.cachedAt <= LAST_ACTIVITY_CACHE_TTL_MS) {
     return cached.activity;
   }
 
   try {
+    // Query WITHOUT clientId filter so activity detection works across both WhatsApp slots.
     const [inboundSnap, outboundSnap] = await Promise.all([
       db
         .collection(COLLECTION_NAME)
         .where('ownerUid', '==', uid)
-        .where('clientId', '==', clientId)
         .where('from', '==', normalizedPhone)
         .orderBy('createdAt', 'desc')
         .limit(1)
@@ -896,7 +895,6 @@ export async function getLastConversationActivityByPhone(
       db
         .collection(COLLECTION_NAME)
         .where('ownerUid', '==', uid)
-        .where('clientId', '==', clientId)
         .where('to', '==', normalizedPhone)
         .orderBy('createdAt', 'desc')
         .limit(1)

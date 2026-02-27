@@ -112,7 +112,10 @@ export function brazilianPhoneVariants(phone: string): string[] {
 
 export function jidToPhone(jid: string | null | undefined): string {
   if (!jid) return '';
-  return normalizePhoneNumber(jid.split('@')[0] ?? '');
+  // Strip the @domain part, then strip the :device suffix (multi-device JIDs like "5566984396232:15@s.whatsapp.net")
+  const userPart = jid.split('@')[0] ?? '';
+  const phoneOnly = userPart.split(':')[0] ?? '';
+  return normalizePhoneNumber(phoneOnly);
 }
 
 export function normalizePhoneToJid(phoneOrJid: string): string {
