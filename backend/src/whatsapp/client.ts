@@ -110,6 +110,8 @@ const COMPOSING_REFRESH_MS = 4000;
 /** If the same JID hits repeated Bad MAC in a short window, perform a soft reconnect. */
 const BAD_MAC_WINDOW_MS = 2 * 60 * 1000;
 const BAD_MAC_RECONNECT_THRESHOLD = 1;
+/** After this many soft reconnects without success, escalate to full session reset. */
+const BAD_MAC_HARD_RESET_AFTER = 2;
 /** How long to keep unresolvable-LID messages buffered before discarding. */
 const LID_BUFFER_TTL_MS = 30_000;
 const LID_BUFFER_MAX_PER_JID = 5;
@@ -147,6 +149,7 @@ export class WhatsAppClient {
   private lastAuthSnapshotHash: string | null = null;
   private recoveringInvalidSession = false;
   private readonly aiCallTimestamps = new Map<string, number[]>();
+  private softReconnectCount = 0;
 
   // --- LID message buffer: store messages with unresolved LID for later replay ---
   private readonly pendingLidMessages = new Map<string, { message: proto.IWebMessageInfo; bufferedAt: number }[]>();
@@ -349,12 +352,18 @@ export class WhatsAppClient {
       this.lastDisconnectReason = null;
       this.phone = jidToPhone(this.socket?.user?.id) || null;
       this.badMacByJid.clear();
+      this.softReconnectCount = 0;
       this.clearQr();
       this.scheduleAuthStateSync();
+
+      // Log the bot's own LID for debugging self-chat detection
+      const socketUser = this.socket?.user as { id?: string; lid?: string } | undefined;
       logger.info('WhatsApp connection opened', {
         slotId: this.slotId,
         displayName: this.displayName,
-        phone: this.phone
+        phone: this.phone,
+        ownLid: socketUser?.lid ?? 'unknown',
+        ownId: socketUser?.id ?? 'unknown'
       });
       return;
     }
@@ -487,11 +496,28 @@ export class WhatsAppClient {
 
     if (!message.message && this.hasLidIdentity(key)) {
       await this.registerBadMac(message, 'empty_payload_with_lid');
+      // Try to extract any phone number info from the message metadata for LID mapping
+      this.tryExtractPhoneFromMessageMeta(message);
       this.rememberInbound(messageId);
-      logger.warn('MSG_SKIP: missing payload with LID identity (possible decrypt failure)', {
+      logger.warn('MSG_SKIP: missing payload with LID identity (Bad MAC decrypt failure)', {
         slotId: this.slotId,
         messageId,
-        remoteJid
+        remoteJid,
+        fromMe: Boolean(key.fromMe),
+        softReconnectCount: this.softReconnectCount,
+        allKeyFields: JSON.stringify(Object.keys(key))
+      });
+      return;
+    }
+
+    // Also handle non-LID messages with empty payload (Bad MAC without LID)
+    if (!message.message) {
+      this.rememberInbound(messageId);
+      logger.warn('MSG_SKIP: empty message payload (likely decryption failure)', {
+        slotId: this.slotId,
+        messageId,
+        remoteJid,
+        fromMe: Boolean(key.fromMe)
       });
       return;
     }
@@ -1154,6 +1180,8 @@ export class WhatsAppClient {
       messageId,
       count,
       threshold: BAD_MAC_RECONNECT_THRESHOLD,
+      softReconnectCount: this.softReconnectCount,
+      hardResetAfter: BAD_MAC_HARD_RESET_AFTER,
       errorMessage
     });
 
@@ -1163,6 +1191,19 @@ export class WhatsAppClient {
 
     this.badMacByJid.set(remoteJid, { count: 0, lastAt: now });
     await this.clearSignalSessionsAfterBadMac(message);
+
+    // Escalate: if soft reconnects haven't fixed it, do a FULL session reset
+    if (this.softReconnectCount >= BAD_MAC_HARD_RESET_AFTER) {
+      logger.error('BAD_MAC_ESCALATION: soft reconnects failed, performing full session recovery', {
+        slotId: this.slotId,
+        remoteJid,
+        softReconnectCount: this.softReconnectCount
+      });
+      this.softReconnectCount = 0;
+      void this.recoverFromInvalidSession();
+      return;
+    }
+
     this.triggerSoftReconnectAfterBadMac(remoteJid);
   }
 
@@ -1393,13 +1434,73 @@ export class WhatsAppClient {
     return false;
   }
 
+  /**
+   * Try to extract phone number information from any available field in the message.
+   * Even when Bad MAC prevents decryption, some metadata fields may contain
+   * phone numbers that we can use to build LID→phone mappings.
+   */
+  private tryExtractPhoneFromMessageMeta(message: proto.IWebMessageInfo): void {
+    const key = message.key as MessageKeyWithLid | undefined;
+    if (!key) return;
+
+    const lidJid = key.remoteJid;
+    if (!lidJid || !lidJid.endsWith('@lid')) return;
+
+    // Check all known fields that may contain phone numbers
+    const phoneCandidates: Array<string | null | undefined> = [
+      (key as MessageKeyWithLid).participantPn,
+      (key as MessageKeyWithLid).remoteJidAlt,
+      key.participant
+    ];
+
+    // Baileys may include userReceipt with phone JIDs
+    const msgAny = message as unknown as Record<string, unknown>;
+    if (Array.isArray(msgAny.userReceipt)) {
+      for (const receipt of msgAny.userReceipt as Array<{ userJid?: string }>) {
+        if (receipt?.userJid) phoneCandidates.push(receipt.userJid);
+      }
+    }
+
+    // messageStubParameters may also contain phone numbers
+    if (Array.isArray(message.messageStubParameters)) {
+      for (const param of message.messageStubParameters) {
+        if (typeof param === 'string' && param.includes('@s.whatsapp.net')) {
+          phoneCandidates.push(param);
+        }
+      }
+    }
+
+    // Log all available data for debugging
+    logger.info('MSG_META_EXTRACT: scanning message for phone info', {
+      slotId: this.slotId,
+      lidJid,
+      candidatesFound: phoneCandidates.filter(Boolean).length,
+      participantPn: (key as MessageKeyWithLid).participantPn ?? null,
+      remoteJidAlt: (key as MessageKeyWithLid).remoteJidAlt ?? null,
+      participant: key.participant ?? null,
+      messageId: key.id ?? 'unknown'
+    });
+
+    for (const candidate of phoneCandidates) {
+      if (!candidate) continue;
+      const normalized = this.normalizePhoneJidCandidate(candidate);
+      if (normalized) {
+        this.rememberLidMapping(lidJid, normalized, 'message_candidate');
+        return;
+      }
+    }
+  }
+
   private triggerSoftReconnectAfterBadMac(remoteJid: string): void {
     if (!this.allowReconnect) return;
     if (this.reconnectTimer) return;
 
+    this.softReconnectCount += 1;
+
     logger.warn('Triggering soft reconnect after repeated Bad MAC', {
       slotId: this.slotId,
-      remoteJid
+      remoteJid,
+      softReconnectCount: this.softReconnectCount
     });
 
     this.connected = false;
