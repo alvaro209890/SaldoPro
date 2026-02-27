@@ -286,9 +286,60 @@ function buildAddedReminderMessage(receipt, aiReply, currency) {
             : 'Se quiser ajustar valor, data ou descricao do lembrete, e so me pedir.'));
     return lines.join('\n');
 }
+function buildReminderDetailLine(receipt, currency) {
+    const dueLabel = receipt.dueTime
+        ? `${formatDateBRFromYmd(receipt.dueDate)} ${receipt.dueTime}`
+        : formatDateBRFromYmd(receipt.dueDate);
+    if (receipt.reminderKind === 'general') {
+        return `Vencimento: ${dueLabel}`;
+    }
+    return `${reminderKindLabel(receipt.reminderKind)} | ${formatCurrency(receipt.amount ?? 0, currency)} | ${dueLabel}`;
+}
+function buildUpdatedReminderMessage(receipt, aiReply, currency) {
+    const lines = [
+        '✏️ *Lembrete atualizado*',
+        '',
+        `*${receipt.title}*`,
+        buildReminderDetailLine(receipt, currency),
+        `Status: ${receipt.status === 'paid' ? 'Concluido' : 'Pendente'}`
+    ];
+    const cleanAiReply = aiReply.trim();
+    if (cleanAiReply.length > 0) {
+        lines.push('', cleanAiReply);
+    }
+    lines.push('', 'Se quiser, posso concluir, reabrir, editar ou excluir esse lembrete.');
+    return lines.join('\n');
+}
+function buildCompletedReminderMessage(receipt, aiReply) {
+    const lines = [
+        '✅ *Lembrete concluido*',
+        '',
+        `*${receipt.title}*`
+    ];
+    const cleanAiReply = aiReply.trim();
+    if (cleanAiReply.length > 0) {
+        lines.push('', cleanAiReply);
+    }
+    lines.push('', 'Se quiser reabrir esse lembrete, e so me pedir.');
+    return lines.join('\n');
+}
+function buildDeletedReminderMessage(receipt, aiReply) {
+    const lines = [
+        '🗑️ *Lembrete excluido*',
+        '',
+        `*${receipt.title}*`
+    ];
+    const cleanAiReply = aiReply.trim();
+    if (cleanAiReply.length > 0) {
+        lines.push('', cleanAiReply);
+    }
+    lines.push('', 'Se quiser, posso criar um novo lembrete com outras configuracoes.');
+    return lines.join('\n');
+}
 function buildMultiActionMessage(results, aiReply, currency) {
     const lines = ['✅ *Ações processadas:*', ''];
     const transactionCodes = [];
+    let hasReminderActions = false;
     for (const result of results) {
         if (result.kind === 'added') {
             transactionCodes.push(result.receipt.transactionCode);
@@ -300,6 +351,7 @@ function buildMultiActionMessage(results, aiReply, currency) {
             continue;
         }
         if (result.kind === 'added_reminder') {
+            hasReminderActions = true;
             const dueLabel = result.receipt.dueTime
                 ? `${formatDateBRFromYmd(result.receipt.dueDate)} ${result.receipt.dueTime}`
                 : formatDateBRFromYmd(result.receipt.dueDate);
@@ -307,6 +359,21 @@ function buildMultiActionMessage(results, aiReply, currency) {
                 ? `${result.receipt.title} para ${dueLabel}`
                 : `${result.receipt.title} - ${formatCurrency(result.receipt.amount ?? 0, currency)} (${reminderKindLabel(result.receipt.reminderKind)}) para ${dueLabel}`;
             lines.push(`- Lembrete: ${reminderSummary}`);
+            continue;
+        }
+        if (result.kind === 'updated_reminder') {
+            hasReminderActions = true;
+            lines.push(`- Lembrete atualizado: ${result.receipt.title}`);
+            continue;
+        }
+        if (result.kind === 'completed_reminder') {
+            hasReminderActions = true;
+            lines.push(`- Lembrete concluido: ${result.receipt.title}`);
+            continue;
+        }
+        if (result.kind === 'deleted_reminder') {
+            hasReminderActions = true;
+            lines.push(`- Lembrete excluido: ${result.receipt.title}`);
             continue;
         }
         if (result.kind === 'updated') {
@@ -327,7 +394,12 @@ function buildMultiActionMessage(results, aiReply, currency) {
     if (cleanAiReply.length > 0) {
         lines.push('', cleanAiReply);
     }
-    lines.push('', buildEditDeleteHint(transactionCodes));
+    if (transactionCodes.length > 0) {
+        lines.push('', buildEditDeleteHint(transactionCodes));
+    }
+    else if (hasReminderActions) {
+        lines.push('', 'Se quiser, posso concluir, reabrir, editar ou excluir outros lembretes.');
+    }
     return lines.join('\n');
 }
 async function processWhatsAppAIMessage(uid, messages, options = {}) {
@@ -350,27 +422,29 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
     const cached = getCachedContext(uid);
     let categories;
     let recentTransactions;
+    let recentReminders;
     let settings;
     let profile;
     if (cached) {
         logger_1.logger.info('Using cached financial context', { uid });
-        ({ categories, recentTransactions, settings, profile } = cached);
+        ({ categories, recentTransactions, recentReminders, settings, profile } = cached);
     }
     else {
-        [categories, recentTransactions, settings, profile] = await Promise.all([
+        [categories, recentTransactions, recentReminders, settings, profile] = await Promise.all([
             (0, firestore_1.getUserCategories)(uid),
             (0, firestore_1.getRecentTransactions)(uid, env_1.env.whatsappAiRecentTransactions),
+            (0, firestore_1.getUserReminders)(uid),
             (0, firestore_1.getUserSettings)(uid),
             (0, firestore_1.getUserProfile)(uid)
         ]);
-        setCachedContext(uid, { categories, recentTransactions, settings, profile });
+        setCachedContext(uid, { categories, recentTransactions, recentReminders, settings, profile });
         // Generate overdue recurring transactions when context is freshly loaded
         try {
             const generatedCount = await (0, firestore_1.generateOverdueRecurringTransactions)(uid);
             if (generatedCount > 0) {
                 logger_1.logger.info('Generated overdue recurring transactions', { uid, count: generatedCount });
                 recentTransactions = await (0, firestore_1.getRecentTransactions)(uid, env_1.env.whatsappAiRecentTransactions);
-                setCachedContext(uid, { categories, recentTransactions, settings, profile });
+                setCachedContext(uid, { categories, recentTransactions, recentReminders, settings, profile });
             }
         }
         catch (error) {
@@ -382,6 +456,7 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
         settings,
         categories,
         recentTransactions,
+        recentReminders,
         isFirstMessage: Boolean(options.isFirstMessage),
         isGreeting: Boolean(options.isGreeting),
         isCapabilitiesQuestion: Boolean(options.isCapabilitiesQuestion),
@@ -406,6 +481,18 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
         }
         if (actionResult.kind === 'added_reminder') {
             return buildAddedReminderMessage(actionResult.receipt, ai.reply, settings.currency)
+                .slice(0, env_1.env.maxMessageLength);
+        }
+        if (actionResult.kind === 'updated_reminder') {
+            return buildUpdatedReminderMessage(actionResult.receipt, ai.reply, settings.currency)
+                .slice(0, env_1.env.maxMessageLength);
+        }
+        if (actionResult.kind === 'completed_reminder') {
+            return buildCompletedReminderMessage(actionResult.receipt, ai.reply)
+                .slice(0, env_1.env.maxMessageLength);
+        }
+        if (actionResult.kind === 'deleted_reminder') {
+            return buildDeletedReminderMessage(actionResult.receipt, ai.reply)
                 .slice(0, env_1.env.maxMessageLength);
         }
         if (actionResult.kind === 'updated') {
@@ -595,6 +682,7 @@ async function executeAction(uid, action, categories, options) {
                 notifyPhone: options.sourcePhone ?? null
             };
             const reminderId = await (0, firestore_1.addUserReminder)(uid, payload);
+            invalidateContextCache(uid);
             return {
                 kind: 'added_reminder',
                 receipt: {
@@ -606,6 +694,112 @@ async function executeAction(uid, action, categories, options) {
                     dueTime: payload.dueTime ?? null,
                     reminderType: payload.type ?? null,
                     recordedAt: new Date().toISOString()
+                }
+            };
+        }
+        if (action.action === 'update_reminder') {
+            if (!action.id || typeof action.id !== 'string') {
+                return { kind: 'none' };
+            }
+            const rawChanges = action.changes ?? {};
+            const updates = {};
+            if (typeof rawChanges.title === 'string' && rawChanges.title.trim().length > 0) {
+                updates.title = rawChanges.title.trim().slice(0, 120);
+            }
+            if (typeof rawChanges.dueDate === 'string') {
+                updates.dueDate = normalizeDate(rawChanges.dueDate);
+            }
+            if ('dueTime' in rawChanges) {
+                updates.dueTime = normalizeDueTime(rawChanges.dueTime) ?? null;
+            }
+            if (rawChanges.reminderKind === 'general' || rawChanges.reminderKind === 'payable' || rawChanges.reminderKind === 'receivable') {
+                updates.reminderKind = rawChanges.reminderKind;
+                updates.type = rawChanges.reminderKind === 'general' ? null : rawChanges.reminderKind;
+            }
+            else if (rawChanges.reminderType === 'payable' || rawChanges.reminderType === 'receivable') {
+                updates.reminderKind = rawChanges.reminderType;
+                updates.type = rawChanges.reminderType;
+            }
+            else if (rawChanges.reminderType === null) {
+                updates.type = null;
+            }
+            if ('amount' in rawChanges) {
+                if (rawChanges.amount == null) {
+                    updates.amount = null;
+                }
+                else {
+                    const parsedAmount = Number(rawChanges.amount);
+                    if (Number.isFinite(parsedAmount) && parsedAmount > 0) {
+                        updates.amount = parsedAmount;
+                    }
+                }
+            }
+            if (rawChanges.status === 'pending' || rawChanges.status === 'paid') {
+                updates.status = rawChanges.status;
+            }
+            if (Object.keys(updates).length === 0) {
+                return { kind: 'none' };
+            }
+            await (0, firestore_1.updateUserReminder)(uid, action.id, updates);
+            invalidateContextCache(uid);
+            const updated = await (0, firestore_1.getUserReminderById)(uid, action.id);
+            if (!updated) {
+                return { kind: 'none' };
+            }
+            return {
+                kind: 'updated_reminder',
+                receipt: {
+                    reminderId: updated.id,
+                    reminderKind: updated.reminderKind,
+                    title: updated.title,
+                    amount: updated.amount,
+                    dueDate: updated.dueDate,
+                    dueTime: updated.dueTime ?? null,
+                    status: updated.status,
+                    updatedAt: updated.updatedAt
+                }
+            };
+        }
+        if (action.action === 'complete_reminder') {
+            if (!action.id || typeof action.id !== 'string') {
+                return { kind: 'none' };
+            }
+            await (0, firestore_1.updateUserReminder)(uid, action.id, { status: 'paid' });
+            invalidateContextCache(uid);
+            const updated = await (0, firestore_1.getUserReminderById)(uid, action.id);
+            if (!updated) {
+                return { kind: 'none' };
+            }
+            return {
+                kind: 'completed_reminder',
+                receipt: {
+                    reminderId: updated.id,
+                    reminderKind: updated.reminderKind,
+                    title: updated.title,
+                    amount: updated.amount,
+                    dueDate: updated.dueDate,
+                    dueTime: updated.dueTime ?? null,
+                    status: updated.status,
+                    updatedAt: updated.updatedAt
+                }
+            };
+        }
+        if (action.action === 'delete_reminder') {
+            if (!action.id || typeof action.id !== 'string') {
+                return { kind: 'none' };
+            }
+            const existing = await (0, firestore_1.getUserReminderById)(uid, action.id);
+            if (!existing) {
+                return { kind: 'none' };
+            }
+            await (0, firestore_1.deleteUserReminder)(uid, action.id);
+            invalidateContextCache(uid);
+            return {
+                kind: 'deleted_reminder',
+                receipt: {
+                    reminderId: existing.id,
+                    title: existing.title,
+                    deletedAt: new Date().toISOString()
                 }
             };
         }

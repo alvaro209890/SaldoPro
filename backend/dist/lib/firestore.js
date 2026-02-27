@@ -20,6 +20,7 @@ exports.getUserTransactionById = getUserTransactionById;
 exports.restoreUserTransaction = restoreUserTransaction;
 exports.addUserReminder = addUserReminder;
 exports.getUserReminders = getUserReminders;
+exports.getUserReminderById = getUserReminderById;
 exports.updateUserReminder = updateUserReminder;
 exports.deleteUserReminder = deleteUserReminder;
 exports.getDueWhatsAppReminders = getDueWhatsAppReminders;
@@ -657,6 +658,16 @@ async function getUserReminders(uid) {
         .order('due_time', { ascending: true });
     assertNoError(error, 'getUserReminders');
     return (data ?? []).map(mapReminder);
+}
+async function getUserReminderById(uid, reminderId) {
+    const { data, error } = await supabase_1.supabaseAdmin
+        .from('app_reminders')
+        .select('id, reminder_kind, title, amount, due_date, due_time, due_at, notified_at, notify_phone, type, status, created_at, updated_at')
+        .eq('uid', uid)
+        .eq('id', reminderId)
+        .maybeSingle();
+    assertNoError(error, 'getUserReminderById');
+    return data ? mapReminder(data) : null;
 }
 async function updateUserReminder(uid, reminderId, changes) {
     const { data: currentData, error: currentError } = await supabase_1.supabaseAdmin

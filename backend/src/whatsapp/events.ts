@@ -122,7 +122,8 @@ export function normalizePhoneToJid(phoneOrJid: string): string {
   const value = phoneOrJid.trim();
   if (value.includes('@')) return value;
   const digits = normalizePhoneNumber(value);
-  if (digits.length < 10) {
+  // E.164 supports up to 15 digits. Longer numeric IDs are not phone numbers.
+  if (digits.length < 10 || digits.length > 15) {
     throw new Error('Invalid phone number');
   }
   return `${digits}@s.whatsapp.net`;

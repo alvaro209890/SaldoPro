@@ -865,6 +865,17 @@ export async function getUserReminders(uid: string): Promise<UserReminder[]> {
   return ((data ?? []) as DbReminderRow[]).map(mapReminder);
 }
 
+export async function getUserReminderById(uid: string, reminderId: string): Promise<UserReminder | null> {
+  const { data, error } = await db
+    .from('app_reminders')
+    .select('id, reminder_kind, title, amount, due_date, due_time, due_at, notified_at, notify_phone, type, status, created_at, updated_at')
+    .eq('uid', uid)
+    .eq('id', reminderId)
+    .maybeSingle<DbReminderRow>();
+  assertNoError(error, 'getUserReminderById');
+  return data ? mapReminder(data) : null;
+}
+
 export async function updateUserReminder(
   uid: string,
   reminderId: string,

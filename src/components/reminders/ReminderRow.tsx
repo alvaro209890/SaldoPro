@@ -1,7 +1,7 @@
 import { formatBRL } from '@/utils/formatBRL';
 import { formatDateBR } from '@/utils/date';
 import { Reminder } from '@/types';
-import { Pencil, CheckCircle2, Circle, Clock, ArrowDown, ArrowUp, Bell } from 'lucide-react';
+import { ArrowDown, ArrowUp, Bell, CalendarDays, Check, Clock3, Pencil, RotateCcw } from 'lucide-react';
 
 interface ReminderRowProps {
   reminder: Reminder;
@@ -9,17 +9,36 @@ interface ReminderRowProps {
   onToggleStatus: () => void;
 }
 
-function reminderKindLabel(reminder: Reminder): string {
-  if (reminder.reminderKind === 'general') return 'Comum';
-  if (reminder.reminderKind === 'receivable') return 'A receber';
-  return 'A pagar';
+function reminderKindMeta(kind: Reminder['reminderKind']): {
+  label: string;
+  tone: string;
+  icon: JSX.Element;
+} {
+  if (kind === 'payable') {
+    return {
+      label: 'A pagar',
+      tone: 'bg-orange-500/10 text-orange-300 border-orange-500/20',
+      icon: <ArrowDown className="h-3 w-3" />
+    };
+  }
+
+  if (kind === 'receivable') {
+    return {
+      label: 'A receber',
+      tone: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20',
+      icon: <ArrowUp className="h-3 w-3" />
+    };
+  }
+
+  return {
+    label: 'Comum',
+    tone: 'bg-blue-500/10 text-blue-300 border-blue-500/20',
+    icon: <Bell className="h-3 w-3" />
+  };
 }
 
 export function ReminderRow({ reminder, onEdit, onToggleStatus }: ReminderRowProps) {
-  const isReceivable = reminder.reminderKind === 'receivable';
   const isPaid = reminder.status === 'paid';
-  const hasAmount = reminder.reminderKind !== 'general' && reminder.amount != null;
-
   const today = new Date().toISOString().split('T')[0];
   const isOverdue = !isPaid && reminder.dueDate < today;
   const isToday = !isPaid && reminder.dueDate === today;
@@ -27,67 +46,93 @@ export function ReminderRow({ reminder, onEdit, onToggleStatus }: ReminderRowPro
     ? `${formatDateBR(reminder.dueDate)} ${reminder.dueTime}`
     : formatDateBR(reminder.dueDate);
 
-  const StatusIcon = isPaid ? CheckCircle2 : Circle;
+  const kindMeta = reminderKindMeta(reminder.reminderKind);
+  const hasAmount = reminder.reminderKind !== 'general' && reminder.amount != null;
+  const signedAmount = reminder.reminderKind === 'receivable' ? '+' : '-';
 
   return (
-    <div className={`group flex items-center justify-between p-4 transition-all hover:bg-surface-800/50 ${isPaid ? 'opacity-50' : ''}`}>
-      <div className="flex items-center gap-4 min-w-0" onClick={onToggleStatus}>
-        <button className={`flex-shrink-0 transition-colors ${isPaid ? 'text-emerald-500' : 'text-gray-500 hover:text-indigo-400'}`}>
-          <StatusIcon className="h-6 w-6" />
-        </button>
-
-        <div className="flex flex-col min-w-0 gap-1 cursor-pointer">
-          <div className="flex items-center gap-2">
-            <p className={`truncate font-medium ${isPaid ? 'line-through text-gray-400' : 'text-gray-200'}`}>
+    <article
+      className={`rounded-xl border p-4 transition-all ${
+        isPaid
+          ? 'border-surface-700/70 bg-surface-900/30'
+          : isOverdue
+            ? 'border-red-500/30 bg-red-500/5'
+            : 'border-surface-700/80 bg-surface-900/60 hover:border-surface-600'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <h4 className={`truncate text-sm font-semibold ${isPaid ? 'text-gray-400 line-through' : 'text-gray-100'}`}>
               {reminder.title}
-            </p>
+            </h4>
+
+            <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${kindMeta.tone}`}>
+              {kindMeta.icon}
+              {kindMeta.label}
+            </span>
+
             {isOverdue && (
-              <span className="flex-shrink-0 inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-xs font-medium text-red-400">
-                <Clock className="h-3 w-3" />
+              <span className="inline-flex items-center gap-1 rounded-full border border-red-500/20 bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-300">
+                <Clock3 className="h-3 w-3" />
                 Atrasado
               </span>
             )}
+
             {isToday && (
-              <span className="flex-shrink-0 inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-400">
+              <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300">
+                <CalendarDays className="h-3 w-3" />
                 Hoje
               </span>
             )}
           </div>
 
-          <div className="flex items-center gap-3 text-sm text-gray-500">
-            <span className="flex items-center gap-1">
-              {reminder.reminderKind === 'general'
-                ? <Bell className="h-3 w-3" />
-                : (isReceivable ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
-              {dueLabel}
-            </span>
-            <span className="text-xs text-gray-500">{reminderKindLabel(reminder)}</span>
+          <div className="flex items-center gap-2 text-xs text-gray-400">
+            <CalendarDays className="h-3.5 w-3.5" />
+            <span>{dueLabel}</span>
           </div>
         </div>
-      </div>
 
-      <div className="flex flex-col items-end gap-1 flex-shrink-0 ml-4">
-        {hasAmount ? (
-          <p className={`font-semibold ${isPaid ? 'text-gray-500' : isReceivable ? 'text-emerald-400' : 'text-gray-200'}`}>
-            {isReceivable ? '+' : '-'}{formatBRL(reminder.amount ?? 0)}
-          </p>
-        ) : (
-          <p className={`text-xs ${isPaid ? 'text-gray-500' : 'text-gray-400'}`}>Sem valor</p>
-        )}
-
-        <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onEdit();
-            }}
-            className="rounded-lg p-1 text-gray-400 hover:bg-surface-700 hover:text-white"
-            title="Editar"
-          >
-            <Pencil className="h-4 w-4" />
-          </button>
+        <div className="text-right">
+          {hasAmount ? (
+            <p className={`text-sm font-semibold ${
+              isPaid
+                ? 'text-gray-500'
+                : reminder.reminderKind === 'receivable'
+                  ? 'text-emerald-300'
+                  : 'text-orange-200'
+            }`}>
+              {signedAmount}{formatBRL(reminder.amount ?? 0)}
+            </p>
+          ) : (
+            <p className={`text-xs ${isPaid ? 'text-gray-500' : 'text-gray-400'}`}>Sem valor</p>
+          )}
         </div>
       </div>
-    </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={onToggleStatus}
+          className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+            isPaid
+              ? 'bg-surface-800 text-gray-300 hover:bg-surface-700'
+              : 'bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+          }`}
+        >
+          {isPaid ? <RotateCcw className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}
+          {isPaid ? 'Reabrir' : 'Concluir'}
+        </button>
+
+        <button
+          type="button"
+          onClick={onEdit}
+          className="inline-flex items-center gap-1 rounded-lg bg-surface-800 px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:bg-surface-700 hover:text-white"
+        >
+          <Pencil className="h-3.5 w-3.5" />
+          Editar
+        </button>
+      </div>
+    </article>
   );
 }

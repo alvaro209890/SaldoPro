@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Calendar, FileText, DollarSign, ArrowDown, ArrowUp, Bell, Clock3 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Bell, Calendar, Clock3, DollarSign, FileText } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -11,7 +11,7 @@ import type { Reminder, ReminderFormData } from '@/types';
 const reminderSchema = z.object({
   reminderKind: z.enum(['general', 'payable', 'receivable']),
   amount: z.number().nullable().optional(),
-  dueDate: z.string().min(1, 'A data de vencimento e obrigatoria'),
+  dueDate: z.string().min(1, 'A data e obrigatoria'),
   dueTime: z.string().nullable().optional(),
   title: z.string().min(1, 'O texto do lembrete e obrigatorio'),
   status: z.enum(['pending', 'paid']),
@@ -21,7 +21,7 @@ const reminderSchema = z.object({
     if (data.amount == null || data.amount <= 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'O valor deve ser maior que zero',
+        message: 'Informe um valor maior que zero',
         path: ['amount']
       });
     }
@@ -34,6 +34,12 @@ interface ReminderFormProps {
   onSubmit: (data: ReminderFormData) => Promise<void>;
   onDelete?: () => Promise<void>;
   initialData?: Reminder | null;
+}
+
+function dateOffset(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 export function ReminderForm({
@@ -60,7 +66,7 @@ export function ReminderForm({
     defaultValues: {
       reminderKind: 'general',
       amount: null,
-      dueDate: new Date().toISOString().split('T')[0],
+      dueDate: dateOffset(0),
       dueTime: null,
       title: '',
       status: 'pending',
@@ -70,6 +76,7 @@ export function ReminderForm({
 
   const reminderKind = watch('reminderKind');
   const isFinancial = reminderKind === 'payable' || reminderKind === 'receivable';
+  const status = watch('status');
 
   useEffect(() => {
     if (!isOpen) return;
@@ -85,11 +92,10 @@ export function ReminderForm({
         type: initialData.type ?? null,
       });
     } else {
-      const today = new Date().toISOString().split('T')[0];
       reset({
         reminderKind: 'general',
         amount: null,
-        dueDate: today,
+        dueDate: dateOffset(0),
         dueTime: null,
         title: '',
         status: 'pending',
@@ -106,6 +112,7 @@ export function ReminderForm({
       setValue('amount', null);
       return;
     }
+
     setValue('type', kind);
     if (!watch('amount') || (watch('amount') ?? 0) <= 0) {
       setValue('amount', 0);
@@ -144,90 +151,90 @@ export function ReminderForm({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={initialData ? 'Editar Lembrete' : 'Novo Lembrete'}
+      title={initialData ? 'Editar lembrete' : 'Novo lembrete'}
     >
       <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-6">
-        <div className="grid grid-cols-3 gap-2 p-1 bg-surface-800 rounded-xl">
+        <div className="rounded-2xl border border-surface-700 bg-surface-900/50 p-1 grid grid-cols-3 gap-1">
           <button
             type="button"
             onClick={() => setKind('general')}
-            className={`flex items-center justify-center gap-2 py-2 text-sm font-medium rounded-lg transition-all ${
+            className={`flex items-center justify-center gap-1 rounded-xl py-2 text-xs font-medium transition ${
               reminderKind === 'general'
-                ? 'bg-blue-500 text-white shadow-md'
-                : 'text-gray-400 hover:text-gray-200'
+                ? 'bg-blue-500 text-white'
+                : 'text-gray-300 hover:bg-surface-800'
             }`}
           >
-            <Bell className="h-4 w-4" /> Comum
+            <Bell className="h-3.5 w-3.5" />
+            Comum
           </button>
           <button
             type="button"
             onClick={() => setKind('payable')}
-            className={`flex items-center justify-center gap-2 py-2 text-sm font-medium rounded-lg transition-all ${
+            className={`flex items-center justify-center gap-1 rounded-xl py-2 text-xs font-medium transition ${
               reminderKind === 'payable'
-                ? 'bg-red-500 text-white shadow-md'
-                : 'text-gray-400 hover:text-gray-200'
+                ? 'bg-orange-500 text-white'
+                : 'text-gray-300 hover:bg-surface-800'
             }`}
           >
-            <ArrowDown className="h-4 w-4" /> A Pagar
+            <ArrowDown className="h-3.5 w-3.5" />
+            A pagar
           </button>
           <button
             type="button"
             onClick={() => setKind('receivable')}
-            className={`flex items-center justify-center gap-2 py-2 text-sm font-medium rounded-lg transition-all ${
+            className={`flex items-center justify-center gap-1 rounded-xl py-2 text-xs font-medium transition ${
               reminderKind === 'receivable'
-                ? 'bg-emerald-500 text-white shadow-md'
-                : 'text-gray-400 hover:text-gray-200'
+                ? 'bg-emerald-500 text-white'
+                : 'text-gray-300 hover:bg-surface-800'
             }`}
           >
-            <ArrowUp className="h-4 w-4" /> A Receber
+            <ArrowUp className="h-3.5 w-3.5" />
+            A receber
           </button>
         </div>
 
-        <div className="grid gap-6 sm:grid-cols-2">
-          <Input
-            label={isFinancial ? 'Descricao' : 'Texto do lembrete'}
-            icon={FileText}
-            placeholder={isFinancial ? 'Ex: Pagar aluguel' : 'Ex: Levar documentos na reuniao'}
-            error={errors.title?.message}
-            {...register('title')}
-            className="sm:col-span-2"
+        <Input
+          label={isFinancial ? 'Descricao' : 'Texto do lembrete'}
+          icon={FileText}
+          placeholder={isFinancial ? 'Ex: Pagar aluguel' : 'Ex: Levar documentos para reuniao'}
+          error={errors.title?.message}
+          {...register('title')}
+        />
+
+        {isFinancial && (
+          <Controller
+            name="amount"
+            control={control}
+            render={({ field }) => {
+              const displayValue = field.value
+                ? new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(field.value)
+                : '';
+
+              const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+                const digits = e.target.value.replace(/\D/g, '');
+                const numberValue = digits ? parseInt(digits, 10) / 100 : 0;
+                field.onChange(numberValue);
+              };
+
+              return (
+                <Input
+                  label="Valor"
+                  type="text"
+                  inputMode="numeric"
+                  icon={DollarSign}
+                  placeholder="0,00"
+                  error={errors.amount?.message}
+                  value={displayValue}
+                  onChange={handleAmountChange}
+                  onBlur={field.onBlur}
+                  ref={field.ref}
+                />
+              );
+            }}
           />
+        )}
 
-          {isFinancial && (
-            <div className="sm:col-span-2">
-              <Controller
-                name="amount"
-                control={control}
-                render={({ field }) => {
-                  const displayValue = field.value
-                    ? new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(field.value)
-                    : '';
-
-                  const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-                    const digits = e.target.value.replace(/\D/g, '');
-                    const numberValue = digits ? parseInt(digits, 10) / 100 : 0;
-                    field.onChange(numberValue);
-                  };
-
-                  return (
-                    <Input
-                      label="Valor"
-                      type="text"
-                      inputMode="numeric"
-                      icon={DollarSign}
-                      placeholder="0,00"
-                      error={errors.amount?.message}
-                      value={displayValue}
-                      onChange={handleAmountChange}
-                      onBlur={field.onBlur}
-                      ref={field.ref}
-                    />
-                  );
-                }}
-              />
-            </div>
-          )}
-
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Input
             label="Data"
             type="date"
@@ -245,11 +252,76 @@ export function ReminderForm({
           />
         </div>
 
-        <div className="flex flex-col-reverse sm:flex-row gap-3 pt-4 border-t border-surface-700">
+        <div className="grid grid-cols-3 gap-2 rounded-xl border border-surface-700 bg-surface-900/30 p-2">
+          {[
+            { label: 'Hoje', value: dateOffset(0) },
+            { label: 'Amanha', value: dateOffset(1) },
+            { label: '7 dias', value: dateOffset(7) },
+          ].map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              onClick={() => setValue('dueDate', item.value)}
+              className="rounded-lg bg-surface-800 px-2 py-2 text-xs font-medium text-gray-300 transition hover:bg-surface-700"
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-4 gap-2 rounded-xl border border-surface-700 bg-surface-900/30 p-2">
+          {[
+            { label: '09:00', value: '09:00' },
+            { label: '12:00', value: '12:00' },
+            { label: '18:00', value: '18:00' },
+            { label: 'Sem hora', value: '' },
+          ].map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              onClick={() => setValue('dueTime', item.value || null)}
+              className="rounded-lg bg-surface-800 px-2 py-2 text-xs font-medium text-gray-300 transition hover:bg-surface-700"
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+
+        {initialData && (
+          <div className="space-y-2">
+            <div className="text-xs uppercase tracking-wider text-gray-500">Status</div>
+            <div className="grid grid-cols-2 gap-2 rounded-xl border border-surface-700 bg-surface-900/30 p-2">
+              <button
+                type="button"
+                onClick={() => setValue('status', 'pending')}
+                className={`rounded-lg px-3 py-2 text-xs font-medium transition ${
+                  status === 'pending'
+                    ? 'bg-indigo-500 text-white'
+                    : 'bg-surface-800 text-gray-300 hover:bg-surface-700'
+                }`}
+              >
+                Pendente
+              </button>
+              <button
+                type="button"
+                onClick={() => setValue('status', 'paid')}
+                className={`rounded-lg px-3 py-2 text-xs font-medium transition ${
+                  status === 'paid'
+                    ? 'bg-emerald-500 text-white'
+                    : 'bg-surface-800 text-gray-300 hover:bg-surface-700'
+                }`}
+              >
+                Concluido
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-col-reverse gap-3 border-t border-surface-700 pt-4 sm:flex-row">
           {initialData && onDelete && (
             <div className="flex-1">
               {showDeleteConfirm ? (
-                <div className="flex items-center gap-2 animate-fade-in">
+                <div className="flex items-center gap-2">
                   <Button
                     type="button"
                     variant="danger"
@@ -263,7 +335,7 @@ export function ReminderForm({
                     type="button"
                     variant="ghost"
                     onClick={() => setShowDeleteConfirm(false)}
-                    className="flex-none px-4"
+                    className="px-4"
                   >
                     Cancelar
                   </Button>
@@ -273,14 +345,15 @@ export function ReminderForm({
                   type="button"
                   variant="ghost"
                   onClick={() => setShowDeleteConfirm(true)}
-                  className="w-full sm:w-auto text-red-500 hover:text-red-400 hover:bg-red-500/10"
+                  className="w-full text-red-400 hover:bg-red-500/10 hover:text-red-300 sm:w-auto"
                 >
                   Excluir
                 </Button>
               )}
             </div>
           )}
-          <div className="flex flex-col sm:flex-row flex-1 gap-3 justify-end">
+
+          <div className="flex flex-1 flex-col gap-3 sm:flex-row sm:justify-end">
             <Button type="button" variant="ghost" onClick={onClose} disabled={isLoading} className="w-full sm:w-auto">
               Cancelar
             </Button>

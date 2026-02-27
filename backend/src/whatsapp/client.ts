@@ -1447,7 +1447,8 @@ export class WhatsAppClient {
     if (isStatusJid(jid) || isGroupJid(jid) || jid.endsWith('@lid')) return null;
 
     const phone = jidToPhone(jid);
-    if (phone.length < 10) return null;
+    // Accept only Brazilian-like personal numbers (10-13 digits with/without country code).
+    if (phone.length < 10 || phone.length > 13) return null;
 
     try {
       return normalizePhoneToJid(phone);

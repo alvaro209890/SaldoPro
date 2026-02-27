@@ -1,6 +1,6 @@
 ﻿import { env } from '../config/env';
 import { logger } from '../lib/logger';
-import type { UserCategory, UserProfileBackend, UserSettingsBackend, UserTransaction } from '../lib/firestore';
+import type { UserCategory, UserProfileBackend, UserReminder, UserSettingsBackend, UserTransaction } from '../lib/firestore';
 
 export type PaymentMethod = 'pix' | 'credit' | 'debit' | 'cash' | 'transfer' | 'boleto';
 
@@ -55,6 +55,30 @@ export interface AIActionAddReminder {
   reminderType?: 'payable' | 'receivable';
 }
 
+export interface AIActionUpdateReminder {
+  action: 'update_reminder';
+  id: string;
+  changes: Partial<{
+    title: string;
+    reminderKind: 'general' | 'payable' | 'receivable';
+    reminderType: 'payable' | 'receivable' | null;
+    amount: number | null;
+    dueDate: string;
+    dueTime: string | null;
+    status: 'pending' | 'paid';
+  }>;
+}
+
+export interface AIActionCompleteReminder {
+  action: 'complete_reminder';
+  id: string;
+}
+
+export interface AIActionDeleteReminder {
+  action: 'delete_reminder';
+  id: string;
+}
+
 export interface AIActionNone {
   action: 'none';
 }
@@ -65,6 +89,9 @@ export type AIAction =
   | AIActionDelete
   | AIActionAddRecurring
   | AIActionAddReminder
+  | AIActionUpdateReminder
+  | AIActionCompleteReminder
+  | AIActionDeleteReminder
   | AIActionNone;
 
 export interface GroqAssistantResult {
@@ -84,6 +111,7 @@ export interface UserFinancialContext {
   settings: UserSettingsBackend;
   categories: UserCategory[];
   recentTransactions: UserTransaction[];
+  recentReminders?: UserReminder[];
   isFirstMessage?: boolean;
   isGreeting?: boolean;
   isCapabilitiesQuestion?: boolean;
@@ -233,6 +261,7 @@ FORMATO: Retorne SEMPRE um JSON valido com exatamente duas chaves:
 
 function buildSystemPrompt(context: UserFinancialContext): string {
   const { profile, settings, categories, recentTransactions } = context;
+  const recentReminders = Array.isArray(context.recentReminders) ? context.recentReminders : [];
 
   const userName = profile.displayName?.split(' ')[0] || '';
   const userInfo = userName ? `Nome do usuario: ${userName}.` : 'Nome do usuario: nao informado.';
@@ -291,6 +320,19 @@ ${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.bu
       ? `\n(mostrando ${PROMPT_TX_LIMIT} de ${recentTransactions.length} transacoes recentes)`
       : '';
 
+    const remindersList = recentReminders
+      .slice(0, PROMPT_TX_LIMIT)
+      .map((r) => {
+        const dueLabel = r.dueTime ? `${r.dueDate} ${r.dueTime}` : r.dueDate;
+        const amountPart = r.amount != null ? `, Valor: ${r.amount}` : '';
+        return `- ID: "${r.id}", Titulo: "${r.title}", Tipo: ${r.reminderKind}, Status: ${r.status}, Vencimento: ${dueLabel}${amountPart}`;
+      })
+      .join('\n');
+
+    const reminderNote = recentReminders.length > PROMPT_TX_LIMIT
+      ? `\n(mostrando ${PROMPT_TX_LIMIT} de ${recentReminders.length} lembretes)`
+      : '';
+
     financialContextBlock = `CONTEXTO FINANCEIRO
 ${financialSummary}
 
@@ -299,6 +341,9 @@ ${categoriesList || '(nenhuma categoria cadastrada)'}
 
 Transacoes recentes (referencia interna; nao mostrar IDs):
 ${txList || '(nenhuma transacao)'}${txNote}
+
+Lembretes recentes (referencia interna; nao mostrar IDs):
+${remindersList || '(nenhum lembrete)'}${reminderNote}
 
 Data de hoje: ${today}
 Moeda: ${settings.currency}
@@ -355,6 +400,11 @@ COMPREENSAO DE LINGUAGEM NATURAL
   - Campos: title (descricao curta), dueDate (YYYY-MM-DD), dueTime opcional (HH:mm), reminderKind
   - Se reminderKind for payable/receivable, inclua amount e reminderType correspondente.
   - Se o usuario informar horario, inclua dueTime no formato HH:mm (24h). Ex.: "16:40" -> "dueTime":"16:40"
+- EDICAO DE LEMBRETES EXISTENTES:
+  - Para editar texto/data/hora/valor/tipo/status: use "update_reminder" com "id" do lembrete.
+  - Para marcar como concluido: use "complete_reminder" com "id".
+  - Para excluir lembrete: use "delete_reminder" com "id".
+  - Use os IDs da lista de lembretes no contexto. Nunca invente IDs.
 
 REGRAS DE RESUMO DE CAPACIDADES
 - ${summaryInstruction}
@@ -369,6 +419,7 @@ QUANDO RESUMIR CAPACIDADES, PRIORIZE ESTES ITENS
 - Mostrar resumo do mes (receitas, despesas e saldo).
 - Ajudar no controle de orcamento e alertar excesso de gastos.
 - Editar e excluir lancamentos.
+- Concluir, editar e excluir lembretes.
 - Sugerir melhorias financeiras com base nos dados reais.
 - Tirar duvidas financeiras praticas (economia, planejamento e habitos).
 
@@ -380,10 +431,13 @@ REGRAS TECNICAS (OBRIGATORIO)
 3) Para registrar gasto/receita unico: use "add_transaction". Quando o usuario usa verbos de acao no passado (gastei, paguei, comprei, recebi, ganhei) com valor, REGISTRE AUTOMATICAMENTE sem perguntar.
 4) Para registrar gasto/receita recorrente (todo mes, semanal, etc.): use "add_recurring_transaction" com o campo "frequency".
 5) Para criar lembrete comum ou financeiro: use "add_reminder".
-6) Para conversas gerais, duvidas, orientacoes e informacoes: use {"action":"none"}.
-7) Se faltar o VALOR (nao a categoria ou data), pergunte no "reply" e use action none. Se faltar categoria, escolha a mais adequada. Se faltar data, use hoje.
-8) NUNCA registre transacao quando o usuario usa frases descritivas/informativas ('minhas despesas sao', 'meu gasto mensal e', 'tenho de conta').
-9) Se o usuario citar MULTIPLAS transacoes na mesma mensagem, adicione MULTIPLOS objetos em "actionObjects", na mesma ordem em que aparecem.
+6) Para editar lembrete existente: use "update_reminder" com o "id" correto da lista.
+7) Para concluir lembrete: use "complete_reminder" com o "id" correto.
+8) Para excluir lembrete: use "delete_reminder" com o "id" correto.
+9) Para conversas gerais, duvidas, orientacoes e informacoes: use {"action":"none"}.
+10) Se faltar o VALOR (nao a categoria ou data), pergunte no "reply" e use action none. Se faltar categoria, escolha a mais adequada. Se faltar data, use hoje.
+11) NUNCA registre transacao quando o usuario usa frases descritivas/informativas ('minhas despesas sao', 'meu gasto mensal e', 'tenho de conta').
+12) Se o usuario citar MULTIPLAS acoes na mesma mensagem, adicione MULTIPLOS objetos em "actionObjects", na mesma ordem em que aparecem.
 
 FORMATOS DE ACTIONOBJECT
 - {"action":"none"}
@@ -391,6 +445,9 @@ FORMATOS DE ACTIONOBJECT
 - {"action":"add_recurring_transaction","type":"expense|income","amount":500,"description":"Aluguel","categoryId":"id","date":"YYYY-MM-DD","paymentMethod":"pix","frequency":"weekly|monthly|yearly","endDate":null}
 - {"action":"add_reminder","title":"Beber agua","reminderKind":"general","dueDate":"YYYY-MM-DD","dueTime":"HH:mm|null"}
 - {"action":"add_reminder","title":"Pagar aluguel","reminderKind":"payable","amount":1200,"dueDate":"YYYY-MM-DD","dueTime":"HH:mm|null","reminderType":"payable"}
+- {"action":"update_reminder","id":"reminder_id","changes":{"title":"Novo titulo","dueDate":"YYYY-MM-DD","dueTime":"HH:mm|null","status":"pending|paid","amount":150,"reminderKind":"general|payable|receivable","reminderType":"payable|receivable|null"}}
+- {"action":"complete_reminder","id":"reminder_id"}
+- {"action":"delete_reminder","id":"reminder_id"}
 - {"action":"update_transaction","id":"transaction_id","changes":{"amount":20}}
 - {"action":"delete_transaction","id":"transaction_id"}
 
@@ -542,6 +599,75 @@ function validateAction(raw: unknown): AIAction {
       ...(dueTime ? { dueTime } : {}),
       ...(isFinancial ? { reminderType: finalKind } : {})
     };
+  }
+
+  if (action === 'update_reminder') {
+    const id = typeof obj.id === 'string' ? obj.id.trim() : '';
+    if (!id) return { action: 'none' };
+
+    const rawChanges = typeof obj.changes === 'object' && obj.changes !== null
+      ? (obj.changes as Record<string, unknown>)
+      : {};
+    const changes: Record<string, unknown> = {};
+
+    if (typeof rawChanges.title === 'string' && rawChanges.title.trim().length > 0) {
+      changes.title = rawChanges.title.trim();
+    }
+    if (typeof rawChanges.dueDate === 'string' && rawChanges.dueDate.trim().length > 0) {
+      changes.dueDate = rawChanges.dueDate.trim();
+    }
+    if (rawChanges.dueTime === null) {
+      changes.dueTime = null;
+    } else if (typeof rawChanges.dueTime === 'string') {
+      const dueTime = rawChanges.dueTime.trim();
+      if (!dueTime || /^([01]\d|2[0-3]):([0-5]\d)$/.test(dueTime)) {
+        changes.dueTime = dueTime || null;
+      } else {
+        return { action: 'none' };
+      }
+    }
+
+    if (
+      rawChanges.reminderKind === 'general' ||
+      rawChanges.reminderKind === 'payable' ||
+      rawChanges.reminderKind === 'receivable'
+    ) {
+      changes.reminderKind = rawChanges.reminderKind;
+    }
+    if (
+      rawChanges.reminderType === null ||
+      rawChanges.reminderType === 'payable' ||
+      rawChanges.reminderType === 'receivable'
+    ) {
+      changes.reminderType = rawChanges.reminderType;
+    }
+
+    if (rawChanges.amount === null) {
+      changes.amount = null;
+    } else if (rawChanges.amount != null) {
+      const parsedAmount = Number(rawChanges.amount);
+      if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) return { action: 'none' };
+      changes.amount = parsedAmount;
+    }
+
+    if (rawChanges.status === 'pending' || rawChanges.status === 'paid') {
+      changes.status = rawChanges.status;
+    }
+
+    if (Object.keys(changes).length === 0) return { action: 'none' };
+    return { action: 'update_reminder', id, changes };
+  }
+
+  if (action === 'complete_reminder') {
+    const id = typeof obj.id === 'string' ? obj.id.trim() : '';
+    if (!id) return { action: 'none' };
+    return { action: 'complete_reminder', id };
+  }
+
+  if (action === 'delete_reminder') {
+    const id = typeof obj.id === 'string' ? obj.id.trim() : '';
+    if (!id) return { action: 'none' };
+    return { action: 'delete_reminder', id };
   }
 
   return { action: 'none' };
