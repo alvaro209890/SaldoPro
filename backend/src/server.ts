@@ -8,9 +8,11 @@ import { createWhatsAppRouter } from './routes/whatsapp';
 import { createAiChatRouter } from './routes/ai-chat';
 import { createDataRouter } from './routes/data';
 import { WhatsAppClientsManager } from './whatsapp/manager';
+import { startWhatsAppReminderNotifier } from './whatsapp/reminder-notifier';
 
 const app = express();
 const whatsappManager = new WhatsAppClientsManager();
+const stopReminderNotifier = startWhatsAppReminderNotifier(whatsappManager);
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
@@ -45,6 +47,7 @@ if (env.backendUrl) {
 
 const shutdown = async (signal: string): Promise<void> => {
   logger.warn('Shutdown signal received — closing gracefully', { signal });
+  stopReminderNotifier();
   server.close();
   await whatsappManager.shutdownAll();
   // Brief pause so the WebSocket close frame is sent before the process exits

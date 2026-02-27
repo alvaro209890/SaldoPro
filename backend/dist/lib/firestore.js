@@ -22,6 +22,8 @@ exports.addUserReminder = addUserReminder;
 exports.getUserReminders = getUserReminders;
 exports.updateUserReminder = updateUserReminder;
 exports.deleteUserReminder = deleteUserReminder;
+exports.getDueWhatsAppReminders = getDueWhatsAppReminders;
+exports.markReminderAsNotified = markReminderAsNotified;
 exports.addRecurringTransaction = addRecurringTransaction;
 exports.getActiveRecurringTransactions = getActiveRecurringTransactions;
 exports.getRecurringTransactions = getRecurringTransactions;
@@ -90,6 +92,36 @@ function getDocId(record) {
 }
 function monthKeyFromDate(date) {
     return date.slice(0, 7);
+}
+function normalizeDueTime(value) {
+    if (typeof value !== 'string')
+        return null;
+    const trimmed = value.trim();
+    const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(trimmed);
+    if (!match)
+        return null;
+    return `${match[1]}:${match[2]}`;
+}
+function reminderDueAtFromDateAndTime(dueDate, dueTime) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate))
+        return null;
+    const normalizedTime = normalizeDueTime(dueTime);
+    if (!normalizedTime)
+        return null;
+    // Interpreta horários dos lembretes em BRT (UTC-03:00).
+    const parsed = new Date(`${dueDate}T${normalizedTime}:00-03:00`);
+    if (!Number.isFinite(parsed.getTime()))
+        return null;
+    return parsed.toISOString();
+}
+function normalizeReminderKind(reminderKind, reminderType) {
+    if (reminderKind === 'general' || reminderKind === 'payable' || reminderKind === 'receivable') {
+        return reminderKind;
+    }
+    if (reminderType === 'payable' || reminderType === 'receivable') {
+        return reminderType;
+    }
+    return 'general';
 }
 const DEFAULT_EXPENSE_CATEGORIES = [
     { name: 'Alimentacao', type: 'expense', color: '#f97316', icon: 'UtensilsCrossed' },
@@ -536,9 +568,13 @@ async function restoreUserTransaction(uid, transactionId, transaction) {
 function mapReminder(row) {
     return {
         id: row.id,
+        reminderKind: row.reminder_kind,
         title: row.title,
-        amount: toNumber(row.amount),
+        amount: row.amount == null ? null : toNumber(row.amount),
         dueDate: row.due_date,
+        dueTime: row.due_time,
+        dueAt: row.due_at,
+        notifiedAt: row.notified_at,
         type: row.type,
         status: row.status,
         createdAt: row.created_at,
@@ -547,14 +583,30 @@ function mapReminder(row) {
 }
 async function addUserReminder(uid, input) {
     const now = new Date().toISOString();
+    const reminderKind = normalizeReminderKind(input.reminderKind, input.type);
+    const financialType = reminderKind === 'general' ? null : reminderKind;
+    const rawAmount = input.amount;
+    const amount = reminderKind === 'general'
+        ? null
+        : (typeof rawAmount === 'number' && Number.isFinite(rawAmount) && rawAmount > 0 ? rawAmount : null);
+    if (reminderKind !== 'general' && (amount == null || financialType == null)) {
+        throw new Error('addUserReminder: financial reminder requires amount and type');
+    }
+    const normalizedDueTime = normalizeDueTime(input.dueTime ?? null);
+    const dueAt = reminderDueAtFromDateAndTime(input.dueDate, normalizedDueTime);
+    const normalizedNotifyPhone = input.notifyPhone ? (0, events_1.normalizePhoneNumber)(input.notifyPhone) : '';
     const { data, error } = await supabase_1.supabaseAdmin
         .from('app_reminders')
         .insert({
         uid,
+        reminder_kind: reminderKind,
         title: input.title,
-        amount: input.amount,
+        amount,
         due_date: input.dueDate,
-        type: input.type,
+        due_time: normalizedDueTime,
+        due_at: dueAt,
+        notify_phone: normalizedNotifyPhone.length >= 10 ? normalizedNotifyPhone : null,
+        type: financialType,
         status: input.status ?? 'pending',
         created_at: now,
         updated_at: now
@@ -569,24 +621,63 @@ async function addUserReminder(uid, input) {
 async function getUserReminders(uid) {
     const { data, error } = await supabase_1.supabaseAdmin
         .from('app_reminders')
-        .select('id, title, amount, due_date, type, status, created_at, updated_at')
+        .select('id, reminder_kind, title, amount, due_date, due_time, due_at, notified_at, notify_phone, type, status, created_at, updated_at')
         .eq('uid', uid)
-        .order('due_date', { ascending: true });
+        .order('due_date', { ascending: true })
+        .order('due_time', { ascending: true });
     assertNoError(error, 'getUserReminders');
     return (data ?? []).map(mapReminder);
 }
 async function updateUserReminder(uid, reminderId, changes) {
+    const { data: currentData, error: currentError } = await supabase_1.supabaseAdmin
+        .from('app_reminders')
+        .select('reminder_kind, amount, due_date, due_time, type')
+        .eq('uid', uid)
+        .eq('id', reminderId)
+        .maybeSingle();
+    assertNoError(currentError, 'updateUserReminder.loadCurrent');
+    if (!currentData)
+        return;
+    const nextKind = 'reminderKind' in changes
+        ? normalizeReminderKind(changes.reminderKind, changes.type)
+        : currentData.reminder_kind;
+    const nextDueDate = typeof changes.dueDate === 'string'
+        ? changes.dueDate
+        : currentData.due_date;
+    const nextDueTime = 'dueTime' in changes
+        ? normalizeDueTime(changes.dueTime ?? null)
+        : currentData.due_time;
+    const nextAmount = nextKind === 'general'
+        ? null
+        : (typeof changes.amount === 'number'
+            ? (Number.isFinite(changes.amount) && changes.amount > 0 ? changes.amount : null)
+            : (currentData.amount == null ? null : toNumber(currentData.amount)));
+    const nextType = nextKind === 'general'
+        ? null
+        : nextKind;
+    if (nextKind !== 'general' && (nextAmount == null || nextType == null)) {
+        throw new Error('updateUserReminder: financial reminder requires amount and type');
+    }
     const updates = { updated_at: new Date().toISOString() };
     if (typeof changes.title === 'string')
         updates.title = changes.title;
-    if (typeof changes.amount === 'number')
-        updates.amount = changes.amount;
+    updates.reminder_kind = nextKind;
+    updates.amount = nextAmount;
+    updates.type = nextType;
     if (typeof changes.dueDate === 'string')
         updates.due_date = changes.dueDate;
-    if (typeof changes.type === 'string')
-        updates.type = changes.type;
-    if (typeof changes.status === 'string')
+    if ('dueTime' in changes)
+        updates.due_time = nextDueTime;
+    if (typeof changes.status === 'string') {
         updates.status = changes.status;
+        if (changes.status === 'pending') {
+            updates.notified_at = null;
+        }
+    }
+    if ('dueDate' in changes || 'dueTime' in changes) {
+        updates.due_at = reminderDueAtFromDateAndTime(nextDueDate, nextDueTime);
+        updates.notified_at = null;
+    }
     const { error } = await supabase_1.supabaseAdmin
         .from('app_reminders')
         .update(updates)
@@ -601,6 +692,55 @@ async function deleteUserReminder(uid, reminderId) {
         .eq('uid', uid)
         .eq('id', reminderId);
     assertNoError(error, 'deleteUserReminder');
+}
+async function getDueWhatsAppReminders(nowIso, limitCount) {
+    const safeLimit = Math.max(1, Math.min(limitCount, 200));
+    const { data, error } = await supabase_1.supabaseAdmin
+        .from('app_reminders')
+        .select('id, uid, reminder_kind, title, amount, due_date, due_time, type, notify_phone')
+        .eq('status', 'pending')
+        .is('notified_at', null)
+        .not('due_at', 'is', null)
+        .not('notify_phone', 'is', null)
+        .lte('due_at', nowIso)
+        .order('due_at', { ascending: true })
+        .limit(safeLimit);
+    assertNoError(error, 'getDueWhatsAppReminders');
+    const rows = (data ?? []);
+    return rows
+        .map((row) => {
+        const dueTime = normalizeDueTime(row.due_time);
+        const notifyPhone = row.notify_phone ? (0, events_1.normalizePhoneNumber)(row.notify_phone) : '';
+        if (!dueTime || notifyPhone.length < 10)
+            return null;
+        return {
+            id: row.id,
+            uid: row.uid,
+            reminderKind: row.reminder_kind,
+            title: row.title,
+            amount: row.amount == null ? null : toNumber(row.amount),
+            dueDate: row.due_date,
+            dueTime,
+            type: row.type,
+            notifyPhone
+        };
+    })
+        .filter((entry) => Boolean(entry));
+}
+async function markReminderAsNotified(uid, reminderId, notifiedAtIso) {
+    const { data, error } = await supabase_1.supabaseAdmin
+        .from('app_reminders')
+        .update({
+        notified_at: notifiedAtIso,
+        updated_at: notifiedAtIso
+    })
+        .eq('uid', uid)
+        .eq('id', reminderId)
+        .is('notified_at', null)
+        .select('id')
+        .maybeSingle();
+    assertNoError(error, 'markReminderAsNotified');
+    return Boolean(data?.id);
 }
 function mapRecurring(row) {
     return {

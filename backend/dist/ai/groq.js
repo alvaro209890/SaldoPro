@@ -219,9 +219,13 @@ COMPREENSAO DE LINGUAGEM NATURAL
   - "gasto 50 por semana no transporte" = add_recurring_transaction, frequency "weekly"
   - "recebo 3000 de salario mensalmente" = add_recurring_transaction, frequency "monthly"
   - "pago 1200 de seguro por ano" = add_recurring_transaction, frequency "yearly"
-- LEMBRETES: quando o usuario pedir para lembrar de pagar/receber algo no futuro, use "add_reminder":
-  - Exemplos: "me lembre de pagar aluguel dia 10", "cria um lembrete de receber 500 dia 20"
-  - Campos: title (descricao curta), amount (numero > 0), dueDate (YYYY-MM-DD), reminderType ("payable" para pagar, "receivable" para receber)
+- LEMBRETES: quando o usuario pedir para lembrar de algo no futuro, use "add_reminder":
+  - Lembrete comum: use reminderKind "general" (sem amount e sem reminderType).
+  - Lembrete financeiro: use reminderKind "payable" ou "receivable" com amount > 0.
+  - Exemplos: "me lembra de beber agua amanha" (general), "me lembre de pagar aluguel dia 10" (payable), "cria um lembrete de receber 500 dia 20" (receivable)
+  - Campos: title (descricao curta), dueDate (YYYY-MM-DD), dueTime opcional (HH:mm), reminderKind
+  - Se reminderKind for payable/receivable, inclua amount e reminderType correspondente.
+  - Se o usuario informar horario, inclua dueTime no formato HH:mm (24h). Ex.: "16:40" -> "dueTime":"16:40"
 
 REGRAS DE RESUMO DE CAPACIDADES
 - ${summaryInstruction}
@@ -246,7 +250,7 @@ REGRAS TECNICAS (OBRIGATORIO)
 2) Nao escreva nada antes nem depois do JSON. A resposta inteira deve ser o JSON.
 3) Para registrar gasto/receita unico: use "add_transaction". Quando o usuario usa verbos de acao no passado (gastei, paguei, comprei, recebi, ganhei) com valor, REGISTRE AUTOMATICAMENTE sem perguntar.
 4) Para registrar gasto/receita recorrente (todo mes, semanal, etc.): use "add_recurring_transaction" com o campo "frequency".
-5) Para criar lembrete de pagar/receber: use "add_reminder".
+5) Para criar lembrete comum ou financeiro: use "add_reminder".
 6) Para conversas gerais, duvidas, orientacoes e informacoes: use {"action":"none"}.
 7) Se faltar o VALOR (nao a categoria ou data), pergunte no "reply" e use action none. Se faltar categoria, escolha a mais adequada. Se faltar data, use hoje.
 8) NUNCA registre transacao quando o usuario usa frases descritivas/informativas ('minhas despesas sao', 'meu gasto mensal e', 'tenho de conta').
@@ -256,7 +260,8 @@ FORMATOS DE ACTIONOBJECT
 - {"action":"none"}
 - {"action":"add_transaction","type":"expense|income","amount":15.5,"description":"Lanche","categoryId":"id","date":"YYYY-MM-DD","paymentMethod":"pix|credit|debit|cash|transfer|boleto"}
 - {"action":"add_recurring_transaction","type":"expense|income","amount":500,"description":"Aluguel","categoryId":"id","date":"YYYY-MM-DD","paymentMethod":"pix","frequency":"weekly|monthly|yearly","endDate":null}
-- {"action":"add_reminder","title":"Pagar aluguel","amount":1200,"dueDate":"YYYY-MM-DD","reminderType":"payable|receivable"}
+- {"action":"add_reminder","title":"Beber agua","reminderKind":"general","dueDate":"YYYY-MM-DD","dueTime":"HH:mm|null"}
+- {"action":"add_reminder","title":"Pagar aluguel","reminderKind":"payable","amount":1200,"dueDate":"YYYY-MM-DD","dueTime":"HH:mm|null","reminderType":"payable"}
 - {"action":"update_transaction","id":"transaction_id","changes":{"amount":20}}
 - {"action":"delete_transaction","id":"transaction_id"}
 
@@ -374,21 +379,37 @@ function validateAction(raw) {
     }
     if (action === 'add_reminder') {
         const title = typeof obj.title === 'string' ? obj.title.trim() : '';
-        const amount = Number(obj.amount);
+        const amount = obj.amount == null ? null : Number(obj.amount);
         const dueDate = typeof obj.dueDate === 'string' ? obj.dueDate : '';
-        const reminderType = obj.reminderType;
+        const dueTime = typeof obj.dueTime === 'string' ? obj.dueTime.trim() : null;
+        const reminderKind = obj.reminderKind;
+        const reminderType = obj.reminderType === 'payable' || obj.reminderType === 'receivable'
+            ? obj.reminderType
+            : null;
         if (!title)
             return { action: 'none' };
-        if (!Number.isFinite(amount) || amount <= 0)
+        if (!dueDate)
             return { action: 'none' };
-        if (reminderType !== 'payable' && reminderType !== 'receivable')
+        if (dueTime && !/^([01]\d|2[0-3]):([0-5]\d)$/.test(dueTime))
             return { action: 'none' };
+        const finalKind = reminderKind === 'general' || reminderKind === 'payable' || reminderKind === 'receivable'
+            ? reminderKind
+            : (reminderType ?? 'general');
+        const isFinancial = finalKind === 'payable' || finalKind === 'receivable';
+        if (isFinancial) {
+            if (amount == null || !Number.isFinite(amount) || amount <= 0)
+                return { action: 'none' };
+            if (!reminderType || reminderType !== finalKind)
+                return { action: 'none' };
+        }
         return {
             action: 'add_reminder',
             title,
-            amount,
+            reminderKind: finalKind,
+            ...(isFinancial ? { amount } : {}),
             dueDate,
-            reminderType
+            ...(dueTime ? { dueTime } : {}),
+            ...(isFinancial ? { reminderType: finalKind } : {})
         };
     }
     return { action: 'none' };

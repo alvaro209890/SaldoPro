@@ -13,8 +13,10 @@ const whatsapp_1 = require("./routes/whatsapp");
 const ai_chat_1 = require("./routes/ai-chat");
 const data_1 = require("./routes/data");
 const manager_1 = require("./whatsapp/manager");
+const reminder_notifier_1 = require("./whatsapp/reminder-notifier");
 const app = (0, express_1.default)();
 const whatsappManager = new manager_1.WhatsAppClientsManager();
+const stopReminderNotifier = (0, reminder_notifier_1.startWhatsAppReminderNotifier)(whatsappManager);
 app.use((0, cors_1.default)());
 app.use(express_1.default.json({ limit: '2mb' }));
 app.use(health_1.healthRouter);
@@ -43,6 +45,7 @@ if (env_1.env.backendUrl) {
 }
 const shutdown = async (signal) => {
     logger_1.logger.warn('Shutdown signal received — closing gracefully', { signal });
+    stopReminderNotifier();
     server.close();
     await whatsappManager.shutdownAll();
     // Brief pause so the WebSocket close frame is sent before the process exits

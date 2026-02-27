@@ -184,10 +184,12 @@ interface AddedRecurringTransactionReceipt {
 
 interface AddedReminderReceipt {
   reminderId: string;
+  reminderKind: 'general' | 'payable' | 'receivable';
   title: string;
-  amount: number;
+  amount: number | null;
   dueDate: string;
-  reminderType: 'payable' | 'receivable';
+  dueTime?: string | null;
+  reminderType?: 'payable' | 'receivable' | null;
   recordedAt: string;
 }
 
@@ -216,6 +218,13 @@ function normalizePaymentMethod(method: unknown): PaymentMethod {
     return method as PaymentMethod;
   }
   return 'pix';
+}
+
+function normalizeDueTime(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(trimmed)) return null;
+  return trimmed;
 }
 
 function formatCurrency(value: number, currency: string): string {
@@ -262,6 +271,11 @@ function frequencyLabel(freq: 'weekly' | 'monthly' | 'yearly'): string {
 
 function reminderTypeLabel(value: 'payable' | 'receivable'): string {
   return value === 'payable' ? 'A pagar' : 'A receber';
+}
+
+function reminderKindLabel(value: 'general' | 'payable' | 'receivable'): string {
+  if (value === 'general') return 'Lembrete';
+  return reminderTypeLabel(value);
 }
 
 function transactionTypeLabel(value: 'income' | 'expense'): string {
@@ -400,11 +414,18 @@ function buildAddedReminderMessage(
   aiReply: string,
   currency: string
 ): string {
+  const dueLabel = receipt.dueTime
+    ? `${formatDateBRFromYmd(receipt.dueDate)} ${receipt.dueTime}`
+    : formatDateBRFromYmd(receipt.dueDate);
+  const financialType: 'payable' | 'receivable' = receipt.reminderKind === 'payable' ? 'payable' : 'receivable';
+  const financialDetails = receipt.reminderKind === 'general'
+    ? dueLabel
+    : `${reminderTypeLabel(receipt.reminderType ?? financialType)} | ${formatCurrency(receipt.amount ?? 0, currency)} | ${dueLabel}`;
   const lines = [
     `⏰ *Lembrete criado*`,
     '',
     `*${receipt.title}*`,
-    `${reminderTypeLabel(receipt.reminderType)} | ${formatCurrency(receipt.amount, currency)} | ${formatDateBRFromYmd(receipt.dueDate)}`
+    financialDetails
   ];
 
   const cleanAiReply = aiReply.trim();
@@ -412,7 +433,16 @@ function buildAddedReminderMessage(
     lines.push('', cleanAiReply);
   }
 
-  lines.push('', 'Se quiser ajustar valor, data ou descrição do lembrete, é só me pedir.');
+  lines.push(
+    '',
+    receipt.dueTime
+      ? (receipt.reminderKind === 'general'
+        ? 'Vou te lembrar no WhatsApp nesse horario. Se quiser ajustar texto, data ou horario, e so me pedir.'
+        : 'Vou te lembrar no WhatsApp nesse horario. Se quiser ajustar valor, data ou horario, e so me pedir.')
+      : (receipt.reminderKind === 'general'
+        ? 'Se quiser ajustar texto ou data do lembrete, e so me pedir.'
+        : 'Se quiser ajustar valor, data ou descricao do lembrete, e so me pedir.')
+  );
   return lines.join('\n');
 }
 
@@ -441,8 +471,14 @@ function buildMultiActionMessage(
     }
 
     if (result.kind === 'added_reminder') {
+      const dueLabel = result.receipt.dueTime
+        ? `${formatDateBRFromYmd(result.receipt.dueDate)} ${result.receipt.dueTime}`
+        : formatDateBRFromYmd(result.receipt.dueDate);
+      const reminderSummary = result.receipt.reminderKind === 'general'
+        ? `${result.receipt.title} para ${dueLabel}`
+        : `${result.receipt.title} - ${formatCurrency(result.receipt.amount ?? 0, currency)} (${reminderKindLabel(result.receipt.reminderKind)}) para ${dueLabel}`;
       lines.push(
-        `- Lembrete: ${result.receipt.title} - ${formatCurrency(result.receipt.amount, currency)} (${reminderTypeLabel(result.receipt.reminderType)}) para ${formatDateBRFromYmd(result.receipt.dueDate)}`
+        `- Lembrete: ${reminderSummary}`
       );
       continue;
     }
@@ -481,6 +517,7 @@ export interface ProcessWhatsAppAIOptions {
   isCapabilitiesQuestion?: boolean;
   isConversationRestart?: boolean;
   shouldSendCapabilitiesSummary?: boolean;
+  sourcePhone?: string;
 }
 
 export async function processWhatsAppAIMessage(
@@ -551,7 +588,7 @@ export async function processWhatsAppAIMessage(
   };
 
   const ai = await queryGroqAssistant(sanitizedMessages, context);
-  const actionResults = await executeActions(uid, ai.actionObjects, categories);
+  const actionResults = await executeActions(uid, ai.actionObjects, categories, options);
   const actionableResults = actionResults.filter((result) => result.kind !== 'none');
 
   if (actionableResults.length === 0) {
@@ -599,7 +636,8 @@ export async function processWhatsAppAIMessage(
 async function executeActions(
   uid: string,
   actions: AIAction[],
-  categories: UserCategory[]
+  categories: UserCategory[],
+  options: ProcessWhatsAppAIOptions
 ): Promise<ActionExecutionResult[]> {
   const safeActions = Array.isArray(actions) && actions.length > 0
     ? actions.slice(0, MAX_ACTIONS_PER_MESSAGE)
@@ -607,7 +645,7 @@ async function executeActions(
 
   const results: ActionExecutionResult[] = [];
   for (const action of safeActions) {
-    const result = await executeAction(uid, action, categories);
+    const result = await executeAction(uid, action, categories, options);
     results.push(result);
   }
   return results;
@@ -616,7 +654,8 @@ async function executeActions(
 async function executeAction(
   uid: string,
   action: AIAction,
-  categories: UserCategory[]
+  categories: UserCategory[],
+  options: ProcessWhatsAppAIOptions
 ): Promise<ActionExecutionResult> {
   try {
     if (action.action === 'none') {
@@ -794,16 +833,22 @@ async function executeAction(
     }
 
     if (action.action === 'add_reminder') {
-      if (!Number.isFinite(action.amount) || action.amount <= 0) {
+      const reminderKind = action.reminderKind ?? action.reminderType ?? 'general';
+      const isFinancial = reminderKind === 'payable' || reminderKind === 'receivable';
+      const normalizedAmount = typeof action.amount === 'number' ? Number(action.amount) : Number.NaN;
+      if (isFinancial && (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0)) {
         return { kind: 'none' };
       }
 
       const payload: CreateReminderInput = {
+        reminderKind,
         title: (action.title || 'Lembrete via WhatsApp').toString().slice(0, 120),
-        amount: Number(action.amount),
+        amount: isFinancial ? normalizedAmount : null,
         dueDate: normalizeDate(action.dueDate),
-        type: action.reminderType,
-        status: 'pending'
+        dueTime: normalizeDueTime(action.dueTime),
+        type: isFinancial ? reminderKind : null,
+        status: 'pending',
+        notifyPhone: options.sourcePhone ?? null
       };
 
       const reminderId = await addUserReminder(uid, payload);
@@ -812,10 +857,12 @@ async function executeAction(
         kind: 'added_reminder',
         receipt: {
           reminderId,
+          reminderKind,
           title: payload.title,
-          amount: payload.amount,
+          amount: payload.amount ?? null,
           dueDate: payload.dueDate,
-          reminderType: payload.type,
+          dueTime: payload.dueTime ?? null,
+          reminderType: payload.type ?? null,
           recordedAt: new Date().toISOString()
         }
       };

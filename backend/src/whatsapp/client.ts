@@ -922,7 +922,8 @@ export class WhatsAppClient {
       isGreeting,
       isCapabilitiesQuestion,
       isConversationRestart,
-      shouldSendCapabilitiesSummary
+      shouldSendCapabilitiesSummary,
+      sourcePhone: remotePhone
     });
     logger.info('MSG_PIPELINE_AI_DONE: AI response received', {
       uid: ownerUid,

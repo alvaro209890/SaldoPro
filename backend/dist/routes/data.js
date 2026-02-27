@@ -203,26 +203,53 @@ function createDataRouter() {
     router.post('/reminders', async (req, res) => {
         const uid = getUid(req);
         const body = (req.body ?? {});
+        const reminderKind = body.reminderKind === 'general' || body.reminderKind === 'payable' || body.reminderKind === 'receivable'
+            ? body.reminderKind
+            : null;
         const title = asString(body.title);
-        const amount = typeof body.amount === 'number' ? body.amount : Number.NaN;
+        const amount = typeof body.amount === 'number' ? body.amount : null;
         const dueDate = asString(body.dueDate);
-        const type = body.type === 'payable' || body.type === 'receivable' ? body.type : null;
+        const dueTime = body.dueTime === null ? null : asString(body.dueTime);
+        const typeFromBody = body.type === 'payable' || body.type === 'receivable' ? body.type : null;
         const status = body.status === 'pending' || body.status === 'paid' ? body.status : undefined;
-        if (!title || !Number.isFinite(amount) || amount <= 0 || !dueDate || !type) {
+        const finalKind = reminderKind ?? typeFromBody ?? 'general';
+        const finalType = finalKind === 'general' ? null : finalKind;
+        if (!title || !dueDate) {
             res.status(400).json({ error: 'Campos invalidos para lembrete.' });
             return;
         }
-        const id = await (0, firestore_1.addUserReminder)(uid, { title, amount, dueDate, type, ...(status ? { status } : {}) });
+        if (finalKind !== 'general' && (!Number.isFinite(amount) || (amount ?? 0) <= 0)) {
+            res.status(400).json({ error: 'Campos invalidos para lembrete.' });
+            return;
+        }
+        const id = await (0, firestore_1.addUserReminder)(uid, {
+            reminderKind: finalKind,
+            title,
+            amount: finalKind === 'general' ? null : amount,
+            dueDate,
+            ...(dueTime !== null ? { dueTime: dueTime || null } : { dueTime: null }),
+            type: finalType,
+            ...(status ? { status } : {})
+        });
         res.json({ id });
     });
     router.patch('/reminders/:id', async (req, res) => {
         const uid = getUid(req);
         const body = (req.body ?? {});
+        const reminderKind = body.reminderKind === 'general' || body.reminderKind === 'payable' || body.reminderKind === 'receivable'
+            ? body.reminderKind
+            : undefined;
         await (0, firestore_1.updateUserReminder)(uid, req.params.id, {
+            ...(reminderKind ? { reminderKind } : {}),
             ...(typeof body.title === 'string' ? { title: body.title } : {}),
-            ...(typeof body.amount === 'number' ? { amount: body.amount } : {}),
+            ...(typeof body.amount === 'number' || body.amount === null ? { amount: body.amount } : {}),
             ...(typeof body.dueDate === 'string' ? { dueDate: body.dueDate } : {}),
-            ...(body.type === 'payable' || body.type === 'receivable' ? { type: body.type } : {}),
+            ...('dueTime' in body && (typeof body.dueTime === 'string' || body.dueTime === null)
+                ? { dueTime: body.dueTime }
+                : {}),
+            ...(body.type === 'payable' || body.type === 'receivable' || body.type === null
+                ? { type: body.type }
+                : {}),
             ...(body.status === 'pending' || body.status === 'paid' ? { status: body.status } : {})
         });
         res.json({ ok: true });

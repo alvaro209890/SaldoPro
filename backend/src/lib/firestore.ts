@@ -51,6 +51,38 @@ function monthKeyFromDate(date: string): string {
   return date.slice(0, 7);
 }
 
+function normalizeDueTime(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(trimmed);
+  if (!match) return null;
+  return `${match[1]}:${match[2]}`;
+}
+
+function reminderDueAtFromDateAndTime(dueDate: string, dueTime: string | null): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return null;
+  const normalizedTime = normalizeDueTime(dueTime);
+  if (!normalizedTime) return null;
+
+  // Interpreta horários dos lembretes em BRT (UTC-03:00).
+  const parsed = new Date(`${dueDate}T${normalizedTime}:00-03:00`);
+  if (!Number.isFinite(parsed.getTime())) return null;
+  return parsed.toISOString();
+}
+
+function normalizeReminderKind(
+  reminderKind: unknown,
+  reminderType: unknown
+): 'general' | 'payable' | 'receivable' {
+  if (reminderKind === 'general' || reminderKind === 'payable' || reminderKind === 'receivable') {
+    return reminderKind;
+  }
+  if (reminderType === 'payable' || reminderType === 'receivable') {
+    return reminderType;
+  }
+  return 'general';
+}
+
 interface DbTransactionRow {
   id: string;
   type: 'income' | 'expense';
@@ -83,9 +115,14 @@ interface DbRecurringRow {
 interface DbReminderRow {
   id: string;
   title: string;
-  amount: number | string;
+  amount: number | string | null;
   due_date: string;
-  type: 'payable' | 'receivable';
+  due_time: string | null;
+  due_at: string | null;
+  notified_at: string | null;
+  notify_phone: string | null;
+  reminder_kind: 'general' | 'payable' | 'receivable';
+  type: 'payable' | 'receivable' | null;
   status: 'pending' | 'paid';
   created_at: string;
   updated_at: string;
@@ -188,11 +225,14 @@ export interface CreateTransactionInput {
 }
 
 export interface CreateReminderInput {
+  reminderKind?: 'general' | 'payable' | 'receivable';
   title: string;
-  amount: number;
+  amount?: number | null;
   dueDate: string;
-  type: 'payable' | 'receivable';
+  dueTime?: string | null;
+  type?: 'payable' | 'receivable' | null;
   status?: 'pending' | 'paid';
+  notifyPhone?: string | null;
 }
 
 export interface UserSettingsBackend {
@@ -229,10 +269,14 @@ export interface UserChatMessage {
 
 export interface UserReminder {
   id: string;
+  reminderKind: 'general' | 'payable' | 'receivable';
   title: string;
-  amount: number;
+  amount: number | null;
   dueDate: string;
-  type: 'payable' | 'receivable';
+  dueTime?: string | null;
+  dueAt?: string | null;
+  notifiedAt?: string | null;
+  type?: 'payable' | 'receivable' | null;
   status: 'pending' | 'paid';
   createdAt: string;
   updatedAt: string;
@@ -713,9 +757,13 @@ export async function restoreUserTransaction(
 function mapReminder(row: DbReminderRow): UserReminder {
   return {
     id: row.id,
+    reminderKind: row.reminder_kind,
     title: row.title,
-    amount: toNumber(row.amount),
+    amount: row.amount == null ? null : toNumber(row.amount),
     dueDate: row.due_date,
+    dueTime: row.due_time,
+    dueAt: row.due_at,
+    notifiedAt: row.notified_at,
     type: row.type,
     status: row.status,
     createdAt: row.created_at,
@@ -725,14 +773,31 @@ function mapReminder(row: DbReminderRow): UserReminder {
 
 export async function addUserReminder(uid: string, input: CreateReminderInput): Promise<string> {
   const now = new Date().toISOString();
+  const reminderKind = normalizeReminderKind(input.reminderKind, input.type);
+  const financialType = reminderKind === 'general' ? null : reminderKind;
+  const rawAmount = input.amount;
+  const amount = reminderKind === 'general'
+    ? null
+    : (typeof rawAmount === 'number' && Number.isFinite(rawAmount) && rawAmount > 0 ? rawAmount : null);
+  if (reminderKind !== 'general' && (amount == null || financialType == null)) {
+    throw new Error('addUserReminder: financial reminder requires amount and type');
+  }
+
+  const normalizedDueTime = normalizeDueTime(input.dueTime ?? null);
+  const dueAt = reminderDueAtFromDateAndTime(input.dueDate, normalizedDueTime);
+  const normalizedNotifyPhone = input.notifyPhone ? normalizePhoneNumber(input.notifyPhone) : '';
   const { data, error } = await db
     .from('app_reminders')
     .insert({
       uid,
+      reminder_kind: reminderKind,
       title: input.title,
-      amount: input.amount,
+      amount,
       due_date: input.dueDate,
-      type: input.type,
+      due_time: normalizedDueTime,
+      due_at: dueAt,
+      notify_phone: normalizedNotifyPhone.length >= 10 ? normalizedNotifyPhone : null,
+      type: financialType,
       status: input.status ?? 'pending',
       created_at: now,
       updated_at: now
@@ -747,9 +812,10 @@ export async function addUserReminder(uid: string, input: CreateReminderInput): 
 export async function getUserReminders(uid: string): Promise<UserReminder[]> {
   const { data, error } = await db
     .from('app_reminders')
-    .select('id, title, amount, due_date, type, status, created_at, updated_at')
+    .select('id, reminder_kind, title, amount, due_date, due_time, due_at, notified_at, notify_phone, type, status, created_at, updated_at')
     .eq('uid', uid)
-    .order('due_date', { ascending: true });
+    .order('due_date', { ascending: true })
+    .order('due_time', { ascending: true });
   assertNoError(error, 'getUserReminders');
   return ((data ?? []) as DbReminderRow[]).map(mapReminder);
 }
@@ -759,12 +825,62 @@ export async function updateUserReminder(
   reminderId: string,
   changes: Partial<Omit<UserReminder, 'id' | 'createdAt'>>
 ): Promise<void> {
+  const { data: currentData, error: currentError } = await db
+    .from('app_reminders')
+    .select('reminder_kind, amount, due_date, due_time, type')
+    .eq('uid', uid)
+    .eq('id', reminderId)
+    .maybeSingle<{
+      reminder_kind: 'general' | 'payable' | 'receivable';
+      amount: number | string | null;
+      due_date: string;
+      due_time: string | null;
+      type: 'payable' | 'receivable' | null;
+    }>();
+  assertNoError(currentError, 'updateUserReminder.loadCurrent');
+  if (!currentData) return;
+
+  const nextKind = 'reminderKind' in changes
+    ? normalizeReminderKind(changes.reminderKind, changes.type)
+    : currentData.reminder_kind;
+
+  const nextDueDate = typeof changes.dueDate === 'string'
+    ? changes.dueDate
+    : currentData.due_date;
+  const nextDueTime = 'dueTime' in changes
+    ? normalizeDueTime(changes.dueTime ?? null)
+    : currentData.due_time;
+
+  const nextAmount: number | null = nextKind === 'general'
+    ? null
+    : (typeof changes.amount === 'number'
+      ? (Number.isFinite(changes.amount) && changes.amount > 0 ? changes.amount : null)
+      : (currentData.amount == null ? null : toNumber(currentData.amount)));
+  const nextType: 'payable' | 'receivable' | null = nextKind === 'general'
+    ? null
+    : nextKind;
+  if (nextKind !== 'general' && (nextAmount == null || nextType == null)) {
+    throw new Error('updateUserReminder: financial reminder requires amount and type');
+  }
+
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (typeof changes.title === 'string') updates.title = changes.title;
-  if (typeof changes.amount === 'number') updates.amount = changes.amount;
+  updates.reminder_kind = nextKind;
+  updates.amount = nextAmount;
+  updates.type = nextType;
   if (typeof changes.dueDate === 'string') updates.due_date = changes.dueDate;
-  if (typeof changes.type === 'string') updates.type = changes.type;
-  if (typeof changes.status === 'string') updates.status = changes.status;
+  if ('dueTime' in changes) updates.due_time = nextDueTime;
+  if (typeof changes.status === 'string') {
+    updates.status = changes.status;
+    if (changes.status === 'pending') {
+      updates.notified_at = null;
+    }
+  }
+
+  if ('dueDate' in changes || 'dueTime' in changes) {
+    updates.due_at = reminderDueAtFromDateAndTime(nextDueDate, nextDueTime);
+    updates.notified_at = null;
+  }
 
   const { error } = await db
     .from('app_reminders')
@@ -781,6 +897,88 @@ export async function deleteUserReminder(uid: string, reminderId: string): Promi
     .eq('uid', uid)
     .eq('id', reminderId);
   assertNoError(error, 'deleteUserReminder');
+}
+
+export interface DueWhatsAppReminder {
+  id: string;
+  uid: string;
+  reminderKind: 'general' | 'payable' | 'receivable';
+  title: string;
+  amount: number | null;
+  dueDate: string;
+  dueTime: string;
+  type: 'payable' | 'receivable' | null;
+  notifyPhone: string;
+}
+
+interface DbDueWhatsAppReminderRow {
+  id: string;
+  uid: string;
+  reminder_kind: 'general' | 'payable' | 'receivable';
+  title: string;
+  amount: number | string | null;
+  due_date: string;
+  due_time: string | null;
+  type: 'payable' | 'receivable' | null;
+  notify_phone: string | null;
+}
+
+export async function getDueWhatsAppReminders(
+  nowIso: string,
+  limitCount: number
+): Promise<DueWhatsAppReminder[]> {
+  const safeLimit = Math.max(1, Math.min(limitCount, 200));
+  const { data, error } = await db
+    .from('app_reminders')
+    .select('id, uid, reminder_kind, title, amount, due_date, due_time, type, notify_phone')
+    .eq('status', 'pending')
+    .is('notified_at', null)
+    .not('due_at', 'is', null)
+    .not('notify_phone', 'is', null)
+    .lte('due_at', nowIso)
+    .order('due_at', { ascending: true })
+    .limit(safeLimit);
+  assertNoError(error, 'getDueWhatsAppReminders');
+
+  const rows = (data ?? []) as DbDueWhatsAppReminderRow[];
+  return rows
+    .map((row) => {
+      const dueTime = normalizeDueTime(row.due_time);
+      const notifyPhone = row.notify_phone ? normalizePhoneNumber(row.notify_phone) : '';
+      if (!dueTime || notifyPhone.length < 10) return null;
+      return {
+        id: row.id,
+        uid: row.uid,
+        reminderKind: row.reminder_kind,
+        title: row.title,
+        amount: row.amount == null ? null : toNumber(row.amount),
+        dueDate: row.due_date,
+        dueTime,
+        type: row.type,
+        notifyPhone
+      } satisfies DueWhatsAppReminder;
+    })
+    .filter((entry): entry is DueWhatsAppReminder => Boolean(entry));
+}
+
+export async function markReminderAsNotified(
+  uid: string,
+  reminderId: string,
+  notifiedAtIso: string
+): Promise<boolean> {
+  const { data, error } = await db
+    .from('app_reminders')
+    .update({
+      notified_at: notifiedAtIso,
+      updated_at: notifiedAtIso
+    })
+    .eq('uid', uid)
+    .eq('id', reminderId)
+    .is('notified_at', null)
+    .select('id')
+    .maybeSingle<{ id: string }>();
+  assertNoError(error, 'markReminderAsNotified');
+  return Boolean(data?.id);
 }
 
 export interface CreateRecurringTransactionInput {

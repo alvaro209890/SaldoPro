@@ -51,7 +51,7 @@ export function Reminders() {
                 <div>
                     <h1 className="text-2xl font-bold text-white">Lembretes</h1>
                     <p className="text-sm text-gray-400 mt-1">
-                        Acompanhe suas contas a pagar e a receber.
+                        Gerencie lembretes comuns e financeiros.
                     </p>
                 </div>
 
@@ -75,7 +75,7 @@ export function Reminders() {
                         <EmptyState
                             icon={Bell}
                             title="Nenhum lembrete"
-                            description="Você não tem nenhuma conta a pagar ou receber cadastrada."
+                            description="Voce ainda nao criou lembretes comuns ou financeiros."
                             actionLabel="Criar lembrete"
                             onAction={handleCreate}
                         />
@@ -139,3 +139,4 @@ export function Reminders() {
         </div>
     );
 }
+
