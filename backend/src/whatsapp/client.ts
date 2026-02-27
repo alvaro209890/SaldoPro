@@ -764,13 +764,13 @@ export class WhatsAppClient {
     this.state = 'connecting';
     this.connected = false;
 
-    const qrPageUrl = env.backendUrl
-      ? `${env.backendUrl}/api/whatsapp/qr-page?token=${env.whatsappApiToken}`
-      : `/api/whatsapp/qr-page?token=${env.whatsappApiToken}`;
+    const qrBaseUrl = env.backendUrl
+      ? `${env.backendUrl}/api/whatsapp/qr-page`
+      : '/api/whatsapp/qr-page';
 
     logger.info('==================================================');
-    logger.info('  NOVO QR CODE DISPONIVEL â€” abra no navegador:');
-    logger.info(`  ${qrPageUrl}`);
+    logger.info('  NOVO QR CODE DISPONIVEL — abra no navegador:');
+    logger.info(`  ${qrBaseUrl}?token=<WHATSAPP_API_TOKEN>`);
     logger.info('==================================================');
 
     // ASCII art apenas para referÃªncia em ambientes de terminal local
@@ -1022,11 +1022,6 @@ export class WhatsAppClient {
     const timestamps = this.aiCallTimestamps.get(uid) ?? [];
     timestamps.push(Date.now());
     this.aiCallTimestamps.set(uid, timestamps);
-  }
-
-  private async handleUnlinkedMessage(remotePhone: string): Promise<void> {
-    const normalizedPhone = normalizePhoneNumber(remotePhone);
-    logger.info('Ignoring WhatsApp message from non-authorized number', { from: normalizedPhone });
   }
 
   private async extractInboundImageDataUrl(message: proto.IWebMessageInfo): Promise<string | null> {

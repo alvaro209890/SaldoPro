@@ -378,15 +378,9 @@ export async function resolveUidFromPhone(phone: string): Promise<string | null>
     const result = await fallbackResolveUidFromPhone(variants);
 
     if (!result) {
-      // Log all registered numbers for debugging
       const profiles = await scanAllProfileSettings();
-      const allNumbers = profiles.flatMap((p) =>
-        normalizeAllowedNumbers(p.data.whatsappAllowedNumbers)
-      );
       logger.info('MSG_RESOLVE_DEBUG: phone not found in any account', {
-        incomingPhone: normalizedPhone,
-        variantsTried: variants,
-        registeredNumbers: allNumbers.slice(0, 20),
+        variantCount: variants.length,
         totalUsers: profiles.length
       });
     }

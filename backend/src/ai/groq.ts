@@ -357,8 +357,7 @@ const GROQ_MODEL_CHAIN = [
   { id: 'llama-3.3-70b-versatile', vision: false },
   { id: 'meta-llama/llama-4-scout-17b-16e-instruct', vision: true },
   { id: 'qwen/qwen3-32b', vision: false },
-  { id: 'moonshotai/kimi-k2-instruct-0905', vision: false },
-  { id: 'openai/gpt-oss-20b', vision: false }
+  { id: 'moonshotai/kimi-k2-instruct-0905', vision: false }
 ];
 
 /**
@@ -618,10 +617,25 @@ async function queryGeminiAssistant(
     }
 
     if (msg.imageDataUrl) {
-      // Extract base64 and mime type from data URL
-      const match = msg.imageDataUrl.match(/^data:(.+?);base64,(.+)$/);
-      if (match) {
-        parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+      const dataUrlMatch = msg.imageDataUrl.match(/^data:(.+?);base64,(.+)$/);
+      if (dataUrlMatch) {
+        // Inline base64 data URL
+        parts.push({ inlineData: { mimeType: dataUrlMatch[1], data: dataUrlMatch[2] } });
+      } else if (msg.imageDataUrl.startsWith('http://') || msg.imageDataUrl.startsWith('https://')) {
+        // Remote URL (e.g. Cloudinary) — fetch and convert to inline base64
+        try {
+          const imgRes = await fetch(msg.imageDataUrl);
+          if (imgRes.ok) {
+            const mimeType = imgRes.headers.get('content-type') || 'image/jpeg';
+            const arrayBuf = await imgRes.arrayBuffer();
+            const data = Buffer.from(arrayBuf).toString('base64');
+            parts.push({ inlineData: { mimeType, data } });
+          }
+        } catch {
+          logger.warn('Gemini: failed to fetch remote image URL, skipping image', {
+            url: msg.imageDataUrl.slice(0, 80)
+          });
+        }
       }
     }
 
