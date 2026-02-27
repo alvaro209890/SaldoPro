@@ -241,6 +241,8 @@ class WhatsAppClient {
             auth: state,
             version,
             printQRInTerminal: false,
+            // Ignore status broadcasts at socket level to reduce noisy decrypt failures.
+            shouldIgnoreJid: (jid) => (0, events_1.isStatusJid)(jid),
             browser: ['SaldoPro', 'Render', '1.0.0']
         });
         this.socket = socket;
@@ -337,8 +339,11 @@ class WhatsAppClient {
             catch (error) {
                 const errorMsg = error instanceof Error ? error.message : '';
                 if (errorMsg.includes('Bad MAC')) {
-                    logger_1.logger.error('Bad MAC decryption error detected, triggering session recovery', error);
-                    void this.recoverFromInvalidSession();
+                    // Bad MAC is often transient/noisy (e.g. status updates), do not nuke auth session.
+                    logger_1.logger.warn('Bad MAC decryption error detected; ignoring message without session reset', {
+                        slotId: this.slotId,
+                        error: error instanceof Error ? error.message : 'unknown'
+                    });
                     return;
                 }
                 logger_1.logger.error('Failed processing inbound message', error);
