@@ -48,7 +48,7 @@ services:
       - key: GROQ_MAX_RETRIES
         value: 2
       - key: SUPABASE_URL
-        sync: false
+        value: https://xwngpybelylzpzefekiw.supabase.co
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
       - key: SUPABASE_SECRET_KEY

@@ -103,6 +103,10 @@ const BAD_MAC_HARD_RESET_AFTER = 2;
 /** How long to keep unresolvable-LID messages buffered before discarding. */
 const LID_BUFFER_TTL_MS = 30_000;
 const LID_BUFFER_MAX_PER_JID = 5;
+/** Debounce for bursts of creds.update events. */
+const AUTH_SYNC_DEBOUNCE_MS = 1200;
+/** Minimum interval between persisted auth snapshots to reduce write volume. */
+const AUTH_SYNC_MIN_INTERVAL_MS = 3 * 60 * 1000;
 class WhatsAppClient {
     slotId;
     authDir;
@@ -127,7 +131,9 @@ class WhatsAppClient {
     authSyncTimer = null;
     authSyncInFlight = false;
     authSyncQueued = false;
+    authSyncQueuedForce = false;
     lastAuthSnapshotHash = null;
+    lastAuthSyncAt = 0;
     recoveringInvalidSession = false;
     aiCallTimestamps = new Map();
     softReconnectCount = 0;
@@ -161,7 +167,7 @@ class WhatsAppClient {
         this.clearReconnectTimer();
         this.clearAuthSyncTimer();
         this.authSyncQueued = false;
-        await this.syncAuthStateNow();
+        await this.syncAuthStateNow(true);
         if (this.socket) {
             try {
                 this.socket.ev.removeAllListeners('connection.update');
@@ -1064,16 +1070,24 @@ class WhatsAppClient {
         clearTimeout(this.authSyncTimer);
         this.authSyncTimer = null;
     }
-    scheduleAuthStateSync() {
+    scheduleAuthStateSync(force = false) {
         this.clearAuthSyncTimer();
+        const cooldownRemaining = Math.max(0, this.lastAuthSyncAt + AUTH_SYNC_MIN_INTERVAL_MS - Date.now());
+        const waitMs = force ? 0 : Math.max(AUTH_SYNC_DEBOUNCE_MS, cooldownRemaining);
         this.authSyncTimer = setTimeout(() => {
             this.authSyncTimer = null;
-            void this.syncAuthStateNow();
-        }, 1200);
+            void this.syncAuthStateNow(force);
+        }, waitMs);
     }
-    async syncAuthStateNow() {
+    async syncAuthStateNow(force = false) {
         if (this.authSyncInFlight) {
             this.authSyncQueued = true;
+            if (force)
+                this.authSyncQueuedForce = true;
+            return;
+        }
+        if (!force && Date.now() - this.lastAuthSyncAt < AUTH_SYNC_MIN_INTERVAL_MS) {
+            this.scheduleAuthStateSync(false);
             return;
         }
         this.authSyncInFlight = true;
@@ -1098,6 +1112,7 @@ class WhatsAppClient {
             }
             await (0, firestore_1.saveWhatsAppAuthSnapshot)(this.slotId, snapshotFiles);
             this.lastAuthSnapshotHash = hash;
+            this.lastAuthSyncAt = Date.now();
             logger_1.logger.info('WhatsApp auth snapshot synced to Firestore', {
                 slotId: this.slotId,
                 fileCount: snapshotFiles.length
@@ -1109,8 +1124,10 @@ class WhatsAppClient {
         finally {
             this.authSyncInFlight = false;
             if (this.authSyncQueued) {
+                const queuedForce = this.authSyncQueuedForce;
                 this.authSyncQueued = false;
-                this.scheduleAuthStateSync();
+                this.authSyncQueuedForce = false;
+                this.scheduleAuthStateSync(queuedForce);
             }
         }
     }

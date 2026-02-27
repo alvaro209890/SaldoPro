@@ -4,8 +4,8 @@ exports.createQrPageRouter = createQrPageRouter;
 const express_1 = require("express");
 const manager_1 = require("../whatsapp/manager");
 const whatsapp_page_1 = require("./whatsapp-page");
-function slotLabel(slotId) {
-    return slotId === 'wa1' ? 'WhatsApp' : 'WhatsApp 2';
+function slotLabel(_slotId) {
+    return 'WhatsApp';
 }
 function createQrPageRouter(manager) {
     const router = (0, express_1.Router)();

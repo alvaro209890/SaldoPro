@@ -7,14 +7,13 @@ Este projeto foi preparado para manter o **Firebase Auth** e migrar somente o ba
 Frontend (`.env` na raiz):
 
 ```bash
-VITE_SUPABASE_URL=...
-VITE_SUPABASE_ANON_KEY=...
+VITE_BACKEND_URL=...
 ```
 
 Backend (`backend/.env`):
 
 ```bash
-SUPABASE_URL=...
+SUPABASE_URL=https://xwngpybelylzpzefekiw.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=...
 ```
 

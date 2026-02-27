@@ -1,6 +1,6 @@
 export type MessageDirection = 'inbound' | 'outbound' | 'auto_reply';
 export type MessageStatus = 'received' | 'sent' | 'failed';
-export type WhatsAppSlotId = 'wa1' | 'wa2';
+export type WhatsAppSlotId = 'wa1';
 
 export interface WhatsAppMessageRecord {
   clientId: WhatsAppSlotId;

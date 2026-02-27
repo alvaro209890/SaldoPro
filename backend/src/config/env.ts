@@ -61,7 +61,6 @@ export const env = {
     'Recebemos sua mensagem. Em breve retornamos.',
   whatsappAuthDir: whatsappAuthDirBase,
   whatsappAuthDirWa1: process.env.WHATSAPP_AUTH_DIR_WA1?.trim() || `${whatsappAuthDirBase}_wa1`,
-  whatsappAuthDirWa2: process.env.WHATSAPP_AUTH_DIR_WA2?.trim() || `${whatsappAuthDirBase}_wa2`,
   supabaseUrl: getRequired('SUPABASE_URL'),
   supabaseServiceRoleKey: getRequiredAny('SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_SECRET_KEY'),
   firebaseProjectId: getRequired('FIREBASE_PROJECT_ID'),

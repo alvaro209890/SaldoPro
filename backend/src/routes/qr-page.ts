@@ -2,8 +2,8 @@ import { Router } from 'express';
 import { WHATSAPP_SLOT_IDS, type WhatsAppClientsManager } from '../whatsapp/manager';
 import { renderWhatsAppPage, type WhatsAppSlotPageData } from './whatsapp-page';
 
-function slotLabel(slotId: 'wa1' | 'wa2'): string {
-  return slotId === 'wa1' ? 'WhatsApp' : 'WhatsApp 2';
+function slotLabel(_slotId: 'wa1'): string {
+  return 'WhatsApp';
 }
 
 export function createQrPageRouter(manager: WhatsAppClientsManager): Router {

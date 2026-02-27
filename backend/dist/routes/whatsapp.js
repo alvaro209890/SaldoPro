@@ -10,7 +10,7 @@ const events_1 = require("../whatsapp/events");
 const manager_1 = require("../whatsapp/manager");
 const whatsapp_page_1 = require("./whatsapp-page");
 function slotLabel(slotId) {
-    return slotId === 'wa1' ? 'WhatsApp' : 'WhatsApp 2';
+    return slotId === 'wa1' ? 'WhatsApp' : 'WhatsApp';
 }
 async function buildSlotsPageData(manager) {
     return Promise.all(manager_1.WHATSAPP_SLOT_IDS.map(async (slotId) => {
@@ -72,7 +72,7 @@ function createWhatsAppRouter(manager) {
                 return;
             }
             if (clientId && !(0, manager_1.isWhatsAppSlotId)(clientId)) {
-                res.status(400).json({ error: '`clientId` must be `wa1` or `wa2`' });
+                res.status(400).json({ error: '`clientId` must be `wa1` when provided' });
                 return;
             }
             const resolvedClientId = clientId && (0, manager_1.isWhatsAppSlotId)(clientId) ? clientId : undefined;
@@ -108,7 +108,7 @@ function createWhatsAppRouter(manager) {
             const body = (req.body ?? {});
             const slotValue = typeof body.slotId === 'string' ? body.slotId.trim() : '';
             if (slotValue && !(0, manager_1.isWhatsAppSlotId)(slotValue)) {
-                res.status(400).json({ error: '`slotId` must be `wa1` or `wa2` when provided' });
+                res.status(400).json({ error: '`slotId` must be `wa1` when provided' });
                 return;
             }
             const resolvedSlotId = slotValue && (0, manager_1.isWhatsAppSlotId)(slotValue) ? slotValue : undefined;

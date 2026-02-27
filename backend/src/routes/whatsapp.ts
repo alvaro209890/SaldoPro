@@ -19,7 +19,7 @@ interface ResetSessionBody {
 }
 
 function slotLabel(slotId: WhatsAppSlotId): string {
-  return slotId === 'wa1' ? 'WhatsApp' : 'WhatsApp 2';
+  return slotId === 'wa1' ? 'WhatsApp' : 'WhatsApp';
 }
 
 async function buildSlotsPageData(manager: WhatsAppClientsManager): Promise<WhatsAppSlotPageData[]> {
@@ -94,7 +94,7 @@ export function createWhatsAppRouter(manager: WhatsAppClientsManager): Router {
       }
 
       if (clientId && !isWhatsAppSlotId(clientId)) {
-        res.status(400).json({ error: '`clientId` must be `wa1` or `wa2`' });
+        res.status(400).json({ error: '`clientId` must be `wa1` when provided' });
         return;
       }
       const resolvedClientId: WhatsAppSlotId | undefined =
@@ -136,7 +136,7 @@ export function createWhatsAppRouter(manager: WhatsAppClientsManager): Router {
       const slotValue = typeof body.slotId === 'string' ? body.slotId.trim() : '';
 
       if (slotValue && !isWhatsAppSlotId(slotValue)) {
-        res.status(400).json({ error: '`slotId` must be `wa1` or `wa2` when provided' });
+        res.status(400).json({ error: '`slotId` must be `wa1` when provided' });
         return;
       }
       const resolvedSlotId: WhatsAppSlotId | undefined =

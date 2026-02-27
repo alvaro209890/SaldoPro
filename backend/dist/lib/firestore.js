@@ -55,6 +55,7 @@ const BINDINGS_COLLECTION_NAME = 'whatsapp_bindings';
 const AUTH_STATE_COLLECTION_NAME = 'whatsapp_runtime';
 const AUTH_STATE_DOC_ID_LEGACY = 'authState';
 const AUTH_STATE_FILES_SUBCOLLECTION = 'whatsapp_runtime_files';
+const GLOBAL_CATEGORIES_UID = '__global__';
 const PROFILE_SCAN_CACHE_TTL_MS = 15_000;
 const BINDING_CACHE_TTL_MS = 5 * 60 * 1000;
 const LAST_ACTIVITY_CACHE_TTL_MS = 3 * 60 * 1000;
@@ -108,6 +109,10 @@ const DEFAULT_INCOME_CATEGORIES = [
     { name: 'Investimentos', type: 'income', color: '#8b5cf6', icon: 'TrendingUp' },
     { name: 'Outros', type: 'income', color: '#6b7280', icon: 'MoreHorizontal' }
 ];
+const DEFAULT_GLOBAL_CATEGORIES = [
+    ...DEFAULT_EXPENSE_CATEGORIES,
+    ...DEFAULT_INCOME_CATEGORIES
+];
 async function saveWhatsAppMessage(record) {
     const docId = getDocId(record);
     const { error } = await supabase_1.supabaseAdmin.from(COLLECTION_NAME).upsert({
@@ -146,6 +151,31 @@ async function saveMessageSafe(record) {
     catch (error) {
         logger_1.logger.error('Failed to save WhatsApp message in Supabase', error);
     }
+}
+async function ensureGlobalCategoriesSeed() {
+    const { count, error: countError } = await supabase_1.supabaseAdmin
+        .from('app_categories')
+        .select('*', { count: 'exact', head: true })
+        .eq('uid', GLOBAL_CATEGORIES_UID);
+    assertNoError(countError, 'ensureGlobalCategoriesSeed.count');
+    if ((count ?? 0) > 0)
+        return;
+    const now = new Date().toISOString();
+    const rows = DEFAULT_GLOBAL_CATEGORIES.map((item) => ({
+        uid: GLOBAL_CATEGORIES_UID,
+        name: item.name,
+        type: item.type,
+        color: item.color,
+        icon: item.icon,
+        created_at: now
+    }));
+    const { error: insertError } = await supabase_1.supabaseAdmin.from('app_categories').insert(rows);
+    if (!insertError)
+        return;
+    const code = insertError.code;
+    if (code === '23505')
+        return;
+    throw new Error(`ensureGlobalCategoriesSeed.insert: ${insertError.message}`);
 }
 async function bootstrapUserData(uid, input) {
     const now = new Date().toISOString();
@@ -205,23 +235,7 @@ async function bootstrapUserData(uid, input) {
             assertNoError(error, 'bootstrapUserData.settingsUpdatePhone');
         }
     }
-    const { count, error: categoryCountError } = await supabase_1.supabaseAdmin
-        .from('app_categories')
-        .select('*', { count: 'exact', head: true })
-        .eq('uid', uid);
-    assertNoError(categoryCountError, 'bootstrapUserData.categoryCount');
-    if ((count ?? 0) === 0) {
-        const rows = [...DEFAULT_EXPENSE_CATEGORIES, ...DEFAULT_INCOME_CATEGORIES].map((item) => ({
-            uid,
-            name: item.name,
-            type: item.type,
-            color: item.color,
-            icon: item.icon,
-            created_at: now
-        }));
-        const { error } = await supabase_1.supabaseAdmin.from('app_categories').insert(rows);
-        assertNoError(error, 'bootstrapUserData.seedCategories');
-    }
+    await ensureGlobalCategoriesSeed();
     allowedNumbersCache.delete(uid);
     profileScanCache = null;
 }
@@ -288,13 +302,25 @@ async function getUserProfile(uid) {
     return { displayName: data?.display_name ?? '' };
 }
 async function getUserCategories(uid) {
+    await ensureGlobalCategoriesSeed();
     const { data, error } = await supabase_1.supabaseAdmin
         .from('app_categories')
-        .select('id, name, type, color, icon')
-        .eq('uid', uid)
+        .select('id, uid, name, type, color, icon')
+        .in('uid', [GLOBAL_CATEGORIES_UID, uid])
         .order('name', { ascending: true });
     assertNoError(error, 'getUserCategories');
-    return (data ?? []).map((row) => ({
+    const rows = (data ?? []);
+    const byKey = new Map();
+    for (const row of rows) {
+        const key = `${row.type}:${row.name.trim().toLowerCase()}`;
+        const current = byKey.get(key);
+        if (!current || row.uid === uid) {
+            byKey.set(key, row);
+        }
+    }
+    return [...byKey.values()]
+        .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
+        .map((row) => ({
         id: row.id,
         name: row.name,
         type: row.type,
@@ -303,11 +329,25 @@ async function getUserCategories(uid) {
     }));
 }
 async function addUserCategory(uid, input) {
+    const normalizedName = input.name.trim();
+    if (!normalizedName)
+        throw new Error('addUserCategory: nome da categoria obrigatorio');
+    const { data: existing, error: existingError } = await supabase_1.supabaseAdmin
+        .from('app_categories')
+        .select('id')
+        .in('uid', [GLOBAL_CATEGORIES_UID, uid])
+        .eq('type', input.type)
+        .ilike('name', normalizedName)
+        .limit(1);
+    assertNoError(existingError, 'addUserCategory.exists');
+    if ((existing ?? []).length > 0) {
+        throw new Error('Categoria ja existe.');
+    }
     const { data, error } = await supabase_1.supabaseAdmin
         .from('app_categories')
         .insert({
         uid,
-        name: input.name,
+        name: normalizedName,
         type: input.type,
         color: input.color,
         icon: input.icon,
@@ -321,9 +361,37 @@ async function addUserCategory(uid, input) {
     return data.id;
 }
 async function updateUserCategory(uid, categoryId, changes) {
+    const { data: current, error: currentError } = await supabase_1.supabaseAdmin
+        .from('app_categories')
+        .select('name, type')
+        .eq('uid', uid)
+        .eq('id', categoryId)
+        .maybeSingle();
+    assertNoError(currentError, 'updateUserCategory.current');
+    if (!current)
+        return;
+    const targetName = typeof changes.name === 'string' ? changes.name.trim() : current.name;
+    const targetType = typeof changes.type === 'string' ? changes.type : current.type;
+    if (!targetName) {
+        throw new Error('updateUserCategory: nome da categoria obrigatorio');
+    }
+    if (targetName.toLowerCase() !== current.name.toLowerCase() || targetType !== current.type) {
+        const { data: existing, error: existingError } = await supabase_1.supabaseAdmin
+            .from('app_categories')
+            .select('id')
+            .in('uid', [GLOBAL_CATEGORIES_UID, uid])
+            .eq('type', targetType)
+            .ilike('name', targetName)
+            .neq('id', categoryId)
+            .limit(1);
+        assertNoError(existingError, 'updateUserCategory.exists');
+        if ((existing ?? []).length > 0) {
+            throw new Error('Categoria ja existe.');
+        }
+    }
     const updates = {};
     if (typeof changes.name === 'string')
-        updates.name = changes.name;
+        updates.name = targetName;
     if (typeof changes.type === 'string')
         updates.type = changes.type;
     if (typeof changes.color === 'string')
@@ -1102,7 +1170,7 @@ async function getLastConversationActivityByPhone(uid, phone, _clientId) {
     }
 }
 function asSlotId(value) {
-    return value === 'wa1' || value === 'wa2' ? value : null;
+    return value === 'wa1' ? value : null;
 }
 async function getLastConversationClientIdByPhone(uid, phone) {
     if (!uid || uid.trim().length === 0)
