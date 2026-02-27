@@ -90,7 +90,7 @@ class WhatsAppClientsManager {
     }
     async resetSession(_slotId) {
         if (!this.hasLock || !this.clientStarted) {
-            throw new Error('WhatsApp session reset is allowed only on the active instance.');
+            await this.forceTakeoverAndStart();
         }
         await this.client.resetSession();
     }
@@ -219,6 +219,29 @@ class WhatsAppClientsManager {
         finally {
             this.lockAttemptInFlight = false;
         }
+    }
+    async forceTakeoverAndStart() {
+        if (!this.running) {
+            this.running = true;
+        }
+        const forced = await (0, whatsapp_lock_1.forceAcquireWhatsAppConnectionLock)(ACTIVE_SLOT, this.instanceId, LOCK_TTL_SECONDS);
+        if (!forced) {
+            throw new Error('Failed to force WhatsApp lock takeover.');
+        }
+        this.hasLock = true;
+        this.startLockRenewLoop();
+        logger_1.logger.warn('Forced WhatsApp lock takeover for administrative recovery', {
+            slotId: ACTIVE_SLOT,
+            instanceId: this.instanceId
+        });
+        if (this.clientStarted)
+            return;
+        await this.client.start();
+        this.clientStarted = true;
+        logger_1.logger.info('WhatsApp client started after forced lock takeover', {
+            slotId: ACTIVE_SLOT,
+            instanceId: this.instanceId
+        });
     }
 }
 exports.WhatsAppClientsManager = WhatsAppClientsManager;

@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.acquireWhatsAppConnectionLock = acquireWhatsAppConnectionLock;
 exports.releaseWhatsAppConnectionLock = releaseWhatsAppConnectionLock;
+exports.forceAcquireWhatsAppConnectionLock = forceAcquireWhatsAppConnectionLock;
 const supabase_1 = require("./supabase");
 const DEFAULT_LOCK_TTL_SECONDS = 90;
 function assertSlotId(slotId) {
@@ -35,6 +36,21 @@ async function releaseWhatsAppConnectionLock(slotId, instanceId) {
     });
     if (error) {
         throw new Error(`releaseWhatsAppConnectionLock: ${error.message}`);
+    }
+    return data === true;
+}
+async function forceAcquireWhatsAppConnectionLock(slotId, instanceId, ttlSeconds = DEFAULT_LOCK_TTL_SECONDS) {
+    assertSlotId(slotId);
+    const normalizedInstanceId = instanceId.trim();
+    if (!normalizedInstanceId)
+        throw new Error('Invalid instance id for WhatsApp lock');
+    const { data, error } = await supabase_1.supabaseAdmin.rpc('force_acquire_whatsapp_connection_lock', {
+        p_slot_id: slotId,
+        p_instance_id: normalizedInstanceId,
+        p_ttl_seconds: ttlSeconds
+    });
+    if (error) {
+        throw new Error(`forceAcquireWhatsAppConnectionLock: ${error.message}`);
     }
     return data === true;
 }

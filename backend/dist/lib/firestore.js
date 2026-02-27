@@ -285,13 +285,32 @@ async function bootstrapUserData(uid, input) {
 async function getUserSettings(uid) {
     const { data, error } = await supabase_1.supabaseAdmin
         .from('app_user_settings')
-        .select('budget, start_day, currency')
+        .select('budget, start_day, currency, whatsapp_allowed_numbers, updated_at')
         .eq('uid', uid)
         .maybeSingle();
     assertNoError(error, 'getUserSettings');
-    if (!data)
-        return { budget: 0, startDay: 1, currency: 'BRL' };
-    return { budget: toNumber(data.budget), startDay: data.start_day, currency: data.currency ?? 'BRL' };
+    if (!data) {
+        return {
+            budget: 0,
+            startDay: 1,
+            currency: 'BRL',
+            whatsappAllowedNumbers: [],
+            updatedAt: new Date().toISOString()
+        };
+    }
+    const whatsappAllowedNumbers = Array.isArray(data.whatsapp_allowed_numbers)
+        ? data.whatsapp_allowed_numbers
+            .filter((value) => typeof value === 'string')
+            .map((value) => (0, events_1.normalizePhoneNumber)(value))
+            .filter((value) => value.length >= 10)
+        : [];
+    return {
+        budget: toNumber(data.budget),
+        startDay: data.start_day,
+        currency: data.currency ?? 'BRL',
+        whatsappAllowedNumbers,
+        updatedAt: data.updated_at
+    };
 }
 async function updateUserSettings(uid, changes) {
     const now = new Date().toISOString();

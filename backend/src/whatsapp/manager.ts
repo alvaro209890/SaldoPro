@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { env } from '../config/env';
 import { logger } from '../lib/logger';
-import { acquireWhatsAppConnectionLock, releaseWhatsAppConnectionLock } from '../lib/whatsapp-lock';
+import {
+  acquireWhatsAppConnectionLock,
+  forceAcquireWhatsAppConnectionLock,
+  releaseWhatsAppConnectionLock
+} from '../lib/whatsapp-lock';
 import type { RuntimeStatus, WhatsAppSlotId } from '../types/whatsapp';
 import { WhatsAppClient } from './client';
 import { normalizePhoneNumber } from './events';
@@ -104,7 +108,7 @@ export class WhatsAppClientsManager {
 
   async resetSession(_slotId?: WhatsAppSlotId): Promise<void> {
     if (!this.hasLock || !this.clientStarted) {
-      throw new Error('WhatsApp session reset is allowed only on the active instance.');
+      await this.forceTakeoverAndStart();
     }
     await this.client.resetSession();
   }
@@ -237,5 +241,31 @@ export class WhatsAppClientsManager {
     } finally {
       this.lockAttemptInFlight = false;
     }
+  }
+
+  private async forceTakeoverAndStart(): Promise<void> {
+    if (!this.running) {
+      this.running = true;
+    }
+
+    const forced = await forceAcquireWhatsAppConnectionLock(ACTIVE_SLOT, this.instanceId, LOCK_TTL_SECONDS);
+    if (!forced) {
+      throw new Error('Failed to force WhatsApp lock takeover.');
+    }
+
+    this.hasLock = true;
+    this.startLockRenewLoop();
+    logger.warn('Forced WhatsApp lock takeover for administrative recovery', {
+      slotId: ACTIVE_SLOT,
+      instanceId: this.instanceId
+    });
+
+    if (this.clientStarted) return;
+    await this.client.start();
+    this.clientStarted = true;
+    logger.info('WhatsApp client started after forced lock takeover', {
+      slotId: ACTIVE_SLOT,
+      instanceId: this.instanceId
+    });
   }
 }

@@ -49,3 +49,25 @@ export async function releaseWhatsAppConnectionLock(
 
   return data === true;
 }
+
+export async function forceAcquireWhatsAppConnectionLock(
+  slotId: 'wa1',
+  instanceId: string,
+  ttlSeconds = DEFAULT_LOCK_TTL_SECONDS
+): Promise<boolean> {
+  assertSlotId(slotId);
+  const normalizedInstanceId = instanceId.trim();
+  if (!normalizedInstanceId) throw new Error('Invalid instance id for WhatsApp lock');
+
+  const { data, error } = await db.rpc('force_acquire_whatsapp_connection_lock', {
+    p_slot_id: slotId,
+    p_instance_id: normalizedInstanceId,
+    p_ttl_seconds: ttlSeconds
+  });
+
+  if (error) {
+    throw new Error(`forceAcquireWhatsAppConnectionLock: ${error.message}`);
+  }
+
+  return data === true;
+}

@@ -239,6 +239,8 @@ export interface UserSettingsBackend {
   budget: number;
   startDay: number;
   currency: string;
+  whatsappAllowedNumbers?: string[];
+  updatedAt?: string;
 }
 
 export interface UserProfileBackend {
@@ -442,12 +444,40 @@ export async function bootstrapUserData(uid: string, input: BootstrapUserInput):
 export async function getUserSettings(uid: string): Promise<UserSettingsBackend> {
   const { data, error } = await db
     .from('app_user_settings')
-    .select('budget, start_day, currency')
+    .select('budget, start_day, currency, whatsapp_allowed_numbers, updated_at')
     .eq('uid', uid)
-    .maybeSingle<{ budget: number | string; start_day: number; currency: string }>();
+    .maybeSingle<{
+      budget: number | string;
+      start_day: number;
+      currency: string;
+      whatsapp_allowed_numbers: unknown;
+      updated_at: string;
+    }>();
   assertNoError(error, 'getUserSettings');
-  if (!data) return { budget: 0, startDay: 1, currency: 'BRL' };
-  return { budget: toNumber(data.budget), startDay: data.start_day, currency: data.currency ?? 'BRL' };
+  if (!data) {
+    return {
+      budget: 0,
+      startDay: 1,
+      currency: 'BRL',
+      whatsappAllowedNumbers: [],
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  const whatsappAllowedNumbers = Array.isArray(data.whatsapp_allowed_numbers)
+    ? data.whatsapp_allowed_numbers
+        .filter((value): value is string => typeof value === 'string')
+        .map((value) => normalizePhoneNumber(value))
+        .filter((value) => value.length >= 10)
+    : [];
+
+  return {
+    budget: toNumber(data.budget),
+    startDay: data.start_day,
+    currency: data.currency ?? 'BRL',
+    whatsappAllowedNumbers,
+    updatedAt: data.updated_at
+  };
 }
 
 export async function updateUserSettings(
