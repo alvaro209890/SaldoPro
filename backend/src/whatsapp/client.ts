@@ -47,6 +47,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isExpectedMediaDecryptError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error ?? '').toLowerCase();
+  return message.includes('bad decrypt') || message.includes('bad mac');
+}
+
 function asDisconnectCode(error: unknown): number | null {
   const code = (error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode;
   return typeof code === 'number' ? code : null;
@@ -1756,7 +1761,15 @@ export class WhatsAppClient {
       if (errorMsg.includes('Bad MAC')) {
         await this.registerBadMac(message, errorMsg);
       }
-      logger.error('Failed to download inbound WhatsApp image', error);
+      if (isExpectedMediaDecryptError(error)) {
+        logger.warn('Skipping inbound image due to decrypt failure', {
+          slotId: this.slotId,
+          messageId: message.key?.id ?? 'unknown',
+          error: errorMsg || 'unknown'
+        });
+      } else {
+        logger.error('Failed to download inbound WhatsApp image', error);
+      }
       return null;
     }
   }
@@ -1794,7 +1807,15 @@ export class WhatsAppClient {
       if (errorMsg.includes('Bad MAC')) {
         await this.registerBadMac(message, errorMsg);
       }
-      logger.error('AUDIO_EXTRACT_ERROR: Failed to download inbound WhatsApp audio', error);
+      if (isExpectedMediaDecryptError(error)) {
+        logger.warn('AUDIO_EXTRACT_SKIP: decrypt failure on inbound audio', {
+          slotId: this.slotId,
+          messageId: message.key?.id ?? 'unknown',
+          error: errorMsg || 'unknown'
+        });
+      } else {
+        logger.error('AUDIO_EXTRACT_ERROR: Failed to download inbound WhatsApp audio', error);
+      }
       return null;
     }
   }

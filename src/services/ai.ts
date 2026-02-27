@@ -1,8 +1,6 @@
 import type { Category, Transaction, PaymentMethod } from '@/types';
 import { auth } from '@/firebase/config';
-
-// Backend URL - defaults to localhost for development
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:10000';
+import { BACKEND_URL } from '@/config/backend';
 
 export type Role = 'user' | 'assistant' | 'system';
 

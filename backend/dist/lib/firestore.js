@@ -942,6 +942,11 @@ async function saveWhatsAppAuthSnapshot(slotId, files) {
     }))
         .filter((file) => file.filename.length > 0 && file.contentBase64.length > 0);
     const docId = authStateDocId(slotId);
+    // Ensure parent row exists before touching child rows to satisfy FK.
+    const { error: ensureRootError } = await supabase_1.supabaseAdmin
+        .from(AUTH_STATE_COLLECTION_NAME)
+        .upsert({ doc_id: docId, file_count: normalized.length, updated_at: now }, { onConflict: 'doc_id' });
+    assertNoError(ensureRootError, 'saveWhatsAppAuthSnapshot.ensureRoot');
     const { data: existingRows, error: existingError } = await supabase_1.supabaseAdmin
         .from(AUTH_STATE_FILES_SUBCOLLECTION)
         .select('file_doc_id')

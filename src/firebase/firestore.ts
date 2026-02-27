@@ -1,9 +1,9 @@
 import { auth } from './config';
 import type { Transaction, Category, UserSettings, StoredChatMessage, ChatSession, Reminder, RecurringTransaction } from '@/types';
+import { BACKEND_URL } from '@/config/backend';
 
 export type Unsubscribe = () => void;
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:10000';
 const SNAPSHOT_POLL_MS = 5000;
 
 const refreshSubscribers = new Set<() => void>();
@@ -353,4 +353,3 @@ export async function deleteRecurringTransaction(_uid: string, recurringId: stri
     });
     notifyRefresh();
 }
-

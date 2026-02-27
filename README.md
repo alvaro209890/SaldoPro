@@ -19,7 +19,8 @@ Controle financeiro pessoal com React + backend Node, mantendo Firebase para aut
 2. Supabase
 - Crie um projeto no Supabase.
 - Aplique as migrations em `supabase/migrations`.
-- Configure `VITE_SUPABASE_*` no frontend e `SUPABASE_*` no backend.
+- Configure `SUPABASE_*` no backend.
+- Configure `VITE_BACKEND_URL` no frontend apontando para a URL publica do backend.
 
 ## Execucao local
 
