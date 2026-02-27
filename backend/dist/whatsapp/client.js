@@ -93,7 +93,12 @@ const MESSAGE_QUEUE_CONCURRENCY = 3;
 const COMPOSING_REFRESH_MS = 4000;
 /** If the same JID hits repeated Bad MAC in a short window, perform a soft reconnect. */
 const BAD_MAC_WINDOW_MS = 2 * 60 * 1000;
-const BAD_MAC_RECONNECT_THRESHOLD = 3;
+const BAD_MAC_RECONNECT_THRESHOLD = 1;
+/** After this many soft reconnects without success, escalate to full session reset. */
+const BAD_MAC_HARD_RESET_AFTER = 2;
+/** How long to keep unresolvable-LID messages buffered before discarding. */
+const LID_BUFFER_TTL_MS = 30_000;
+const LID_BUFFER_MAX_PER_JID = 5;
 class WhatsAppClient {
     slotId;
     authDir;
@@ -121,6 +126,10 @@ class WhatsAppClient {
     lastAuthSnapshotHash = null;
     recoveringInvalidSession = false;
     aiCallTimestamps = new Map();
+    softReconnectCount = 0;
+    connectionEpoch = 0;
+    // --- LID message buffer: store messages with unresolved LID for later replay ---
+    pendingLidMessages = new Map();
     // --- Message processing queue ---
     messageQueue = [];
     messageQueueActive = 0;
@@ -144,12 +153,24 @@ class WhatsAppClient {
     }
     async shutdown() {
         this.allowReconnect = false;
+        this.connectionEpoch++;
         this.clearReconnectTimer();
         this.clearAuthSyncTimer();
         this.authSyncQueued = false;
         await this.syncAuthStateNow();
         if (this.socket) {
-            this.socket.ws?.close();
+            try {
+                this.socket.ev.removeAllListeners('connection.update');
+                this.socket.ev.removeAllListeners('creds.update');
+                this.socket.ev.removeAllListeners('messages.upsert');
+                this.socket.ev.removeAllListeners('chats.phoneNumberShare');
+                this.socket.ev.removeAllListeners('contacts.upsert');
+                this.socket.ev.removeAllListeners('contacts.update');
+                this.socket.ws?.close();
+            }
+            catch {
+                // ignore cleanup errors
+            }
         }
         this.socket = null;
     }
@@ -207,6 +228,7 @@ class WhatsAppClient {
     async resetSession() {
         logger_1.logger.warn('Resetting WhatsApp session by API request', { slotId: this.slotId });
         this.allowReconnect = false;
+        this.connectionEpoch++;
         this.clearReconnectTimer();
         this.connected = false;
         this.state = 'connecting';
@@ -220,7 +242,18 @@ class WhatsAppClient {
             catch (error) {
                 logger_1.logger.warn('Socket logout failed during reset', error);
             }
-            this.socket.ws?.close();
+            try {
+                this.socket.ev.removeAllListeners('connection.update');
+                this.socket.ev.removeAllListeners('creds.update');
+                this.socket.ev.removeAllListeners('messages.upsert');
+                this.socket.ev.removeAllListeners('chats.phoneNumberShare');
+                this.socket.ev.removeAllListeners('contacts.upsert');
+                this.socket.ev.removeAllListeners('contacts.update');
+                this.socket.ws?.close();
+            }
+            catch {
+                // ignore cleanup errors
+            }
             this.socket = null;
         }
         this.clearAuthSyncTimer();
@@ -238,39 +271,82 @@ class WhatsAppClient {
         await this.connect();
     }
     async connect() {
+        // Clean up previous socket to prevent stale event handlers from
+        // interfering with the new connection (e.g. old socket's 'close' event
+        // overwriting state after a new socket is already created).
+        if (this.socket) {
+            try {
+                this.socket.ev.removeAllListeners('connection.update');
+                this.socket.ev.removeAllListeners('creds.update');
+                this.socket.ev.removeAllListeners('messages.upsert');
+                this.socket.ev.removeAllListeners('chats.phoneNumberShare');
+                this.socket.ev.removeAllListeners('contacts.upsert');
+                this.socket.ev.removeAllListeners('contacts.update');
+                this.socket.ws?.close();
+            }
+            catch {
+                // ignore cleanup errors
+            }
+            this.socket = null;
+        }
+        const epoch = ++this.connectionEpoch;
         this.state = 'connecting';
         this.connected = false;
         const { state, saveCreds } = await (0, baileys_1.useMultiFileAuthState)(this.authDir);
-        const { version } = await (0, baileys_1.fetchLatestBaileysVersion)();
+        let version;
+        try {
+            ({ version } = await (0, baileys_1.fetchLatestBaileysVersion)());
+        }
+        catch (error) {
+            logger_1.logger.warn('fetchLatestBaileysVersion failed, using fallback', {
+                error: error instanceof Error ? error.message : 'unknown'
+            });
+            version = [2, 3000, 1017531287];
+        }
         const socket = (0, baileys_1.default)({
             auth: state,
             version,
             printQRInTerminal: false,
             // Ignore status & groups at socket level: this bot only handles 1:1 chats.
             shouldIgnoreJid: (jid) => (0, events_1.isStatusJid)(jid) || (0, events_1.isGroupJid)(jid),
-            browser: ['SaldoPro', 'Render', '1.0.0']
+            // IMPORTANT: Each slot needs a UNIQUE browser fingerprint. If both use the same
+            // identifier, WhatsApp may treat them as duplicate linked devices from the same
+            // machine and invalidate each other's Signal sessions → Bad MAC errors.
+            browser: [`SaldoPro-${this.slotId.toUpperCase()}`, 'Render', '1.0.0']
         });
         this.socket = socket;
         socket.ev.on('creds.update', () => {
+            if (this.connectionEpoch !== epoch)
+                return;
             void saveCreds();
             this.scheduleAuthStateSync();
         });
         socket.ev.on('connection.update', (update) => {
+            if (this.connectionEpoch !== epoch)
+                return;
             void this.handleConnectionUpdate(update);
         });
         socket.ev.on('messages.upsert', (upsert) => {
+            if (this.connectionEpoch !== epoch)
+                return;
             void this.handleMessagesUpsert(upsert);
         });
         socket.ev.on('chats.phoneNumberShare', (event) => {
+            if (this.connectionEpoch !== epoch)
+                return;
             this.rememberLidMapping(event.lid, event.jid, 'phone_number_share');
         });
         socket.ev.on('contacts.upsert', (contacts) => {
+            if (this.connectionEpoch !== epoch)
+                return;
             this.absorbContactLidMappings(contacts, 'contacts_upsert');
         });
         socket.ev.on('contacts.update', (contacts) => {
+            if (this.connectionEpoch !== epoch)
+                return;
             this.absorbContactLidMappings(contacts, 'contacts_update');
         });
-        logger_1.logger.info('WhatsApp socket initialized', { slotId: this.slotId, displayName: this.displayName });
+        logger_1.logger.info('WhatsApp socket initialized', { slotId: this.slotId, displayName: this.displayName, epoch });
     }
     async handleConnectionUpdate(update) {
         const { connection, qr, lastDisconnect } = update;
@@ -288,12 +364,17 @@ class WhatsAppClient {
             this.lastDisconnectReason = null;
             this.phone = (0, events_1.jidToPhone)(this.socket?.user?.id) || null;
             this.badMacByJid.clear();
+            this.softReconnectCount = 0;
             this.clearQr();
             this.scheduleAuthStateSync();
+            // Log the bot's own LID for debugging self-chat detection
+            const socketUser = this.socket?.user;
             logger_1.logger.info('WhatsApp connection opened', {
                 slotId: this.slotId,
                 displayName: this.displayName,
-                phone: this.phone
+                phone: this.phone,
+                ownLid: socketUser?.lid ?? 'unknown',
+                ownId: socketUser?.id ?? 'unknown'
             });
             return;
         }
@@ -397,37 +478,65 @@ class WhatsAppClient {
         if (!remoteJid || (0, events_1.isStatusJid)(remoteJid) || (0, events_1.isGroupJid)(remoteJid))
             return;
         if (remoteJid.endsWith('@lid')) {
-            this.rememberInbound(messageId);
-            logger_1.logger.warn('MSG_SKIP: unresolved LID remoteJid (waiting mapping)', {
+            // Buffer the message — do NOT mark as processed so it can be replayed
+            this.bufferLidMessage(remoteJid, message);
+            logger_1.logger.warn('MSG_BUFFER: unresolved LID remoteJid, buffered for retry', {
                 slotId: this.slotId,
                 messageId,
-                remoteJid
+                remoteJid,
+                fromMe: Boolean(key.fromMe),
+                pendingCount: this.pendingLidMessages.get(remoteJid)?.length ?? 0
             });
             return;
         }
         if (!message.message && this.hasLidIdentity(key)) {
             await this.registerBadMac(message, 'empty_payload_with_lid');
+            // Try to extract any phone number info from the message metadata for LID mapping
+            this.tryExtractPhoneFromMessageMeta(message);
             this.rememberInbound(messageId);
-            logger_1.logger.warn('MSG_SKIP: missing payload with LID identity (possible decrypt failure)', {
+            logger_1.logger.warn('MSG_SKIP: missing payload with LID identity (Bad MAC decrypt failure)', {
                 slotId: this.slotId,
                 messageId,
-                remoteJid
+                remoteJid,
+                fromMe: Boolean(key.fromMe),
+                softReconnectCount: this.softReconnectCount,
+                allKeyFields: JSON.stringify(Object.keys(key))
             });
             return;
         }
-        const isSelfChat = (0, events_1.jidToPhone)(remoteJid) === this.phone;
+        // Also handle non-LID messages with empty payload (Bad MAC without LID)
+        if (!message.message) {
+            this.rememberInbound(messageId);
+            logger_1.logger.warn('MSG_SKIP: empty message payload (likely decryption failure)', {
+                slotId: this.slotId,
+                messageId,
+                remoteJid,
+                fromMe: Boolean(key.fromMe)
+            });
+            return;
+        }
+        // Self-chat detection: compare via phone number AND via the socket's own LID
+        const isSelfChatByPhone = (0, events_1.jidToPhone)(remoteJid) === this.phone;
+        const isSelfChatByLid = this.isOwnLid(key.remoteJid ?? '');
+        const isSelfChat = isSelfChatByPhone || isSelfChatByLid;
         if (key.fromMe) {
             if (!isSelfChat || this.sentByBotIds.has(messageId)) {
                 logger_1.logger.info('MSG_SKIP: fromMe message blocked', {
                     messageId,
                     reason: this.sentByBotIds.has(messageId) ? 'sent_by_bot' : 'not_self_chat',
-                    remoteJid
+                    remoteJid,
+                    isSelfChatByPhone,
+                    isSelfChatByLid,
+                    selfPhone: this.phone,
+                    remotePhone: (0, events_1.jidToPhone)(remoteJid)
                 });
                 return;
             }
             logger_1.logger.info('MSG_SELF: processing self-chat message for AI testing', {
                 messageId,
-                phone: this.phone
+                phone: this.phone,
+                isSelfChatByPhone,
+                isSelfChatByLid
             });
         }
         const remotePhone = isSelfChat ? (this.phone ?? (0, events_1.jidToPhone)(remoteJid)) : (0, events_1.jidToPhone)(remoteJid);
@@ -471,7 +580,23 @@ class WhatsAppClient {
             uid: binding?.uid ?? null
         });
         if (binding) {
-            const stillAllowed = await (0, firestore_1.isPhoneAllowedForUid)(binding.uid, remotePhone);
+            let stillAllowed;
+            try {
+                stillAllowed = await (0, firestore_1.isPhoneAllowedForUid)(binding.uid, remotePhone);
+            }
+            catch (allowedError) {
+                logger_1.logger.error('MSG_ALLOWED_CHECK_ERROR: isPhoneAllowedForUid threw, treating as allowed to avoid silent drop', {
+                    phone: remotePhone,
+                    uid: binding.uid,
+                    error: allowedError instanceof Error ? allowedError.message : 'unknown'
+                });
+                stillAllowed = true;
+            }
+            logger_1.logger.info('MSG_ALLOWED: phone permission check result', {
+                phone: remotePhone,
+                uid: binding.uid,
+                stillAllowed
+            });
             if (!stillAllowed) {
                 logger_1.logger.info('MSG_STALE_BINDING: old binding no longer allowed, dropping to re-resolve', {
                     phone: remotePhone,
@@ -586,84 +711,30 @@ class WhatsAppClient {
             }
             const stopTypingPresence = this.startTypingPresence(remoteJid);
             try {
-                const conversation = await this.getConversationHistory(ownerUid, remotePhone);
-                const isFirstMessage = conversation.length === 0;
-                const isGreeting = isGreetingMessage(inboundText);
-                const isCapabilitiesQuestion = isCapabilitiesIntentMessage(inboundText);
-                const lastActivityAt = await (0, firestore_1.getLastConversationActivityByPhone)(ownerUid, remotePhone, this.slotId);
-                const isConversationRestart = this.isConversationRestart(lastActivityAt, isFirstMessage);
-                const shouldSendCapabilitiesSummary = isGreeting || isFirstMessage || isConversationRestart || isCapabilitiesQuestion;
-                if (isFirstMessage) {
-                    logger_1.logger.info('MSG_WELCOME: first message detected, AI will introduce itself', {
-                        uid: ownerUid,
-                        phone: remotePhone
-                    });
-                }
-                // Build AI messages from history (text only)
-                const aiMessages = conversation.map((entry) => ({
-                    role: entry.role,
-                    content: entry.content
-                }));
-                // Always add the current message at the end with the image/audio if present
-                let finalContent = inboundText.trim();
-                if (!finalContent) {
-                    if (imageDataUrl)
-                        finalContent = 'Analise a imagem enviada e registre o lançamento corretamente.';
-                    else if (audioDataUrl)
-                        finalContent = 'Transcreva e interprete o audio enviado, e execute a acao de registrar ou responder.';
-                }
-                aiMessages.push({
-                    role: 'user',
-                    content: finalContent,
-                    ...(imageDataUrl ? { imageDataUrl } : {}),
-                    ...(audioDataUrl ? { audioDataUrl } : {})
-                });
-                logger_1.logger.info('MSG_AI_CONTEXT: sending to AI', {
-                    historyCount: conversation.length,
-                    totalMessages: aiMessages.length,
-                    hasImage: Boolean(imageDataUrl),
-                    hasAudio: Boolean(audioDataUrl),
-                    isGreeting,
-                    isCapabilitiesQuestion,
-                    isConversationRestart,
-                    shouldSendCapabilitiesSummary
-                });
-                this.recordAiCall(ownerUid);
-                const aiReply = await (0, assistant_1.processWhatsAppAIMessage)(ownerUid, aiMessages, {
-                    isFirstMessage,
-                    isGreeting,
-                    isCapabilitiesQuestion,
-                    isConversationRestart,
-                    shouldSendCapabilitiesSummary
-                });
-                // Save user message AFTER AI processes — enrich media messages with AI-extracted context
-                if (inboundText.trim() || imageDataUrl || audioDataUrl) {
-                    let textForHistory = inboundText.trim();
-                    if (!textForHistory && aiReply.trim()) {
-                        const mediaType = imageDataUrl ? 'Imagem' : 'Audio';
-                        const firstLine = aiReply.trim().split('\n').find((l) => l.replace(/[*_~`]/g, '').trim().length > 0) || '';
-                        const cleaned = firstLine.replace(/[*_~`]/g, '').trim().slice(0, 120);
-                        textForHistory = cleaned ? `[${mediaType}] ${cleaned}` : `${mediaType} enviado no WhatsApp.`;
-                    }
-                    else if (!textForHistory) {
-                        textForHistory = imageDataUrl ? 'Imagem enviada no WhatsApp.' : 'Audio enviado no WhatsApp.';
-                    }
-                    await this.appendConversationMessage(ownerUid, remotePhone, {
-                        role: 'user',
-                        content: textForHistory
-                    });
-                }
-                if (aiReply.trim()) {
-                    await this.sendWithRetry(remoteJid, aiReply.trim(), 'auto_reply', ownerUid);
+                // Wrap the entire AI pipeline in a global timeout to prevent infinite "typing..."
+                const AI_PIPELINE_TIMEOUT_MS = 45_000;
+                const aiPipelineResult = await Promise.race([
+                    this.runAiPipeline(ownerUid, remotePhone, inboundText, imageDataUrl, audioDataUrl),
+                    sleep(AI_PIPELINE_TIMEOUT_MS).then(() => {
+                        throw new Error(`AI pipeline timed out after ${AI_PIPELINE_TIMEOUT_MS}ms`);
+                    })
+                ]);
+                if (aiPipelineResult.aiReply.trim()) {
+                    await this.sendWithRetry(remoteJid, aiPipelineResult.aiReply.trim(), 'auto_reply', ownerUid);
                     await this.appendConversationMessage(ownerUid, remotePhone, {
                         role: 'assistant',
-                        content: aiReply.trim()
+                        content: aiPipelineResult.aiReply.trim()
                     });
                     return;
                 }
             }
             catch (error) {
-                logger_1.logger.error('Failed to process AI WhatsApp message', error);
+                logger_1.logger.error('MSG_AI_ERROR: Failed to process AI WhatsApp message', {
+                    uid: ownerUid,
+                    phone: remotePhone,
+                    error: error instanceof Error ? error.message : 'unknown',
+                    stack: error instanceof Error ? error.stack : undefined
+                });
                 // Send friendly error message instead of silent failure
                 const errorMsg = 'Desculpe, estou com dificuldade para processar agora. Tente novamente em instantes.';
                 try {
@@ -687,6 +758,87 @@ class WhatsAppClient {
                 content: env_1.env.whatsappAutoReplyText.trim()
             });
         }
+    }
+    /**
+     * Runs the full AI processing pipeline with logging at each step.
+     * Extracted so the caller can wrap it in a global timeout.
+     */
+    async runAiPipeline(ownerUid, remotePhone, inboundText, imageDataUrl, audioDataUrl) {
+        logger_1.logger.info('MSG_PIPELINE_START: loading conversation history', { uid: ownerUid, phone: remotePhone });
+        const conversation = await this.getConversationHistory(ownerUid, remotePhone);
+        const isFirstMessage = conversation.length === 0;
+        const isGreeting = isGreetingMessage(inboundText);
+        const isCapabilitiesQuestion = isCapabilitiesIntentMessage(inboundText);
+        const lastActivityAt = await (0, firestore_1.getLastConversationActivityByPhone)(ownerUid, remotePhone);
+        const isConversationRestart = this.isConversationRestart(lastActivityAt, isFirstMessage);
+        const shouldSendCapabilitiesSummary = isGreeting || isFirstMessage || isConversationRestart || isCapabilitiesQuestion;
+        if (isFirstMessage) {
+            logger_1.logger.info('MSG_WELCOME: first message detected, AI will introduce itself', {
+                uid: ownerUid,
+                phone: remotePhone
+            });
+        }
+        // Build AI messages from history (text only)
+        const aiMessages = conversation.map((entry) => ({
+            role: entry.role,
+            content: entry.content
+        }));
+        // Always add the current message at the end with the image/audio if present
+        let finalContent = inboundText.trim();
+        if (!finalContent) {
+            if (imageDataUrl)
+                finalContent = 'Analise a imagem enviada e registre o lançamento corretamente.';
+            else if (audioDataUrl)
+                finalContent = 'Transcreva e interprete o audio enviado, e execute a acao de registrar ou responder.';
+        }
+        aiMessages.push({
+            role: 'user',
+            content: finalContent,
+            ...(imageDataUrl ? { imageDataUrl } : {}),
+            ...(audioDataUrl ? { audioDataUrl } : {})
+        });
+        logger_1.logger.info('MSG_AI_CONTEXT: sending to AI', {
+            historyCount: conversation.length,
+            totalMessages: aiMessages.length,
+            hasImage: Boolean(imageDataUrl),
+            hasAudio: Boolean(audioDataUrl),
+            isGreeting,
+            isCapabilitiesQuestion,
+            isConversationRestart,
+            shouldSendCapabilitiesSummary
+        });
+        this.recordAiCall(ownerUid);
+        logger_1.logger.info('MSG_PIPELINE_AI_CALL: calling processWhatsAppAIMessage', { uid: ownerUid });
+        const aiReply = await (0, assistant_1.processWhatsAppAIMessage)(ownerUid, aiMessages, {
+            isFirstMessage,
+            isGreeting,
+            isCapabilitiesQuestion,
+            isConversationRestart,
+            shouldSendCapabilitiesSummary
+        });
+        logger_1.logger.info('MSG_PIPELINE_AI_DONE: AI response received', {
+            uid: ownerUid,
+            replyLength: aiReply.length,
+            replyPreview: aiReply.slice(0, 80)
+        });
+        // Save user message AFTER AI processes — enrich media messages with AI-extracted context
+        if (inboundText.trim() || imageDataUrl || audioDataUrl) {
+            let textForHistory = inboundText.trim();
+            if (!textForHistory && aiReply.trim()) {
+                const mediaType = imageDataUrl ? 'Imagem' : 'Audio';
+                const firstLine = aiReply.trim().split('\n').find((l) => l.replace(/[*_~`]/g, '').trim().length > 0) || '';
+                const cleaned = firstLine.replace(/[*_~`]/g, '').trim().slice(0, 120);
+                textForHistory = cleaned ? `[${mediaType}] ${cleaned}` : `${mediaType} enviado no WhatsApp.`;
+            }
+            else if (!textForHistory) {
+                textForHistory = imageDataUrl ? 'Imagem enviada no WhatsApp.' : 'Audio enviado no WhatsApp.';
+            }
+            await this.appendConversationMessage(ownerUid, remotePhone, {
+                role: 'user',
+                content: textForHistory
+            });
+        }
+        return { aiReply };
     }
     async sendAutoReply(remoteJid, ownerUid) {
         if (!this.socket || !this.connected)
@@ -857,8 +1009,23 @@ class WhatsAppClient {
             this.badMacByJid.clear();
             this.clearQr();
             this.phone = null;
+            // Invalidate the current epoch so any pending events from the old
+            // socket are silently ignored (prevents stale close events from
+            // overwriting state after we create a new socket).
+            this.connectionEpoch++;
             if (this.socket) {
-                this.socket.ws?.close();
+                try {
+                    this.socket.ev.removeAllListeners('connection.update');
+                    this.socket.ev.removeAllListeners('creds.update');
+                    this.socket.ev.removeAllListeners('messages.upsert');
+                    this.socket.ev.removeAllListeners('chats.phoneNumberShare');
+                    this.socket.ev.removeAllListeners('contacts.upsert');
+                    this.socket.ev.removeAllListeners('contacts.update');
+                    this.socket.ws?.close();
+                }
+                catch {
+                    // ignore cleanup errors
+                }
                 this.socket = null;
             }
             await (0, promises_1.rm)(this.authDir, { recursive: true, force: true });
@@ -1006,6 +1173,8 @@ class WhatsAppClient {
             messageId,
             count,
             threshold: BAD_MAC_RECONNECT_THRESHOLD,
+            softReconnectCount: this.softReconnectCount,
+            hardResetAfter: BAD_MAC_HARD_RESET_AFTER,
             errorMessage
         });
         if (count < BAD_MAC_RECONNECT_THRESHOLD) {
@@ -1013,6 +1182,17 @@ class WhatsAppClient {
         }
         this.badMacByJid.set(remoteJid, { count: 0, lastAt: now });
         await this.clearSignalSessionsAfterBadMac(message);
+        // Escalate: if soft reconnects haven't fixed it, do a FULL session reset
+        if (this.softReconnectCount >= BAD_MAC_HARD_RESET_AFTER) {
+            logger_1.logger.error('BAD_MAC_ESCALATION: soft reconnects failed, performing full session recovery', {
+                slotId: this.slotId,
+                remoteJid,
+                softReconnectCount: this.softReconnectCount
+            });
+            this.softReconnectCount = 0;
+            void this.recoverFromInvalidSession();
+            return;
+        }
         this.triggerSoftReconnectAfterBadMac(remoteJid);
     }
     hasLidIdentity(key) {
@@ -1121,6 +1301,8 @@ class WhatsAppClient {
                 phoneJid: normalizedPhoneJid
             });
         }
+        // Replay buffered messages that were waiting for this LID mapping
+        this.replayBufferedLidMessages(lidJid);
     }
     absorbContactLidMappings(contacts, source) {
         for (const contact of contacts) {
@@ -1137,20 +1319,157 @@ class WhatsAppClient {
             this.rememberLidMapping(lidJid, phoneJid, source);
         }
     }
+    /**
+     * Buffer a message whose remoteJid is an unresolved @lid.
+     * When the LID→phone mapping arrives (via contacts.upsert, phone_number_share, etc.),
+     * `replayBufferedLidMessages` will re-enqueue them.
+     */
+    bufferLidMessage(lidJid, message) {
+        const now = Date.now();
+        let entries = this.pendingLidMessages.get(lidJid);
+        if (!entries) {
+            entries = [];
+            this.pendingLidMessages.set(lidJid, entries);
+        }
+        // Evict expired entries
+        const fresh = entries.filter((e) => now - e.bufferedAt < LID_BUFFER_TTL_MS);
+        // Cap per-JID buffer to avoid memory leaks
+        if (fresh.length >= LID_BUFFER_MAX_PER_JID) {
+            logger_1.logger.warn('LID buffer full for JID, dropping oldest', {
+                slotId: this.slotId,
+                lidJid,
+                dropped: fresh[0]?.message.key?.id
+            });
+            fresh.shift();
+        }
+        fresh.push({ message, bufferedAt: now });
+        this.pendingLidMessages.set(lidJid, fresh);
+    }
+    /**
+     * When a LID→phone mapping arrives, replay any buffered messages for that LID.
+     * The messages are re-enqueued into the normal processing queue.
+     */
+    replayBufferedLidMessages(lidJid) {
+        const entries = this.pendingLidMessages.get(lidJid);
+        if (!entries || entries.length === 0)
+            return;
+        this.pendingLidMessages.delete(lidJid);
+        const validEntries = entries.filter((e) => Date.now() - e.bufferedAt < LID_BUFFER_TTL_MS);
+        if (validEntries.length === 0)
+            return;
+        logger_1.logger.info('LID_REPLAY: replaying buffered messages after LID mapping resolved', {
+            slotId: this.slotId,
+            lidJid,
+            resolvedTo: this.lidToPhoneJid.get(lidJid) ?? 'unknown',
+            count: validEntries.length,
+            messageIds: validEntries.map((e) => e.message.key?.id ?? 'unknown')
+        });
+        for (const entry of validEntries) {
+            this.enqueueMessage(entry.message);
+        }
+    }
+    /**
+     * Check if a JID (possibly @lid) corresponds to the bot's own user identity.
+     * Used for self-chat detection when the remoteJid is LID-based.
+     */
+    isOwnLid(jid) {
+        if (!jid || !this.socket?.user)
+            return false;
+        // The socket's user object may itself have a LID property
+        const socketUser = this.socket.user;
+        if (socketUser.lid) {
+            const ownLidJid = socketUser.lid.includes('@') ? socketUser.lid : `${socketUser.lid}@lid`;
+            if (jid === ownLidJid)
+                return true;
+        }
+        // Also check via the LID→phone mapping: if this LID resolves to our own phone, it's self
+        if (jid.endsWith('@lid')) {
+            const resolved = this.lidToPhoneJid.get(jid);
+            if (resolved && this.phone) {
+                return (0, events_1.jidToPhone)(resolved) === this.phone;
+            }
+        }
+        return false;
+    }
+    /**
+     * Try to extract phone number information from any available field in the message.
+     * Even when Bad MAC prevents decryption, some metadata fields may contain
+     * phone numbers that we can use to build LID→phone mappings.
+     */
+    tryExtractPhoneFromMessageMeta(message) {
+        const key = message.key;
+        if (!key)
+            return;
+        const lidJid = key.remoteJid;
+        if (!lidJid || !lidJid.endsWith('@lid'))
+            return;
+        // Check all known fields that may contain phone numbers
+        const phoneCandidates = [
+            key.participantPn,
+            key.remoteJidAlt,
+            key.participant
+        ];
+        // Baileys may include userReceipt with phone JIDs
+        const msgAny = message;
+        if (Array.isArray(msgAny.userReceipt)) {
+            for (const receipt of msgAny.userReceipt) {
+                if (receipt?.userJid)
+                    phoneCandidates.push(receipt.userJid);
+            }
+        }
+        // messageStubParameters may also contain phone numbers
+        if (Array.isArray(message.messageStubParameters)) {
+            for (const param of message.messageStubParameters) {
+                if (typeof param === 'string' && param.includes('@s.whatsapp.net')) {
+                    phoneCandidates.push(param);
+                }
+            }
+        }
+        // Log all available data for debugging
+        logger_1.logger.info('MSG_META_EXTRACT: scanning message for phone info', {
+            slotId: this.slotId,
+            lidJid,
+            candidatesFound: phoneCandidates.filter(Boolean).length,
+            participantPn: key.participantPn ?? null,
+            remoteJidAlt: key.remoteJidAlt ?? null,
+            participant: key.participant ?? null,
+            messageId: key.id ?? 'unknown'
+        });
+        for (const candidate of phoneCandidates) {
+            if (!candidate)
+                continue;
+            const normalized = this.normalizePhoneJidCandidate(candidate);
+            if (normalized) {
+                this.rememberLidMapping(lidJid, normalized, 'message_candidate');
+                return;
+            }
+        }
+    }
     triggerSoftReconnectAfterBadMac(remoteJid) {
         if (!this.allowReconnect)
             return;
         if (this.reconnectTimer)
             return;
+        this.softReconnectCount += 1;
         logger_1.logger.warn('Triggering soft reconnect after repeated Bad MAC', {
             slotId: this.slotId,
-            remoteJid
+            remoteJid,
+            softReconnectCount: this.softReconnectCount
         });
         this.connected = false;
         this.state = 'connecting';
         this.lastDisconnectReason = 'bad_mac_reconnect';
+        this.connectionEpoch++;
         try {
-            this.socket?.ws?.close();
+            if (this.socket) {
+                this.socket.ev.removeAllListeners('connection.update');
+                this.socket.ev.removeAllListeners('creds.update');
+                this.socket.ev.removeAllListeners('messages.upsert');
+                this.socket.ev.removeAllListeners('chats.phoneNumberShare');
+                this.socket.ev.removeAllListeners('contacts.upsert');
+                this.socket.ev.removeAllListeners('contacts.update');
+                this.socket.ws?.close();
+            }
         }
         catch (error) {
             logger_1.logger.warn('Failed closing websocket during soft reconnect', {
@@ -1313,7 +1632,7 @@ class WhatsAppClient {
         if (cached)
             return cached;
         try {
-            const loaded = await (0, firestore_1.getRecentConversationByPhone)(uid, normalized, env_1.env.whatsappAiHistoryLimit, this.slotId);
+            const loaded = await (0, firestore_1.getRecentConversationByPhone)(uid, normalized, env_1.env.whatsappAiHistoryLimit);
             this.conversationByPhone.set(cacheKey, loaded);
             return loaded;
         }
@@ -1348,7 +1667,8 @@ class WhatsAppClient {
         return elapsedMinutes >= env_1.env.whatsappAiNewConversationMinutes;
     }
     conversationKey(uid, phone) {
-        return `${this.slotId}:${uid}:${phone}`;
+        // Shared across slots so conversation context is not lost when messages arrive on a different number
+        return `${uid}:${phone}`;
     }
 }
 exports.WhatsAppClient = WhatsAppClient;

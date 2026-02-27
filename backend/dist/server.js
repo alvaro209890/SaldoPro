@@ -11,6 +11,7 @@ const health_1 = require("./routes/health");
 const qr_page_1 = require("./routes/qr-page");
 const whatsapp_1 = require("./routes/whatsapp");
 const ai_chat_1 = require("./routes/ai-chat");
+const data_1 = require("./routes/data");
 const manager_1 = require("./whatsapp/manager");
 const app = (0, express_1.default)();
 const whatsappManager = new manager_1.WhatsAppClientsManager();
@@ -20,6 +21,7 @@ app.use(health_1.healthRouter);
 app.use((0, qr_page_1.createQrPageRouter)(whatsappManager));
 app.use('/api/whatsapp', (0, whatsapp_1.createWhatsAppRouter)(whatsappManager));
 app.use('/api/ai', (0, ai_chat_1.createAiChatRouter)());
+app.use('/api/data', (0, data_1.createDataRouter)());
 app.use((error, _req, res, _next) => {
     logger_1.logger.error('Unhandled backend error', error);
     const message = error instanceof Error ? error.message : 'Internal server error';

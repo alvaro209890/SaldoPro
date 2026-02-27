@@ -50,6 +50,8 @@ exports.env = {
     whatsappAuthDir: whatsappAuthDirBase,
     whatsappAuthDirWa1: process.env.WHATSAPP_AUTH_DIR_WA1?.trim() || `${whatsappAuthDirBase}_wa1`,
     whatsappAuthDirWa2: process.env.WHATSAPP_AUTH_DIR_WA2?.trim() || `${whatsappAuthDirBase}_wa2`,
+    supabaseUrl: getRequired('SUPABASE_URL'),
+    supabaseServiceRoleKey: getRequired('SUPABASE_SERVICE_ROLE_KEY'),
     firebaseProjectId: getRequired('FIREBASE_PROJECT_ID'),
     firebaseClientEmail: getRequired('FIREBASE_CLIENT_EMAIL'),
     firebasePrivateKey: getRequired('FIREBASE_PRIVATE_KEY'),

@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { getAuth } from 'firebase-admin/auth';
+import { ensureFirebaseAdmin } from '../lib/firebase-admin';
 import { logger } from '../lib/logger';
 
 /**
@@ -7,6 +8,8 @@ import { logger } from '../lib/logger';
  * On success, attaches the decoded UID to `req.uid`.
  */
 export async function requireFirebaseAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
+    ensureFirebaseAdmin();
+
     const authHeader = req.header('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         res.status(401).json({ error: 'Token de autenticação ausente.' });

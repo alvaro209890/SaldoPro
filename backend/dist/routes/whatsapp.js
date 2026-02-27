@@ -10,7 +10,7 @@ const events_1 = require("../whatsapp/events");
 const manager_1 = require("../whatsapp/manager");
 const whatsapp_page_1 = require("./whatsapp-page");
 function slotLabel(slotId) {
-    return slotId === 'wa1' ? 'WhatsApp 1' : 'WhatsApp 2';
+    return slotId === 'wa1' ? 'WhatsApp' : 'WhatsApp 2';
 }
 async function buildSlotsPageData(manager) {
     return Promise.all(manager_1.WHATSAPP_SLOT_IDS.map(async (slotId) => {

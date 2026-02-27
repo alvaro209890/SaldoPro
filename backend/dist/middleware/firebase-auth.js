@@ -2,12 +2,14 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.requireFirebaseAuth = requireFirebaseAuth;
 const auth_1 = require("firebase-admin/auth");
+const firebase_admin_1 = require("../lib/firebase-admin");
 const logger_1 = require("../lib/logger");
 /**
  * Express middleware that validates a Firebase ID token from the Authorization header.
  * On success, attaches the decoded UID to `req.uid`.
  */
 async function requireFirebaseAuth(req, res, next) {
+    (0, firebase_admin_1.ensureFirebaseAdmin)();
     const authHeader = req.header('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         res.status(401).json({ error: 'Token de autenticação ausente.' });

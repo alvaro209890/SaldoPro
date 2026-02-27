@@ -5,55 +5,33 @@ import {
     signOut,
     updateProfile,
 } from 'firebase/auth';
-import { doc, setDoc, collection, writeBatch } from 'firebase/firestore';
-import { auth, db } from './config';
-import { DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES } from '@/utils/constants';
-import { normalizePhoneNumber } from '@/utils/whatsapp';
+import { auth } from './config';
 
-function generateSlug(name: string): string {
-    return name
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/\s+/g, '-');
-}
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:10000';
 
 export async function registerUser(email: string, password: string, displayName: string, phone: string) {
     const cred = await createUserWithEmailAndPassword(auth, email, password);
-    const { uid } = cred.user;
-
     await updateProfile(cred.user, { displayName });
+    const idToken = await cred.user.getIdToken();
 
-    // Create user profile
-    await setDoc(doc(db, 'users', uid), {
-        uid,
-        email,
-        displayName,
-        createdAt: new Date().toISOString(),
+    const response = await fetch(`${BACKEND_URL}/api/data/bootstrap`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${idToken}`,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            email,
+            displayName,
+            ...(phone ? { phone } : {})
+        })
     });
 
-    // Create default settings
-    await setDoc(doc(db, 'users', uid, 'settings', 'profile'), {
-        budget: 0,
-        startDay: 1,
-        currency: 'BRL',
-        whatsappAllowedNumbers: [normalizePhoneNumber(phone)],
-        updatedAt: new Date().toISOString(),
-    });
+    if (!response.ok) {
+        const payload = await response.json().catch(() => ({ error: 'Erro ao inicializar dados no Supabase.' }));
+        throw new Error(payload.error || 'Erro ao inicializar dados no Supabase.');
+    }
 
-    // Seed default categories
-    const batch = writeBatch(db);
-    const categoriesRef = collection(db, 'users', uid, 'categories');
-
-    [...DEFAULT_EXPENSE_CATEGORIES, ...DEFAULT_INCOME_CATEGORIES].forEach((cat) => {
-        const slug = `${cat.type}-${generateSlug(cat.name)}`;
-        batch.set(doc(categoriesRef, slug), {
-            ...cat,
-            createdAt: new Date().toISOString(),
-        });
-    });
-
-    await batch.commit();
     return cred.user;
 }
 

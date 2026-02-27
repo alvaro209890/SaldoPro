@@ -6,6 +6,7 @@ import { healthRouter } from './routes/health';
 import { createQrPageRouter } from './routes/qr-page';
 import { createWhatsAppRouter } from './routes/whatsapp';
 import { createAiChatRouter } from './routes/ai-chat';
+import { createDataRouter } from './routes/data';
 import { WhatsAppClientsManager } from './whatsapp/manager';
 
 const app = express();
@@ -17,6 +18,7 @@ app.use(healthRouter);
 app.use(createQrPageRouter(whatsappManager));
 app.use('/api/whatsapp', createWhatsAppRouter(whatsappManager));
 app.use('/api/ai', createAiChatRouter());
+app.use('/api/data', createDataRouter());
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   logger.error('Unhandled backend error', error);

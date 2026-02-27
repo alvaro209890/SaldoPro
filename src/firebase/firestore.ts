@@ -1,384 +1,356 @@
-import {
-    collection,
-    doc,
-    addDoc,
-    updateDoc,
-    deleteDoc,
-    onSnapshot,
-    query,
-    where,
-    orderBy,
-    type Unsubscribe,
-} from 'firebase/firestore';
-import { db } from './config';
+import { auth } from './config';
 import type { Transaction, Category, UserSettings, StoredChatMessage, ChatSession, Reminder, RecurringTransaction } from '@/types';
-import { generateMonthKey } from '@/utils/date';
 
-// ─── Transactions ────────────────────────────────────────────
+export type Unsubscribe = () => void;
+
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:10000';
+const SNAPSHOT_POLL_MS = 5000;
+
+const refreshSubscribers = new Set<() => void>();
+
+function subscribeRefresh(listener: () => void): Unsubscribe {
+    refreshSubscribers.add(listener);
+    return () => refreshSubscribers.delete(listener);
+}
+
+function notifyRefresh(): void {
+    for (const listener of refreshSubscribers) {
+        listener();
+    }
+}
+
+async function getAuthHeaders(): Promise<Record<string, string>> {
+    const user = auth.currentUser;
+    if (!user) {
+        throw new Error('Usuario nao autenticado.');
+    }
+
+    const idToken = await user.getIdToken();
+    return {
+        'Authorization': `Bearer ${idToken}`,
+        'Content-Type': 'application/json',
+    };
+}
+
+async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${BACKEND_URL}${path}`, {
+        ...init,
+        headers: {
+            ...headers,
+            ...(init?.headers ?? {}),
+        },
+    });
+
+    if (!response.ok) {
+        const payload = await response.json().catch(() => ({ error: 'Erro desconhecido.' }));
+        throw new Error(payload.error || 'Erro ao acessar API de dados.');
+    }
+
+    if (response.status === 204) {
+        return null as T;
+    }
+
+    return response.json() as Promise<T>;
+}
+
+function createPollingSubscription<T>(
+    loader: () => Promise<T>,
+    callback: (data: T) => void,
+    onError?: (error: Error) => void
+): Unsubscribe {
+    let active = true;
+    let inFlight = false;
+
+    const run = async () => {
+        if (!active || inFlight) return;
+        inFlight = true;
+        try {
+            const data = await loader();
+            if (active) callback(data);
+        } catch (error) {
+            if (onError) onError(error as Error);
+        } finally {
+            inFlight = false;
+        }
+    };
+
+    void run();
+    const interval = window.setInterval(() => {
+        void run();
+    }, SNAPSHOT_POLL_MS);
+    const unsubscribeRefresh = subscribeRefresh(() => {
+        void run();
+    });
+
+    return () => {
+        active = false;
+        window.clearInterval(interval);
+        unsubscribeRefresh();
+    };
+}
 
 export function onTransactionsSnapshot(
-    uid: string,
+    _uid: string,
     monthKey: string,
     callback: (transactions: Transaction[]) => void,
     onError?: (error: Error) => void
 ): Unsubscribe {
-    const ref = collection(db, 'users', uid, 'transactions');
-    const q = query(
-        ref,
-        where('monthKey', '==', monthKey),
-        orderBy('date', 'desc')
-    );
-
-    return onSnapshot(
-        q,
-        (snap) => {
-            const transactions = snap.docs.map((d) => ({
-                id: d.id,
-                ...d.data(),
-            })) as Transaction[];
-            callback(transactions);
-        },
-        (error) => {
-            console.error('Error fetching transactions:', error);
-            if (onError) onError(error);
-        }
+    return createPollingSubscription(
+        () => apiRequest<Transaction[]>(`/api/data/transactions?monthKey=${encodeURIComponent(monthKey)}`),
+        callback,
+        onError
     );
 }
 
 export async function addTransaction(
-    uid: string,
+    _uid: string,
     data: Omit<Transaction, 'id' | 'monthKey' | 'createdAt' | 'updatedAt'>
 ) {
-    const ref = collection(db, 'users', uid, 'transactions');
-    const now = new Date().toISOString();
-    return addDoc(ref, {
-        ...data,
-        monthKey: generateMonthKey(data.date),
-        createdAt: now,
-        updatedAt: now,
+    const result = await apiRequest<{ id: string }>('/api/data/transactions', {
+        method: 'POST',
+        body: JSON.stringify(data)
     });
+    notifyRefresh();
+    return result;
 }
 
 export async function updateTransaction(
-    uid: string,
+    _uid: string,
     transactionId: string,
     data: Partial<Omit<Transaction, 'id' | 'createdAt'>>
 ) {
-    const ref = doc(db, 'users', uid, 'transactions', transactionId);
-    const updates: Record<string, unknown> = {
-        ...data,
-        updatedAt: new Date().toISOString(),
-    };
-    if (data.date) {
-        updates.monthKey = generateMonthKey(data.date);
-    }
-    return updateDoc(ref, updates);
+    await apiRequest<{ ok: true }>(`/api/data/transactions/${transactionId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data)
+    });
+    notifyRefresh();
 }
 
-export async function deleteTransaction(uid: string, transactionId: string) {
-    const ref = doc(db, 'users', uid, 'transactions', transactionId);
-    return deleteDoc(ref);
+export async function deleteTransaction(_uid: string, transactionId: string) {
+    await apiRequest<{ ok: true }>(`/api/data/transactions/${transactionId}`, {
+        method: 'DELETE'
+    });
+    notifyRefresh();
 }
-
-// ─── Categories ──────────────────────────────────────────────
 
 export function onCategoriesSnapshot(
-    uid: string,
+    _uid: string,
     callback: (categories: Category[]) => void,
     onError?: (error: Error) => void
 ): Unsubscribe {
-    const ref = collection(db, 'users', uid, 'categories');
-    const q = query(ref, orderBy('name', 'asc'));
-
-    return onSnapshot(
-        q,
-        (snap) => {
-            const categories = snap.docs.map((d) => ({
-                id: d.id,
-                ...d.data(),
-            })) as Category[];
-            callback(categories);
-        },
-        (error) => {
-            console.error('Error fetching categories:', error);
-            if (onError) onError(error);
-        }
+    return createPollingSubscription(
+        () => apiRequest<Category[]>('/api/data/categories'),
+        callback,
+        onError
     );
 }
 
 export async function addCategory(
-    uid: string,
+    _uid: string,
     data: Omit<Category, 'id' | 'createdAt'>
 ) {
-    const ref = collection(db, 'users', uid, 'categories');
-    return addDoc(ref, {
-        ...data,
-        createdAt: new Date().toISOString(),
+    const result = await apiRequest<{ id: string }>('/api/data/categories', {
+        method: 'POST',
+        body: JSON.stringify(data)
     });
+    notifyRefresh();
+    return result;
 }
 
 export async function updateCategory(
-    uid: string,
+    _uid: string,
     categoryId: string,
     data: Partial<Omit<Category, 'id' | 'createdAt'>>
 ) {
-    const ref = doc(db, 'users', uid, 'categories', categoryId);
-    return updateDoc(ref, data);
+    await apiRequest<{ ok: true }>(`/api/data/categories/${categoryId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data)
+    });
+    notifyRefresh();
 }
 
-export async function deleteCategory(uid: string, categoryId: string) {
-    const ref = doc(db, 'users', uid, 'categories', categoryId);
-    return deleteDoc(ref);
+export async function deleteCategory(_uid: string, categoryId: string) {
+    await apiRequest<{ ok: true }>(`/api/data/categories/${categoryId}`, {
+        method: 'DELETE'
+    });
+    notifyRefresh();
 }
-
-// ─── Settings ────────────────────────────────────────────────
 
 export function onSettingsSnapshot(
-    uid: string,
+    _uid: string,
     callback: (settings: UserSettings | null) => void,
     onError?: (error: Error) => void
 ): Unsubscribe {
-    const ref = doc(db, 'users', uid, 'settings', 'profile');
-    return onSnapshot(
-        ref,
-        (snap) => {
-            if (snap.exists()) {
-                callback(snap.data() as UserSettings);
-            } else {
-                callback(null);
-            }
+    return createPollingSubscription(
+        async () => {
+            const settings = await apiRequest<UserSettings>('/api/data/settings');
+            return settings ?? null;
         },
-        (error) => {
-            console.error('Error fetching settings:', error);
-            if (onError) onError(error);
-        }
+        callback,
+        onError
     );
 }
 
 export async function updateSettings(
-    uid: string,
+    _uid: string,
     data: Partial<UserSettings>
 ) {
-    const ref = doc(db, 'users', uid, 'settings', 'profile');
-    return updateDoc(ref, {
-        ...data,
-        updatedAt: new Date().toISOString(),
+    await apiRequest<UserSettings>('/api/data/settings', {
+        method: 'PATCH',
+        body: JSON.stringify(data)
     });
+    notifyRefresh();
 }
 
-// ─── Chat Sessions ──────────────────────────────────────────────
-
 export function onChatSessionsSnapshot(
-    uid: string,
+    _uid: string,
     callback: (sessions: ChatSession[]) => void,
     onError?: (error: Error) => void
 ): Unsubscribe {
-    const ref = collection(db, 'users', uid, 'chatSessions');
-    const q = query(ref, orderBy('updatedAt', 'desc'));
-
-    return onSnapshot(
-        q,
-        (snap) => {
-            const sessions = snap.docs.map((d) => ({
-                id: d.id,
-                ...d.data(),
-            })) as ChatSession[];
-            callback(sessions);
-        },
-        (error) => {
-            console.error('Error fetching chat sessions:', error);
-            if (onError) onError(error);
-        }
+    return createPollingSubscription(
+        () => apiRequest<ChatSession[]>('/api/data/chat-sessions'),
+        callback,
+        onError
     );
 }
 
-export async function createChatSession(uid: string, title: string) {
-    const ref = collection(db, 'users', uid, 'chatSessions');
-    const now = new Date().toISOString();
-    return addDoc(ref, {
-        title,
-        createdAt: now,
-        updatedAt: now,
+export async function createChatSession(_uid: string, title: string) {
+    const result = await apiRequest<{ id: string }>('/api/data/chat-sessions', {
+        method: 'POST',
+        body: JSON.stringify({ title })
     });
+    notifyRefresh();
+    return { id: result.id };
 }
 
-export async function updateChatSession(uid: string, sessionId: string, title: string) {
-    const ref = doc(db, 'users', uid, 'chatSessions', sessionId);
-    return updateDoc(ref, {
-        title,
-        updatedAt: new Date().toISOString(),
+export async function updateChatSession(_uid: string, sessionId: string, title: string) {
+    await apiRequest<{ ok: true }>(`/api/data/chat-sessions/${sessionId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ title })
     });
+    notifyRefresh();
 }
 
-export async function deleteChatSession(uid: string, sessionId: string) {
-    const ref = doc(db, 'users', uid, 'chatSessions', sessionId);
-    return deleteDoc(ref);
+export async function deleteChatSession(_uid: string, sessionId: string) {
+    await apiRequest<{ ok: true }>(`/api/data/chat-sessions/${sessionId}`, {
+        method: 'DELETE'
+    });
+    notifyRefresh();
 }
-
-// ─── Chat Messages ──────────────────────────────────────────────
 
 export function onChatMessagesSnapshot(
-    uid: string,
+    _uid: string,
     sessionId: string,
     callback: (messages: StoredChatMessage[]) => void,
     onError?: (error: Error) => void
 ): Unsubscribe {
-    const ref = collection(db, 'users', uid, 'chatSessions', sessionId, 'messages');
-    const q = query(
-        ref,
-        orderBy('createdAt', 'asc')
-    );
-
-    return onSnapshot(
-        q,
-        (snap) => {
-            const messages = snap.docs.map((d) => ({
-                id: d.id,
-                ...d.data(),
-            })) as StoredChatMessage[];
-            callback(messages);
-        },
-        (error) => {
-            console.error('Error fetching chat messages:', error);
-            if (onError) onError(error);
-        }
+    return createPollingSubscription(
+        () => apiRequest<StoredChatMessage[]>(`/api/data/chat-sessions/${sessionId}/messages`),
+        callback,
+        onError
     );
 }
 
 export async function addChatMessage(
-    uid: string,
+    _uid: string,
     data: Omit<StoredChatMessage, 'id' | 'createdAt'>
 ) {
-    const ref = collection(db, 'users', uid, 'chatSessions', data.sessionId, 'messages');
-    const sessionRef = doc(db, 'users', uid, 'chatSessions', data.sessionId);
-
-    // Create the message
-    const addPromise = addDoc(ref, {
-        ...data,
-        createdAt: new Date().toISOString(),
+    const result = await apiRequest<{ id: string }>(`/api/data/chat-sessions/${data.sessionId}/messages`, {
+        method: 'POST',
+        body: JSON.stringify({
+            role: data.role,
+            content: data.content,
+            ...(data.imageUrl ? { imageUrl: data.imageUrl } : {})
+        })
     });
-
-    // Update the parent session's updatedAt timestamp
-    const updateSessionPromise = updateDoc(sessionRef, {
-        updatedAt: new Date().toISOString(),
-    });
-
-    return Promise.all([addPromise, updateSessionPromise]);
+    notifyRefresh();
+    return result;
 }
 
-// ─── Reminders ──────────────────────────────────────────────
-
 export function onRemindersSnapshot(
-    uid: string,
+    _uid: string,
     callback: (reminders: Reminder[]) => void,
     onError?: (error: Error) => void
 ): Unsubscribe {
-    const ref = collection(db, 'users', uid, 'reminders');
-    const q = query(
-        ref,
-        orderBy('dueDate', 'asc')
-    );
-
-    return onSnapshot(
-        q,
-        (snap) => {
-            const reminders = snap.docs.map((d) => ({
-                id: d.id,
-                ...d.data(),
-            })) as Reminder[];
-            callback(reminders);
-        },
-        (error) => {
-            console.error('Error fetching reminders:', error);
-            if (onError) onError(error);
-        }
+    return createPollingSubscription(
+        () => apiRequest<Reminder[]>('/api/data/reminders'),
+        callback,
+        onError
     );
 }
 
 export async function addReminder(
-    uid: string,
+    _uid: string,
     data: Omit<Reminder, 'id' | 'createdAt' | 'updatedAt'>
 ) {
-    const ref = collection(db, 'users', uid, 'reminders');
-    const now = new Date().toISOString();
-    return addDoc(ref, {
-        ...data,
-        createdAt: now,
-        updatedAt: now,
+    const result = await apiRequest<{ id: string }>('/api/data/reminders', {
+        method: 'POST',
+        body: JSON.stringify(data)
     });
+    notifyRefresh();
+    return result;
 }
 
 export async function updateReminder(
-    uid: string,
+    _uid: string,
     reminderId: string,
     data: Partial<Omit<Reminder, 'id' | 'createdAt'>>
 ) {
-    const ref = doc(db, 'users', uid, 'reminders', reminderId);
-    return updateDoc(ref, {
-        ...data,
-        updatedAt: new Date().toISOString(),
+    await apiRequest<{ ok: true }>(`/api/data/reminders/${reminderId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data)
     });
+    notifyRefresh();
 }
 
-export async function deleteReminder(uid: string, reminderId: string) {
-    const ref = doc(db, 'users', uid, 'reminders', reminderId);
-    return deleteDoc(ref);
+export async function deleteReminder(_uid: string, reminderId: string) {
+    await apiRequest<{ ok: true }>(`/api/data/reminders/${reminderId}`, {
+        method: 'DELETE'
+    });
+    notifyRefresh();
 }
-
-// ─── Recurring Transactions ─────────────────────────────────
 
 export function onRecurringTransactionsSnapshot(
-    uid: string,
+    _uid: string,
     callback: (items: RecurringTransaction[]) => void,
     onError?: (error: Error) => void
 ): Unsubscribe {
-    const ref = collection(db, 'users', uid, 'recurringTransactions');
-    const q = query(ref, orderBy('nextDueDate', 'asc'));
-
-    return onSnapshot(
-        q,
-        (snap) => {
-            const items = snap.docs.map((d) => ({
-                id: d.id,
-                ...d.data(),
-            })) as RecurringTransaction[];
-            callback(items);
-        },
-        (error) => {
-            console.error('Error fetching recurring transactions:', error);
-            if (onError) onError(error);
-        }
+    return createPollingSubscription(
+        () => apiRequest<RecurringTransaction[]>('/api/data/recurring-transactions'),
+        callback,
+        onError
     );
 }
 
 export async function addRecurringTransaction(
-    uid: string,
+    _uid: string,
     data: Omit<RecurringTransaction, 'id' | 'createdAt' | 'updatedAt'>
 ) {
-    const ref = collection(db, 'users', uid, 'recurringTransactions');
-    const now = new Date().toISOString();
-    return addDoc(ref, {
-        ...data,
-        createdAt: now,
-        updatedAt: now,
+    const result = await apiRequest<{ id: string }>('/api/data/recurring-transactions', {
+        method: 'POST',
+        body: JSON.stringify(data)
     });
+    notifyRefresh();
+    return result;
 }
 
 export async function updateRecurringTransaction(
-    uid: string,
+    _uid: string,
     recurringId: string,
     data: Partial<Omit<RecurringTransaction, 'id' | 'createdAt'>>
 ) {
-    const ref = doc(db, 'users', uid, 'recurringTransactions', recurringId);
-    return updateDoc(ref, {
-        ...data,
-        updatedAt: new Date().toISOString(),
+    await apiRequest<{ ok: true }>(`/api/data/recurring-transactions/${recurringId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data)
     });
+    notifyRefresh();
 }
 
-export async function deleteRecurringTransaction(uid: string, recurringId: string) {
-    const ref = doc(db, 'users', uid, 'recurringTransactions', recurringId);
-    return deleteDoc(ref);
+export async function deleteRecurringTransaction(_uid: string, recurringId: string) {
+    await apiRequest<{ ok: true }>(`/api/data/recurring-transactions/${recurringId}`, {
+        method: 'DELETE'
+    });
+    notifyRefresh();
 }
-
 

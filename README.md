@@ -1,49 +1,37 @@
 # SaldoPro
 
-Controle financeiro pessoal inteligente, construído com React 19, Vite 6, TailwindCSS v4 e Firebase. Apresenta um tema escuro premium e design responsivo mobile-first.
+Controle financeiro pessoal com React + backend Node, mantendo Firebase para autenticacao/hospedagem e Supabase como banco de dados.
 
-## Stack Tecnológico
+## Stack
 
-- **Frontend**: React 19, TypeScript, React Router v7, React Hook Form, Zod
-- **Build & Estilos**: Vite 6, TailwindCSS v4 (@tailwindcss/postcss), Lucide React
-- **Gráficos e UI**: Recharts, Sonner (Toasts)
-- **Backend/BaaS**: Firebase 11 (Auth: Email/Senha, Firestore: Banco de Dados em Tempo Real)
+- Frontend: React 19, TypeScript, Vite 6, TailwindCSS v4
+- Auth/Hospedagem: Firebase Auth + Firebase Hosting
+- Banco de dados: Supabase (PostgreSQL)
+- Backend: Node.js/Express + TypeScript
 
-## Pré-requisitos
+## Configuracao
 
-- Node.js (v18+)
-- Conta no Firebase (Projeto criado)
+1. Firebase
+- Crie um projeto no Firebase.
+- Ative Email/Senha em Authentication.
+- Crie um app web e copie as variaveis `VITE_FIREBASE_*`.
 
-## Configuração do Firebase
+2. Supabase
+- Crie um projeto no Supabase.
+- Aplique as migrations em `supabase/migrations`.
+- Configure `VITE_SUPABASE_*` no frontend e `SUPABASE_*` no backend.
 
-1. Acesse o [Console do Firebase](https://console.firebase.google.com/) e crie um novo projeto.
-2. Ative a **Autenticação** (provedor Email/Senha).
-3. Ative o **Firestore Database** (Localização: `southamerica-east1` ou sua preferência).
-4. No Firestore, vá em **Índices** -> **Compostos** e crie o seguinte índice:
-   - Coleção: `transactions`
-   - Campos: `monthKey` (Ascendente), `date` (Decrescente)
-5. Modifique ou aplique as regras de segurança presentes no arquivo `firestore.rules`.
-6. Adicione um App Web nas configurações do projeto e copie as chaves de configuração.
+## Execucao local
 
-## Instalação e Execução
-
-1. Clone ou faça o download deste diretório.
-2. Copie o arquivo `.env.example` para `.env` e preencha as variáveis com as chaves do seu projeto Firebase.
-3. Instale as dependências:
-   ```bash
-   npm install
-   ```
-4. Execute o servidor de desenvolvimento:
-   ```bash
-   npm run dev
-   ```
-5. Acesse `http://localhost:5173`.
-
-## Funcionalidades Implementadas
-
-- **Autenticação Segura**: Registro (cria perfil inicial e planta categorias padrão), login e recuperação de senha.
-- **Dashboard Dinâmico**: Resumo de receitas, despesas, saldo e barra de alerta de orçamento integrado com gráficos (linha temporal de saldos acumulados e gráfico de pizza de despesas).
-- **Lista de Transações**: Grids filtráveis por texto, tipo, categoria, data e valor, ordenados por data ou valor.
-- **Gestão de Categorias**: Cores dedicadas e grid de ícones (Lucide) para personalizar despesas e receitas visuais com exclusão inteligente.
-- **Relatórios Resumo**: Totais organizados por tabela, contagem detalhada, percentuais categorizados e método de pagamento com opção nativa para baixar arquivos `.csv`.
-- **Preferências Visuais**: Dark mode exclusivo nativo, configurador de orçamento global de proteção.
+1. Copie `.env.example` para `.env` na raiz e preencha variaveis.
+2. Copie `backend/.env.example` para `backend/.env` e preencha variaveis.
+3. Instale dependencias:
+```bash
+npm install
+cd backend && npm install
+```
+4. Rode frontend e backend:
+```bash
+npm run dev
+cd backend && npm run dev
+```
