@@ -146,6 +146,9 @@ function frequencyLabel(freq) {
     const labels = { weekly: 'Semanal', monthly: 'Mensal', yearly: 'Anual' };
     return labels[freq] ?? freq;
 }
+function reminderTypeLabel(value) {
+    return value === 'payable' ? 'A pagar' : 'A receber';
+}
 function transactionTypeLabel(value) {
     return value === 'income' ? 'Receita' : 'Despesa';
 }
@@ -243,6 +246,20 @@ function buildAddedRecurringTransactionMessage(receipt, aiReply, currency) {
     lines.push('', 'Para editar, me diga o que você quer alterar na recorrência. Para excluir, digite "excluir recorrente".');
     return lines.join('\n');
 }
+function buildAddedReminderMessage(receipt, aiReply, currency) {
+    const lines = [
+        `⏰ *Lembrete criado*`,
+        '',
+        `*${receipt.title}*`,
+        `${reminderTypeLabel(receipt.reminderType)} | ${formatCurrency(receipt.amount, currency)} | ${formatDateBRFromYmd(receipt.dueDate)}`
+    ];
+    const cleanAiReply = aiReply.trim();
+    if (cleanAiReply.length > 0) {
+        lines.push('', cleanAiReply);
+    }
+    lines.push('', 'Se quiser ajustar valor, data ou descrição do lembrete, é só me pedir.');
+    return lines.join('\n');
+}
 function buildMultiActionMessage(results, aiReply, currency) {
     const lines = ['✅ *Ações processadas:*', ''];
     const transactionCodes = [];
@@ -254,6 +271,10 @@ function buildMultiActionMessage(results, aiReply, currency) {
         }
         if (result.kind === 'added_recurring') {
             lines.push(`- ${transactionTypeLabel(result.receipt.type)} recorrente: ${formatCurrency(result.receipt.amount, currency)} - ${result.receipt.description} (${frequencyLabel(result.receipt.frequency)})`);
+            continue;
+        }
+        if (result.kind === 'added_reminder') {
+            lines.push(`- Lembrete: ${result.receipt.title} - ${formatCurrency(result.receipt.amount, currency)} (${reminderTypeLabel(result.receipt.reminderType)}) para ${formatDateBRFromYmd(result.receipt.dueDate)}`);
             continue;
         }
         if (result.kind === 'updated') {
@@ -349,6 +370,10 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
         }
         if (actionResult.kind === 'added_recurring') {
             return buildAddedRecurringTransactionMessage(actionResult.receipt, ai.reply, settings.currency)
+                .slice(0, env_1.env.maxMessageLength);
+        }
+        if (actionResult.kind === 'added_reminder') {
+            return buildAddedReminderMessage(actionResult.receipt, ai.reply, settings.currency)
                 .slice(0, env_1.env.maxMessageLength);
         }
         if (actionResult.kind === 'updated') {
@@ -520,10 +545,34 @@ async function executeAction(uid, action, categories) {
                 },
             };
         }
+        if (action.action === 'add_reminder') {
+            if (!Number.isFinite(action.amount) || action.amount <= 0) {
+                return { kind: 'none' };
+            }
+            const payload = {
+                title: (action.title || 'Lembrete via WhatsApp').toString().slice(0, 120),
+                amount: Number(action.amount),
+                dueDate: normalizeDate(action.dueDate),
+                type: action.reminderType,
+                status: 'pending'
+            };
+            const reminderId = await (0, firestore_1.addUserReminder)(uid, payload);
+            return {
+                kind: 'added_reminder',
+                receipt: {
+                    reminderId,
+                    title: payload.title,
+                    amount: payload.amount,
+                    dueDate: payload.dueDate,
+                    reminderType: payload.type,
+                    recordedAt: new Date().toISOString()
+                }
+            };
+        }
     }
     catch (error) {
         logger_1.logger.error('Failed executing AI financial action', error);
-        return { kind: 'error', message: 'Ocorreu um erro ao salvar a transacao.' };
+        return { kind: 'error', message: 'Ocorreu um erro ao salvar a acao solicitada.' };
     }
     return { kind: 'none' };
 }

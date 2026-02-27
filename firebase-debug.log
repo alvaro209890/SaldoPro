@@ -284,3 +284,179 @@
 [info] 
 [info] Project Console: https://console.firebase.google.com/project/saldopro-98049/overview
 [info] Hosting URL: https://saldopro-98049.web.app
+[debug] [2026-02-27T12:52:06.317Z] ----------------------------------------------------------------------
+[debug] [2026-02-27T12:52:06.321Z] Command:       C:\Program Files\nodejs\node.exe C:\Users\Usuario\AppData\Roaming\npm\node_modules\firebase-tools\lib\bin\firebase.js deploy --only hosting --project saldopro-98049
+[debug] [2026-02-27T12:52:06.321Z] CLI Version:   14.26.0
+[debug] [2026-02-27T12:52:06.321Z] Platform:      win32
+[debug] [2026-02-27T12:52:06.322Z] Node Version:  v22.22.0
+[debug] [2026-02-27T12:52:06.322Z] Time:          Fri Feb 27 2026 09:52:06 GMT-0300 (Horário Padrão de Brasília)
+[debug] [2026-02-27T12:52:06.323Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-02-27T12:52:06.675Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-02-27T12:52:06.676Z] > authorizing via signed-in user (alvarocanaisgames@gmail.com)
+[debug] [2026-02-27T12:52:06.677Z] [iam] checking project saldopro-98049 for permissions ["firebase.projects.get","firebasehosting.sites.update"]
+[debug] [2026-02-27T12:52:06.679Z] Checked if tokens are valid: false, expires at: 1772196949011
+[debug] [2026-02-27T12:52:06.680Z] Checked if tokens are valid: false, expires at: 1772196949011
+[debug] [2026-02-27T12:52:06.680Z] > refreshing access token with scopes: []
+[debug] [2026-02-27T12:52:06.683Z] >>> [apiv2][query] POST https://www.googleapis.com/oauth2/v3/token [none]
+[debug] [2026-02-27T12:52:06.684Z] >>> [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-02-27T12:52:06.986Z] <<< [apiv2][status] POST https://www.googleapis.com/oauth2/v3/token 200
+[debug] [2026-02-27T12:52:06.986Z] <<< [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-02-27T12:52:06.995Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/saldopro-98049:testIamPermissions [none]
+[debug] [2026-02-27T12:52:06.995Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/saldopro-98049:testIamPermissions x-goog-quota-user=projects/saldopro-98049
+[debug] [2026-02-27T12:52:06.995Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/saldopro-98049:testIamPermissions {"permissions":["firebase.projects.get","firebasehosting.sites.update"]}
+[debug] [2026-02-27T12:52:07.948Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/saldopro-98049:testIamPermissions 200
+[debug] [2026-02-27T12:52:07.948Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/saldopro-98049:testIamPermissions {"permissions":["firebase.projects.get","firebasehosting.sites.update"]}
+[debug] [2026-02-27T12:52:07.949Z] Checked if tokens are valid: true, expires at: 1772200325987
+[debug] [2026-02-27T12:52:07.950Z] Checked if tokens are valid: true, expires at: 1772200325987
+[debug] [2026-02-27T12:52:07.950Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects/saldopro-98049 [none]
+[debug] [2026-02-27T12:52:08.407Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects/saldopro-98049 200
+[debug] [2026-02-27T12:52:08.408Z] <<< [apiv2][body] GET https://firebase.googleapis.com/v1beta1/projects/saldopro-98049 {"projectId":"saldopro-98049","projectNumber":"20469978858","displayName":"SaldoPro","name":"projects/saldopro-98049","resources":{"hostingSite":"saldopro-98049"},"state":"ACTIVE","etag":"1_dd7b713f-0163-4e15-abc9-0722cc58702b"}
+[info] 
+[info] === Deploying to 'saldopro-98049'...
+[info] 
+[info] i  deploying hosting 
+[debug] [2026-02-27T12:52:08.416Z] Checked if tokens are valid: true, expires at: 1772200325987
+[debug] [2026-02-27T12:52:08.416Z] Checked if tokens are valid: true, expires at: 1772200325987
+[debug] [2026-02-27T12:52:08.417Z] >>> [apiv2][query] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/saldopro-98049/versions [none]
+[debug] [2026-02-27T12:52:08.417Z] >>> [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/saldopro-98049/versions {"status":"CREATED","labels":{"deployment-tool":"cli-firebase"}}
+[debug] [2026-02-27T12:52:10.265Z] <<< [apiv2][status] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/saldopro-98049/versions 200
+[debug] [2026-02-27T12:52:10.265Z] <<< [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/saldopro-98049/versions {"name":"projects/20469978858/sites/saldopro-98049/versions/e6ecc5b71d26f4a3","status":"CREATED","config":{},"labels":{"deployment-tool":"cli-firebase"}}
+[info] i  hosting[saldopro-98049]: beginning deploy... 
+[info] i  hosting[saldopro-98049]: found 3 files in dist 
+[debug] [2026-02-27T12:52:10.288Z] [hosting] uploading with 200 concurrency
+[debug] [2026-02-27T12:52:10.347Z] Checked if tokens are valid: true, expires at: 1772200325987
+[debug] [2026-02-27T12:52:10.347Z] Checked if tokens are valid: true, expires at: 1772200325987
+[debug] [2026-02-27T12:52:10.349Z] [hosting] hash cache [ZGlzdA] stored for 3 files
+[debug] [2026-02-27T12:52:10.349Z] [hosting][hash queue][FINAL] {"max":55,"min":6,"avg":22.333333333333332,"active":0,"complete":3,"success":3,"errored":0,"retried":0,"total":3,"elapsed":59}
+[debug] [2026-02-27T12:52:10.350Z] >>> [apiv2][query] POST https://firebasehosting.googleapis.com/v1beta1/projects/20469978858/sites/saldopro-98049/versions/e6ecc5b71d26f4a3:populateFiles [none]
+[debug] [2026-02-27T12:52:10.350Z] >>> [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/20469978858/sites/saldopro-98049/versions/e6ecc5b71d26f4a3:populateFiles {"files":{"/index.html":"75ebce43a2e7906b87831734a3d5d7c548f817961e9d443e1f0a22cf862917a1","/assets/index-D-2bShcL.css":"660c6f3fd89e2582649fb943b3e8b5e2ee5328a7a266c4fe98e814fbd6ced34f","/assets/index-BLiamj8a.js":"7225cb22d7417b7090ef61978a6de3554c4ca6553e03805fa32f38319ee00278"}}
+[debug] [2026-02-27T12:52:11.143Z] <<< [apiv2][status] POST https://firebasehosting.googleapis.com/v1beta1/projects/20469978858/sites/saldopro-98049/versions/e6ecc5b71d26f4a3:populateFiles 200
+[debug] [2026-02-27T12:52:11.144Z] <<< [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/20469978858/sites/saldopro-98049/versions/e6ecc5b71d26f4a3:populateFiles {"uploadRequiredHashes":["75ebce43a2e7906b87831734a3d5d7c548f817961e9d443e1f0a22cf862917a1","7225cb22d7417b7090ef61978a6de3554c4ca6553e03805fa32f38319ee00278"],"uploadUrl":"https://upload-firebasehosting.googleapis.com/upload/sites/saldopro-98049/versions/e6ecc5b71d26f4a3/files"}
+[debug] [2026-02-27T12:52:11.145Z] Checked if tokens are valid: true, expires at: 1772200325987
+[debug] [2026-02-27T12:52:11.145Z] Checked if tokens are valid: true, expires at: 1772200325987
+[debug] [2026-02-27T12:52:11.146Z] Checked if tokens are valid: true, expires at: 1772200325987
+[debug] [2026-02-27T12:52:11.146Z] Checked if tokens are valid: true, expires at: 1772200325987
+[debug] [2026-02-27T12:52:11.147Z] >>> [apiv2][query] POST https://upload-firebasehosting.googleapis.com/upload/sites/saldopro-98049/versions/e6ecc5b71d26f4a3/files/75ebce43a2e7906b87831734a3d5d7c548f817961e9d443e1f0a22cf862917a1 [none]
+[debug] [2026-02-27T12:52:11.147Z] >>> [apiv2][body] POST https://upload-firebasehosting.googleapis.com/upload/sites/saldopro-98049/versions/e6ecc5b71d26f4a3/files/75ebce43a2e7906b87831734a3d5d7c548f817961e9d443e1f0a22cf862917a1 [stream]
+[debug] [2026-02-27T12:52:11.149Z] >>> [apiv2][query] POST https://upload-firebasehosting.googleapis.com/upload/sites/saldopro-98049/versions/e6ecc5b71d26f4a3/files/7225cb22d7417b7090ef61978a6de3554c4ca6553e03805fa32f38319ee00278 [none]
+[debug] [2026-02-27T12:52:11.149Z] >>> [apiv2][body] POST https://upload-firebasehosting.googleapis.com/upload/sites/saldopro-98049/versions/e6ecc5b71d26f4a3/files/7225cb22d7417b7090ef61978a6de3554c4ca6553e03805fa32f38319ee00278 [stream]
+[debug] [2026-02-27T12:52:11.151Z] [hosting][populate queue][FINAL] {"max":799,"min":799,"avg":799,"active":0,"complete":1,"success":1,"errored":0,"retried":0,"total":1,"elapsed":804}
+[debug] [2026-02-27T12:52:11.151Z] [hosting] uploads queued: 2
+[info] i  hosting: uploading new files [0/2] (0%) 
+[debug] [2026-02-27T12:52:12.465Z] <<< [apiv2][status] POST https://upload-firebasehosting.googleapis.com/upload/sites/saldopro-98049/versions/e6ecc5b71d26f4a3/files/75ebce43a2e7906b87831734a3d5d7c548f817961e9d443e1f0a22cf862917a1 200
+[debug] [2026-02-27T12:52:12.466Z] <<< [apiv2][body] POST https://upload-firebasehosting.googleapis.com/upload/sites/saldopro-98049/versions/e6ecc5b71d26f4a3/files/75ebce43a2e7906b87831734a3d5d7c548f817961e9d443e1f0a22cf862917a1 [stream]
+[debug] [2026-02-27T12:52:12.532Z] <<< [apiv2][status] POST https://upload-firebasehosting.googleapis.com/upload/sites/saldopro-98049/versions/e6ecc5b71d26f4a3/files/7225cb22d7417b7090ef61978a6de3554c4ca6553e03805fa32f38319ee00278 200
+[debug] [2026-02-27T12:52:12.533Z] <<< [apiv2][body] POST https://upload-firebasehosting.googleapis.com/upload/sites/saldopro-98049/versions/e6ecc5b71d26f4a3/files/7225cb22d7417b7090ef61978a6de3554c4ca6553e03805fa32f38319ee00278 [stream]
+[debug] [2026-02-27T12:52:12.533Z] [hosting][upload queue][FINAL] {"max":1388,"min":1322,"avg":1355,"active":0,"complete":2,"success":2,"errored":0,"retried":0,"total":2,"elapsed":1389}
+[info] i  hosting: upload complete 
+[info] +  hosting[saldopro-98049]: file upload complete 
+[debug] [2026-02-27T12:52:12.534Z] [hosting] deploy completed after 2264ms
+[debug] [2026-02-27T12:52:12.534Z] [
+  {
+    "config": {
+      "public": "dist",
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ],
+      "headers": [
+        {
+          "source": "/",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "no-cache, no-store, must-revalidate"
+            }
+          ]
+        },
+        {
+          "source": "/index.html",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "no-cache, no-store, must-revalidate"
+            }
+          ]
+        },
+        {
+          "source": "/app/**",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "no-cache, no-store, must-revalidate"
+            }
+          ]
+        },
+        {
+          "source": "/login",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "no-cache, no-store, must-revalidate"
+            }
+          ]
+        },
+        {
+          "source": "/register",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "no-cache, no-store, must-revalidate"
+            }
+          ]
+        },
+        {
+          "source": "/reset-password",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "no-cache, no-store, must-revalidate"
+            }
+          ]
+        },
+        {
+          "source": "/assets/**",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "public, max-age=31536000, immutable"
+            }
+          ]
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "**",
+          "destination": "/index.html"
+        }
+      ],
+      "site": "saldopro-98049"
+    },
+    "version": "projects/20469978858/sites/saldopro-98049/versions/e6ecc5b71d26f4a3"
+  }
+]
+[info] i  hosting[saldopro-98049]: finalizing version... 
+[debug] [2026-02-27T12:52:12.538Z] Checked if tokens are valid: true, expires at: 1772200325987
+[debug] [2026-02-27T12:52:12.538Z] Checked if tokens are valid: true, expires at: 1772200325987
+[debug] [2026-02-27T12:52:12.538Z] >>> [apiv2][query] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/saldopro-98049/versions/e6ecc5b71d26f4a3 updateMask=status%2Cconfig
+[debug] [2026-02-27T12:52:12.538Z] >>> [apiv2][body] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/saldopro-98049/versions/e6ecc5b71d26f4a3 {"status":"FINALIZED","config":{"rewrites":[{"glob":"**","path":"/index.html"}],"headers":[{"glob":"/","headers":{"Cache-Control":"no-cache, no-store, must-revalidate"}},{"glob":"/index.html","headers":{"Cache-Control":"no-cache, no-store, must-revalidate"}},{"glob":"/app/**","headers":{"Cache-Control":"no-cache, no-store, must-revalidate"}},{"glob":"/login","headers":{"Cache-Control":"no-cache, no-store, must-revalidate"}},{"glob":"/register","headers":{"Cache-Control":"no-cache, no-store, must-revalidate"}},{"glob":"/reset-password","headers":{"Cache-Control":"no-cache, no-store, must-revalidate"}},{"glob":"/assets/**","headers":{"Cache-Control":"public, max-age=31536000, immutable"}}]}}
+[debug] [2026-02-27T12:52:13.227Z] <<< [apiv2][status] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/saldopro-98049/versions/e6ecc5b71d26f4a3 200
+[debug] [2026-02-27T12:52:13.227Z] <<< [apiv2][body] PATCH https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/saldopro-98049/versions/e6ecc5b71d26f4a3 {"name":"projects/20469978858/sites/saldopro-98049/versions/e6ecc5b71d26f4a3","status":"FINALIZED","config":{"headers":[{"headers":{"Cache-Control":"no-cache, no-store, must-revalidate"},"glob":"/"},{"headers":{"Cache-Control":"no-cache, no-store, must-revalidate"},"glob":"/index.html"},{"headers":{"Cache-Control":"no-cache, no-store, must-revalidate"},"glob":"/app/**"},{"headers":{"Cache-Control":"no-cache, no-store, must-revalidate"},"glob":"/login"},{"headers":{"Cache-Control":"no-cache, no-store, must-revalidate"},"glob":"/register"},{"headers":{"Cache-Control":"no-cache, no-store, must-revalidate"},"glob":"/reset-password"},{"headers":{"Cache-Control":"public, max-age=31536000, immutable"},"glob":"/assets/**"}],"rewrites":[{"glob":"**","path":"/index.html"}]},"labels":{"deployment-tool":"cli-firebase"},"createTime":"2026-02-27T12:52:11.014314Z","createUser":{"email":"alvarocanaisgames@gmail.com"},"finalizeTime":"2026-02-27T12:52:14.475408Z","finalizeUser":{"email":"alvarocanaisgames@gmail.com"}}
+[debug] [2026-02-27T12:52:13.227Z] [hosting] finalized version for saldopro-98049:[object Object]
+[info] +  hosting[saldopro-98049]: version finalized 
+[info] i  hosting[saldopro-98049]: releasing new version... 
+[debug] [2026-02-27T12:52:13.228Z] Checked if tokens are valid: true, expires at: 1772200325987
+[debug] [2026-02-27T12:52:13.228Z] Checked if tokens are valid: true, expires at: 1772200325987
+[debug] [2026-02-27T12:52:13.229Z] >>> [apiv2][query] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/saldopro-98049/channels/live/releases versionName=projects%2F20469978858%2Fsites%2Fsaldopro-98049%2Fversions%2Fe6ecc5b71d26f4a3
+[debug] [2026-02-27T12:52:13.229Z] >>> [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/saldopro-98049/channels/live/releases {}
+[debug] [2026-02-27T12:52:13.995Z] <<< [apiv2][status] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/saldopro-98049/channels/live/releases 200
+[debug] [2026-02-27T12:52:13.995Z] <<< [apiv2][body] POST https://firebasehosting.googleapis.com/v1beta1/projects/-/sites/saldopro-98049/channels/live/releases {"name":"projects/20469978858/sites/saldopro-98049/channels/live/releases/1772196734620000","version":{"name":"projects/20469978858/sites/saldopro-98049/versions/e6ecc5b71d26f4a3","status":"FINALIZED","config":{"headers":[{"headers":{"Cache-Control":"no-cache, no-store, must-revalidate"},"glob":"/"},{"headers":{"Cache-Control":"no-cache, no-store, must-revalidate"},"glob":"/index.html"},{"headers":{"Cache-Control":"no-cache, no-store, must-revalidate"},"glob":"/app/**"},{"headers":{"Cache-Control":"no-cache, no-store, must-revalidate"},"glob":"/login"},{"headers":{"Cache-Control":"no-cache, no-store, must-revalidate"},"glob":"/register"},{"headers":{"Cache-Control":"no-cache, no-store, must-revalidate"},"glob":"/reset-password"},{"headers":{"Cache-Control":"public, max-age=31536000, immutable"},"glob":"/assets/**"}],"rewrites":[{"glob":"**","path":"/index.html"}]},"labels":{"deployment-tool":"cli-firebase"},"createTime":"2026-02-27T12:52:11.014314Z","createUser":{"email":"alvarocanaisgames@gmail.com","imageUrl":"https://lh3.googleusercontent.com/a/ACg8ocIXC_W5VuHy_ZIpPTwK17neNWT9KtTYkViOZpNzGfjaACg-jH-_"},"finalizeTime":"2026-02-27T12:52:14.475408Z","finalizeUser":{"email":"alvarocanaisgames@gmail.com","imageUrl":"https://lh3.googleusercontent.com/a/ACg8ocIXC_W5VuHy_ZIpPTwK17neNWT9KtTYkViOZpNzGfjaACg-jH-_"}},"type":"DEPLOY","releaseTime":"2026-02-27T12:52:14.620Z","releaseUser":{"email":"alvarocanaisgames@gmail.com","imageUrl":"https://lh3.googleusercontent.com/a/ACg8ocIXC_W5VuHy_ZIpPTwK17neNWT9KtTYkViOZpNzGfjaACg-jH-_"}}
+[debug] [2026-02-27T12:52:13.995Z] [hosting] release: {"name":"projects/20469978858/sites/saldopro-98049/channels/live/releases/1772196734620000","version":{"name":"projects/20469978858/sites/saldopro-98049/versions/e6ecc5b71d26f4a3","status":"FINALIZED","config":{"headers":[{"headers":{"Cache-Control":"no-cache, no-store, must-revalidate"},"glob":"/"},{"headers":{"Cache-Control":"no-cache, no-store, must-revalidate"},"glob":"/index.html"},{"headers":{"Cache-Control":"no-cache, no-store, must-revalidate"},"glob":"/app/**"},{"headers":{"Cache-Control":"no-cache, no-store, must-revalidate"},"glob":"/login"},{"headers":{"Cache-Control":"no-cache, no-store, must-revalidate"},"glob":"/register"},{"headers":{"Cache-Control":"no-cache, no-store, must-revalidate"},"glob":"/reset-password"},{"headers":{"Cache-Control":"public, max-age=31536000, immutable"},"glob":"/assets/**"}],"rewrites":[{"glob":"**","path":"/index.html"}]},"labels":{"deployment-tool":"cli-firebase"},"createTime":"2026-02-27T12:52:11.014314Z","createUser":{"email":"alvarocanaisgames@gmail.com","imageUrl":"https://lh3.googleusercontent.com/a/ACg8ocIXC_W5VuHy_ZIpPTwK17neNWT9KtTYkViOZpNzGfjaACg-jH-_"},"finalizeTime":"2026-02-27T12:52:14.475408Z","finalizeUser":{"email":"alvarocanaisgames@gmail.com","imageUrl":"https://lh3.googleusercontent.com/a/ACg8ocIXC_W5VuHy_ZIpPTwK17neNWT9KtTYkViOZpNzGfjaACg-jH-_"}},"type":"DEPLOY","releaseTime":"2026-02-27T12:52:14.620Z","releaseUser":{"email":"alvarocanaisgames@gmail.com","imageUrl":"https://lh3.googleusercontent.com/a/ACg8ocIXC_W5VuHy_ZIpPTwK17neNWT9KtTYkViOZpNzGfjaACg-jH-_"}}
+[info] +  hosting[saldopro-98049]: release complete 
+[info] 
+[info] +  Deploy complete! 
+[info] 
+[info] Project Console: https://console.firebase.google.com/project/saldopro-98049/overview
+[info] Hosting URL: https://saldopro-98049.web.app

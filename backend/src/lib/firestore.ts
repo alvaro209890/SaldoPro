@@ -126,6 +126,14 @@ export interface CreateTransactionInput {
   paymentMethod: 'pix' | 'credit' | 'debit' | 'cash' | 'transfer' | 'boleto';
 }
 
+export interface CreateReminderInput {
+  title: string;
+  amount: number;
+  dueDate: string;
+  type: 'payable' | 'receivable';
+  status?: 'pending' | 'paid';
+}
+
 function monthKeyFromDate(date: string): string {
   return date.slice(0, 7);
 }
@@ -232,6 +240,20 @@ export async function restoreUserTransaction(
     monthKey: monthKeyFromDate(transaction.date),
     updatedAt: new Date().toISOString()
   });
+}
+
+export async function addUserReminder(uid: string, input: CreateReminderInput): Promise<string> {
+  const now = new Date().toISOString();
+  const ref = await db.collection('users').doc(uid).collection('reminders').add({
+    title: input.title,
+    amount: input.amount,
+    dueDate: input.dueDate,
+    type: input.type,
+    status: input.status ?? 'pending',
+    createdAt: now,
+    updatedAt: now
+  });
+  return ref.id;
 }
 
 // ---------------------------------------------------------------------------

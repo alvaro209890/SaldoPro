@@ -78,7 +78,7 @@ export function ExpensePieChart({ transactions, categories }: ExpensePieChartPro
                             ))}
                         </Pie>
                         <Tooltip
-                            formatter={(value: number) => `<span style="font-weight:700">${formatBRL(value)}</span>`}
+                            formatter={(value: number) => formatBRL(value)}
                             contentStyle={{
                                 backgroundColor: 'rgba(15, 23, 42, 0.9)',
                                 backdropFilter: 'blur(10px)',
@@ -87,7 +87,7 @@ export function ExpensePieChart({ transactions, categories }: ExpensePieChartPro
                                 color: '#f8fafc',
                                 boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.3)'
                             }}
-                            itemStyle={{ color: '#f8fafc' }}
+                            itemStyle={{ color: '#f8fafc', fontWeight: 700 }}
                         />
                         <Legend
                             verticalAlign="bottom"

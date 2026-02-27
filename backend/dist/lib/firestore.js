@@ -12,6 +12,7 @@ exports.updateUserTransaction = updateUserTransaction;
 exports.deleteUserTransaction = deleteUserTransaction;
 exports.getUserTransactionById = getUserTransactionById;
 exports.restoreUserTransaction = restoreUserTransaction;
+exports.addUserReminder = addUserReminder;
 exports.addRecurringTransaction = addRecurringTransaction;
 exports.getActiveRecurringTransactions = getActiveRecurringTransactions;
 exports.deleteRecurringTransaction = deleteRecurringTransaction;
@@ -178,6 +179,19 @@ async function restoreUserTransaction(uid, transactionId, transaction) {
         monthKey: monthKeyFromDate(transaction.date),
         updatedAt: new Date().toISOString()
     });
+}
+async function addUserReminder(uid, input) {
+    const now = new Date().toISOString();
+    const ref = await db.collection('users').doc(uid).collection('reminders').add({
+        title: input.title,
+        amount: input.amount,
+        dueDate: input.dueDate,
+        type: input.type,
+        status: input.status ?? 'pending',
+        createdAt: now,
+        updatedAt: now
+    });
+    return ref.id;
 }
 function advanceDateBackend(dateStr, frequency) {
     const [year, month, day] = dateStr.split('-').map(Number);

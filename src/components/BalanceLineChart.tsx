@@ -1,7 +1,7 @@
-import { useMemo } from 'react';
+﻿import { useMemo } from 'react';
 import {
-    AreaChart,
-    Area,
+    ComposedChart,
+    Bar,
     XAxis,
     YAxis,
     CartesianGrid,
@@ -20,54 +20,57 @@ interface BalanceLineChartProps {
     monthKey: string;
 }
 
+interface DailyFlowPoint {
+    date: string;
+    fullDate: string;
+    income: number;
+    expense: number;
+}
+
 export function BalanceLineChart({ transactions, monthKey }: BalanceLineChartProps) {
     const isEmpty = transactions.length === 0;
-    const data = useMemo(() => {
+
+    const data = useMemo<DailyFlowPoint[]>(() => {
         if (isEmpty) return [];
 
         const dates = getMonthDates(monthKey);
-        let runningBalance = 0;
+        const dailyTotals = transactions.reduce((acc, tx) => {
+            if (!acc[tx.date]) {
+                acc[tx.date] = { income: 0, expense: 0 };
+            }
 
-        // Sort transactions chronologically
-        const sortedTx = [...transactions].sort(
-            (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
-        );
+            if (tx.type === 'income') {
+                acc[tx.date].income += tx.amount;
+            } else {
+                acc[tx.date].expense += tx.amount;
+            }
+
+            return acc;
+        }, {} as Record<string, { income: number; expense: number }>);
 
         const today = new Date();
         const currentMonthKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
         const isCurrentMonth = monthKey === currentMonthKey;
         const currentDay = today.getDate();
 
-        // Group by date
-        const dailyTx = sortedTx.reduce((acc, curr) => {
-            if (!acc[curr.date]) acc[curr.date] = [];
-            acc[curr.date].push(curr);
-            return acc;
-        }, {} as Record<string, Transaction[]>);
+        const chartData: DailyFlowPoint[] = [];
 
-        const chartData = [];
         for (let i = 0; i < dates.length; i++) {
             const date = dates[i];
             const dayNum = parseInt(date.split('-')[2], 10);
 
-            // If we are in the current month, don't draw flat lines into the future
             if (isCurrentMonth && dayNum > currentDay) {
                 break;
             }
 
-            const dayTransactions = dailyTx[date] || [];
-            const dayNet = dayTransactions.reduce(
-                (acc, t) => acc + (t.type === 'income' ? t.amount : -t.amount),
-                0
-            );
-
-            runningBalance += dayNet;
+            const income = dailyTotals[date]?.income ?? 0;
+            const expense = dailyTotals[date]?.expense ?? 0;
 
             chartData.push({
-                date: String(dayNum).padStart(2, '0'), // Just the day
+                date: String(dayNum).padStart(2, '0'),
                 fullDate: date,
-                balance: runningBalance,
-                dayNet,
+                income,
+                expense
             });
         }
 
@@ -75,26 +78,20 @@ export function BalanceLineChart({ transactions, monthKey }: BalanceLineChartPro
     }, [transactions, monthKey, isEmpty]);
 
     return (
-        <Card title="Evolução do Saldo" icon={Activity} className="h-full">
+        <Card title="Fluxo Diario (Entradas x Saidas)" icon={Activity} className="h-full">
             {isEmpty ? (
                 <div className="flex h-[300px] items-center justify-center mt-4 bg-surface-900/30 rounded-xl border border-white/5">
                     <EmptyState
                         icon={Activity}
-                        title="Sem movimentações"
-                        description="Adicione receitas e despesas para acompanhar a evolução do saldo."
+                        title="Sem movimentacoes"
+                        description="Adicione receitas e despesas para visualizar o fluxo diario do mes."
                         className="border-none bg-transparent shadow-none"
                     />
                 </div>
             ) : (
                 <div className="h-[300px] mt-6 -ml-4">
                     <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                            <defs>
-                                <linearGradient id="colorBalance" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.6} />
-                                    <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-                                </linearGradient>
-                            </defs>
+                        <ComposedChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#cbd5e1" strokeOpacity={0.1} vertical={false} />
                             <XAxis
                                 dataKey="date"
@@ -120,8 +117,14 @@ export function BalanceLineChart({ transactions, monthKey }: BalanceLineChartPro
                                     }
                                     return label;
                                 }}
-                                formatter={(value: number) => [formatBRL(value), 'Saldo']}
-                                cursor={{ stroke: '#8b5cf6', strokeWidth: 1, strokeDasharray: '4 4' }}
+                                formatter={(value: number, name) => {
+                                    const label =
+                                        name === 'income'
+                                            ? 'Entradas'
+                                            : 'Saidas';
+                                    return [formatBRL(value), label];
+                                }}
+                                cursor={{ stroke: '#64748b', strokeWidth: 1, strokeDasharray: '4 4' }}
                                 contentStyle={{
                                     backgroundColor: 'rgba(15, 23, 42, 0.9)',
                                     backdropFilter: 'blur(10px)',
@@ -131,18 +134,23 @@ export function BalanceLineChart({ transactions, monthKey }: BalanceLineChartPro
                                     fontWeight: 500,
                                     boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.3)'
                                 }}
-                                itemStyle={{ color: '#a855f7', fontWeight: 700 }}
+                                itemStyle={{ color: '#e2e8f0', fontWeight: 700 }}
                             />
-                            <Area
-                                type="monotone"
-                                dataKey="balance"
-                                stroke="#a855f7"
-                                strokeWidth={3}
-                                activeDot={{ r: 6, fill: '#cbd5e1', stroke: '#a855f7', strokeWidth: 3 }}
-                                fillOpacity={1}
-                                fill="url(#colorBalance)"
+                            <Bar
+                                dataKey="income"
+                                name="Entradas"
+                                fill="#10b981"
+                                radius={[6, 6, 0, 0]}
+                                maxBarSize={18}
                             />
-                        </AreaChart>
+                            <Bar
+                                dataKey="expense"
+                                name="Saidas"
+                                fill="#f43f5e"
+                                radius={[6, 6, 0, 0]}
+                                maxBarSize={18}
+                            />
+                        </ComposedChart>
                     </ResponsiveContainer>
                 </div>
             )}

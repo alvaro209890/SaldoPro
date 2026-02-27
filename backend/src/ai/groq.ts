@@ -45,11 +45,25 @@ export interface AIActionAddRecurring {
   endDate?: string | null;
 }
 
+export interface AIActionAddReminder {
+  action: 'add_reminder';
+  title: string;
+  amount: number;
+  dueDate: string;
+  reminderType: 'payable' | 'receivable';
+}
+
 export interface AIActionNone {
   action: 'none';
 }
 
-export type AIAction = AIActionAdd | AIActionUpdate | AIActionDelete | AIActionAddRecurring | AIActionNone;
+export type AIAction =
+  | AIActionAdd
+  | AIActionUpdate
+  | AIActionDelete
+  | AIActionAddRecurring
+  | AIActionAddReminder
+  | AIActionNone;
 
 export interface GroqAssistantResult {
   reply: string;
@@ -154,7 +168,7 @@ function isQueryOnlyIntent(messages: GroqChatMessage[], context: UserFinancialCo
   if (!text) return false;
 
   // Action verbs → needs full prompt
-  if (/\b(gastei|paguei|comprei|recebi|ganhei|registr|lanca|adiciona|coloca|bota|paga|gasta|receb|todo mes|toda semana|mensal|semanal|anual|edita|altera|muda|exclui|delet|apaga|remove)\b/.test(text)) {
+  if (/\b(gastei|paguei|comprei|recebi|ganhei|registr|lanca|adiciona|coloca|bota|paga|gasta|receb|todo mes|toda semana|mensal|semanal|anual|edita|altera|muda|exclui|delet|apaga|remove|lembrete|lembrar|lembra|vencimento)\b/.test(text)) {
     return false;
   }
 
@@ -332,6 +346,9 @@ COMPREENSAO DE LINGUAGEM NATURAL
   - "gasto 50 por semana no transporte" = add_recurring_transaction, frequency "weekly"
   - "recebo 3000 de salario mensalmente" = add_recurring_transaction, frequency "monthly"
   - "pago 1200 de seguro por ano" = add_recurring_transaction, frequency "yearly"
+- LEMBRETES: quando o usuario pedir para lembrar de pagar/receber algo no futuro, use "add_reminder":
+  - Exemplos: "me lembre de pagar aluguel dia 10", "cria um lembrete de receber 500 dia 20"
+  - Campos: title (descricao curta), amount (numero > 0), dueDate (YYYY-MM-DD), reminderType ("payable" para pagar, "receivable" para receber)
 
 REGRAS DE RESUMO DE CAPACIDADES
 - ${summaryInstruction}
@@ -341,6 +358,7 @@ REGRAS DE RESUMO DE CAPACIDADES
 QUANDO RESUMIR CAPACIDADES, PRIORIZE ESTES ITENS
 - Registrar despesas e receitas por texto.
 - Criar transacoes recorrentes (mensal, semanal, anual) para gastos fixos.
+- Criar lembretes de contas a pagar e a receber com vencimento.
 - Ler comprovante/recibo em imagem e sugerir ou registrar lancamento.
 - Mostrar resumo do mes (receitas, despesas e saldo).
 - Ajudar no controle de orcamento e alertar excesso de gastos.
@@ -355,15 +373,17 @@ REGRAS TECNICAS (OBRIGATORIO)
 2) Nao escreva nada antes nem depois do JSON. A resposta inteira deve ser o JSON.
 3) Para registrar gasto/receita unico: use "add_transaction". Quando o usuario usa verbos de acao no passado (gastei, paguei, comprei, recebi, ganhei) com valor, REGISTRE AUTOMATICAMENTE sem perguntar.
 4) Para registrar gasto/receita recorrente (todo mes, semanal, etc.): use "add_recurring_transaction" com o campo "frequency".
-5) Para conversas gerais, duvidas, orientacoes e informacoes: use {"action":"none"}.
-6) Se faltar o VALOR (nao a categoria ou data), pergunte no "reply" e use action none. Se faltar categoria, escolha a mais adequada. Se faltar data, use hoje.
-7) NUNCA registre transacao quando o usuario usa frases descritivas/informativas ('minhas despesas sao', 'meu gasto mensal e', 'tenho de conta').
-8) Se o usuario citar MULTIPLAS transacoes na mesma mensagem, adicione MULTIPLOS objetos em "actionObjects", na mesma ordem em que aparecem.
+5) Para criar lembrete de pagar/receber: use "add_reminder".
+6) Para conversas gerais, duvidas, orientacoes e informacoes: use {"action":"none"}.
+7) Se faltar o VALOR (nao a categoria ou data), pergunte no "reply" e use action none. Se faltar categoria, escolha a mais adequada. Se faltar data, use hoje.
+8) NUNCA registre transacao quando o usuario usa frases descritivas/informativas ('minhas despesas sao', 'meu gasto mensal e', 'tenho de conta').
+9) Se o usuario citar MULTIPLAS transacoes na mesma mensagem, adicione MULTIPLOS objetos em "actionObjects", na mesma ordem em que aparecem.
 
 FORMATOS DE ACTIONOBJECT
 - {"action":"none"}
 - {"action":"add_transaction","type":"expense|income","amount":15.5,"description":"Lanche","categoryId":"id","date":"YYYY-MM-DD","paymentMethod":"pix|credit|debit|cash|transfer|boleto"}
 - {"action":"add_recurring_transaction","type":"expense|income","amount":500,"description":"Aluguel","categoryId":"id","date":"YYYY-MM-DD","paymentMethod":"pix","frequency":"weekly|monthly|yearly","endDate":null}
+- {"action":"add_reminder","title":"Pagar aluguel","amount":1200,"dueDate":"YYYY-MM-DD","reminderType":"payable|receivable"}
 - {"action":"update_transaction","id":"transaction_id","changes":{"amount":20}}
 - {"action":"delete_transaction","id":"transaction_id"}
 
@@ -479,6 +499,25 @@ function validateAction(raw: unknown): AIAction {
       paymentMethod: paymentMethod as PaymentMethod,
       frequency,
       endDate,
+    };
+  }
+
+  if (action === 'add_reminder') {
+    const title = typeof obj.title === 'string' ? obj.title.trim() : '';
+    const amount = Number(obj.amount);
+    const dueDate = typeof obj.dueDate === 'string' ? obj.dueDate : '';
+    const reminderType = obj.reminderType;
+
+    if (!title) return { action: 'none' };
+    if (!Number.isFinite(amount) || amount <= 0) return { action: 'none' };
+    if (reminderType !== 'payable' && reminderType !== 'receivable') return { action: 'none' };
+
+    return {
+      action: 'add_reminder',
+      title,
+      amount,
+      dueDate,
+      reminderType
     };
   }
 
@@ -610,6 +649,106 @@ function stripVisionContradictions(reply: string): string {
     return 'Comprovante analisado. Extrai os dados e vou registrar para voce.';
   }
   return reply;
+}
+
+interface ParsedDataUrl {
+  mimeType: string;
+  dataBase64: string;
+}
+
+const GROQ_AUDIO_TRANSCRIPTION_MODELS = [
+  'whisper-large-v3-turbo',
+  'whisper-large-v3'
+] as const;
+
+function parseDataUrl(input: string): ParsedDataUrl | null {
+  if (!input.startsWith('data:')) return null;
+  const commaIndex = input.indexOf(',');
+  if (commaIndex <= 5) return null;
+
+  const meta = input.slice(5, commaIndex).trim();
+  const payload = input.slice(commaIndex + 1).trim();
+  if (!meta || !payload) return null;
+
+  const parts = meta.split(';').map((part) => part.trim()).filter(Boolean);
+  const mimeType = parts[0] || '';
+  if (!mimeType) return null;
+
+  return { mimeType, dataBase64: payload };
+}
+
+function normalizeAudioMimeType(mimeType: string): string {
+  const base = mimeType.split(';')[0].trim().toLowerCase();
+  if (!base) return 'audio/ogg';
+  if (base === 'audio/opus') return 'audio/ogg';
+  if (base.includes('ogg')) return 'audio/ogg';
+  if (base.includes('mpeg') || base.includes('mp3')) return 'audio/mpeg';
+  if (base.includes('wav')) return 'audio/wav';
+  if (base.includes('webm')) return 'audio/webm';
+  if (base.includes('flac')) return 'audio/flac';
+  if (base.includes('mp4') || base.includes('m4a') || base.includes('aac')) return 'audio/mp4';
+  return 'audio/ogg';
+}
+
+async function transcribeAudioWithGroqModel(
+  audioDataUrl: string,
+  modelId: typeof GROQ_AUDIO_TRANSCRIPTION_MODELS[number]
+): Promise<string | null> {
+  const parsed = parseDataUrl(audioDataUrl);
+  if (!parsed) return null;
+
+  const mimeType = normalizeAudioMimeType(parsed.mimeType);
+  const buffer = Buffer.from(parsed.dataBase64, 'base64');
+  if (!buffer || buffer.length === 0) return null;
+
+  const formData = new FormData();
+  formData.append('file', new Blob([buffer], { type: mimeType }), `audio.${mimeType.split('/')[1] || 'ogg'}`);
+  formData.append('model', modelId);
+
+  const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.groqApiKey}`
+    },
+    body: formData
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Groq transcription failed: ${response.status} ${detail.slice(0, 300)}`);
+  }
+
+  const data = (await response.json()) as { text?: string };
+  const text = (data.text ?? '').trim();
+  return text.length > 0 ? text : null;
+}
+
+async function transcribeAudioWithGroqFallbackChain(
+  audioDataUrl: string
+): Promise<{ transcript: string; modelId: typeof GROQ_AUDIO_TRANSCRIPTION_MODELS[number] } | null> {
+  let lastError: unknown = null;
+
+  for (const modelId of GROQ_AUDIO_TRANSCRIPTION_MODELS) {
+    try {
+      logger.info('Trying Groq audio transcription model', { modelId });
+      const transcript = await transcribeAudioWithGroqModel(audioDataUrl, modelId);
+      if (transcript) {
+        return { transcript, modelId };
+      }
+    } catch (error) {
+      lastError = error;
+      logger.warn('Groq audio transcription model failed', {
+        modelId,
+        error: error instanceof Error ? error.message : 'unknown'
+      });
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+
+  return null;
 }
 
 function buildVisionFallbackResult(content: string): GroqAssistantResult {
@@ -760,12 +899,39 @@ export async function queryGroqAssistant(
   const isVisionRequest = Boolean(lastMessage?.imageDataUrl);
   const isAudioRequest = Boolean(lastMessage?.audioDataUrl);
 
-  // --- AUDIO REQUESTS: Fast-path to Gemini (Groq does not support conversational audio) ---
+  // --- AUDIO REQUESTS: Primary Groq transcription chain, Gemini as final fallback ---
   if (isAudioRequest) {
-    if (!env.geminiApiKey) {
-      throw new Error('Transcricao e analise de audio indisponivel. Configure a chave do Gemini.');
+    if (!lastMessage?.audioDataUrl) {
+      throw new Error('Audio recebido sem payload valido.');
     }
-    logger.info('Audio request detected, bypassing Groq and routing directly to Gemini.');
+
+    try {
+      const transcription = await transcribeAudioWithGroqFallbackChain(lastMessage.audioDataUrl);
+      if (transcription?.transcript) {
+        logger.info('Audio transcribed successfully with Groq model chain', {
+          modelId: transcription.modelId,
+          transcriptLength: transcription.transcript.length
+        });
+
+        const rewrittenMessages = [...messages];
+        rewrittenMessages[rewrittenMessages.length - 1] = {
+          ...lastMessage,
+          content: transcription.transcript,
+          audioDataUrl: undefined
+        };
+
+        return queryGroqAssistant(rewrittenMessages, context);
+      }
+    } catch (error) {
+      logger.warn('Groq audio transcription chain failed, trying Gemini fallback', {
+        error: error instanceof Error ? error.message : 'unknown'
+      });
+    }
+
+    if (!env.geminiApiKey) {
+      throw new Error('Nao foi possivel transcrever o audio com Whisper. Configure GEMINI_API_KEY para fallback.');
+    }
+
     return queryGeminiAssistant(messages, context);
   }
 
@@ -891,16 +1057,21 @@ async function queryGeminiAssistant(
 
     if (msg.imageDataUrl) {
       // Extract base64 and mime type from data URL
-      const match = msg.imageDataUrl.match(/^data:(.+?);base64,(.+)$/);
-      if (match) {
-        parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+      const parsed = parseDataUrl(msg.imageDataUrl);
+      if (parsed) {
+        parts.push({ inlineData: { mimeType: parsed.mimeType.split(';')[0].trim(), data: parsed.dataBase64 } });
       }
     }
 
     if (msg.audioDataUrl) {
-      const match = msg.audioDataUrl.match(/^data:(.+?);base64,(.+)$/);
-      if (match) {
-        parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+      const parsed = parseDataUrl(msg.audioDataUrl);
+      if (parsed) {
+        parts.push({
+          inlineData: {
+            mimeType: normalizeAudioMimeType(parsed.mimeType),
+            data: parsed.dataBase64
+          }
+        });
       }
     }
 

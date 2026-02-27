@@ -1,5 +1,6 @@
 ﻿import { env } from '../config/env';
 import {
+  addUserReminder,
   addUserTransaction,
   deleteUserTransaction,
   getUserTransactionById,
@@ -12,6 +13,7 @@ import {
   addRecurringTransaction as addRecurringTransactionDb,
   deleteRecurringTransaction as deleteRecurringTransactionDb,
   generateOverdueRecurringTransactions,
+  type CreateReminderInput,
   type CreateTransactionInput,
   type CreateRecurringTransactionInput,
   type UserCategory,
@@ -180,10 +182,20 @@ interface AddedRecurringTransactionReceipt {
   recordedAt: string;
 }
 
+interface AddedReminderReceipt {
+  reminderId: string;
+  title: string;
+  amount: number;
+  dueDate: string;
+  reminderType: 'payable' | 'receivable';
+  recordedAt: string;
+}
+
 type ActionExecutionResult =
   | { kind: 'none' }
   | { kind: 'added'; receipt: AddedTransactionReceipt }
   | { kind: 'added_recurring'; receipt: AddedRecurringTransactionReceipt }
+  | { kind: 'added_reminder'; receipt: AddedReminderReceipt }
   | { kind: 'updated'; receipt: UpdatedTransactionReceipt }
   | { kind: 'deleted'; receipt: DeletedTransactionReceipt }
   | { kind: 'error'; message: string };
@@ -246,6 +258,10 @@ function paymentMethodLabel(value: PaymentMethod): string {
 function frequencyLabel(freq: 'weekly' | 'monthly' | 'yearly'): string {
   const labels = { weekly: 'Semanal', monthly: 'Mensal', yearly: 'Anual' };
   return labels[freq] ?? freq;
+}
+
+function reminderTypeLabel(value: 'payable' | 'receivable'): string {
+  return value === 'payable' ? 'A pagar' : 'A receber';
 }
 
 function transactionTypeLabel(value: 'income' | 'expense'): string {
@@ -379,6 +395,27 @@ function buildAddedRecurringTransactionMessage(
   return lines.join('\n');
 }
 
+function buildAddedReminderMessage(
+  receipt: AddedReminderReceipt,
+  aiReply: string,
+  currency: string
+): string {
+  const lines = [
+    `⏰ *Lembrete criado*`,
+    '',
+    `*${receipt.title}*`,
+    `${reminderTypeLabel(receipt.reminderType)} | ${formatCurrency(receipt.amount, currency)} | ${formatDateBRFromYmd(receipt.dueDate)}`
+  ];
+
+  const cleanAiReply = aiReply.trim();
+  if (cleanAiReply.length > 0) {
+    lines.push('', cleanAiReply);
+  }
+
+  lines.push('', 'Se quiser ajustar valor, data ou descrição do lembrete, é só me pedir.');
+  return lines.join('\n');
+}
+
 function buildMultiActionMessage(
   results: ActionExecutionResult[],
   aiReply: string,
@@ -399,6 +436,13 @@ function buildMultiActionMessage(
     if (result.kind === 'added_recurring') {
       lines.push(
         `- ${transactionTypeLabel(result.receipt.type)} recorrente: ${formatCurrency(result.receipt.amount, currency)} - ${result.receipt.description} (${frequencyLabel(result.receipt.frequency)})`
+      );
+      continue;
+    }
+
+    if (result.kind === 'added_reminder') {
+      lines.push(
+        `- Lembrete: ${result.receipt.title} - ${formatCurrency(result.receipt.amount, currency)} (${reminderTypeLabel(result.receipt.reminderType)}) para ${formatDateBRFromYmd(result.receipt.dueDate)}`
       );
       continue;
     }
@@ -524,6 +568,11 @@ export async function processWhatsAppAIMessage(
 
     if (actionResult.kind === 'added_recurring') {
       return buildAddedRecurringTransactionMessage(actionResult.receipt, ai.reply, settings.currency)
+        .slice(0, env.maxMessageLength);
+    }
+
+    if (actionResult.kind === 'added_reminder') {
+      return buildAddedReminderMessage(actionResult.receipt, ai.reply, settings.currency)
         .slice(0, env.maxMessageLength);
     }
 
@@ -743,9 +792,37 @@ async function executeAction(
         },
       };
     }
+
+    if (action.action === 'add_reminder') {
+      if (!Number.isFinite(action.amount) || action.amount <= 0) {
+        return { kind: 'none' };
+      }
+
+      const payload: CreateReminderInput = {
+        title: (action.title || 'Lembrete via WhatsApp').toString().slice(0, 120),
+        amount: Number(action.amount),
+        dueDate: normalizeDate(action.dueDate),
+        type: action.reminderType,
+        status: 'pending'
+      };
+
+      const reminderId = await addUserReminder(uid, payload);
+
+      return {
+        kind: 'added_reminder',
+        receipt: {
+          reminderId,
+          title: payload.title,
+          amount: payload.amount,
+          dueDate: payload.dueDate,
+          reminderType: payload.type,
+          recordedAt: new Date().toISOString()
+        }
+      };
+    }
   } catch (error) {
     logger.error('Failed executing AI financial action', error);
-    return { kind: 'error', message: 'Ocorreu um erro ao salvar a transacao.' };
+    return { kind: 'error', message: 'Ocorreu um erro ao salvar a acao solicitada.' };
   }
 
   return { kind: 'none' };
