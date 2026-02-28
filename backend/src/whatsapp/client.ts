@@ -200,6 +200,7 @@ export class WhatsAppClient {
         this.socket.ev.removeAllListeners('connection.update');
         this.socket.ev.removeAllListeners('creds.update');
         this.socket.ev.removeAllListeners('messages.upsert');
+        this.socket.ev.removeAllListeners('messaging-history.set');
         this.socket.ev.removeAllListeners('chats.phoneNumberShare');
         this.socket.ev.removeAllListeners('contacts.upsert');
         this.socket.ev.removeAllListeners('contacts.update');
@@ -294,6 +295,7 @@ export class WhatsAppClient {
         this.socket.ev.removeAllListeners('connection.update');
         this.socket.ev.removeAllListeners('creds.update');
         this.socket.ev.removeAllListeners('messages.upsert');
+        this.socket.ev.removeAllListeners('messaging-history.set');
         this.socket.ev.removeAllListeners('chats.phoneNumberShare');
         this.socket.ev.removeAllListeners('contacts.upsert');
         this.socket.ev.removeAllListeners('contacts.update');
@@ -329,6 +331,7 @@ export class WhatsAppClient {
         this.socket.ev.removeAllListeners('connection.update');
         this.socket.ev.removeAllListeners('creds.update');
         this.socket.ev.removeAllListeners('messages.upsert');
+        this.socket.ev.removeAllListeners('messaging-history.set');
         this.socket.ev.removeAllListeners('chats.phoneNumberShare');
         this.socket.ev.removeAllListeners('contacts.upsert');
         this.socket.ev.removeAllListeners('contacts.update');
@@ -393,6 +396,17 @@ export class WhatsAppClient {
     socket.ev.on('contacts.update', (contacts) => {
       if (this.connectionEpoch !== epoch) return;
       this.absorbContactLidMappings(contacts, 'contacts_update');
+    });
+    // messaging-history.set carries contacts from history sync — main source of LID→phone mappings
+    socket.ev.on('messaging-history.set', (history) => {
+      if (this.connectionEpoch !== epoch) return;
+      if (history.contacts && history.contacts.length > 0) {
+        logger.info('HISTORY_SYNC: received contacts with potential LID mappings', {
+          slotId: this.slotId,
+          contactCount: history.contacts.length
+        });
+        this.absorbContactLidMappings(history.contacts, 'contacts_upsert');
+      }
     });
 
     logger.info('WhatsApp socket initialized', { slotId: this.slotId, displayName: this.displayName, epoch });
@@ -1170,6 +1184,7 @@ export class WhatsAppClient {
           this.socket.ev.removeAllListeners('connection.update');
           this.socket.ev.removeAllListeners('creds.update');
           this.socket.ev.removeAllListeners('messages.upsert');
+          this.socket.ev.removeAllListeners('messaging-history.set');
           this.socket.ev.removeAllListeners('chats.phoneNumberShare');
           this.socket.ev.removeAllListeners('contacts.upsert');
           this.socket.ev.removeAllListeners('contacts.update');
@@ -1510,18 +1525,47 @@ export class WhatsAppClient {
     contacts: Array<{ id?: string | null; lid?: string | null }>,
     source: 'contacts_upsert' | 'contacts_update'
   ): void {
+    let mappedCount = 0;
     for (const contact of contacts) {
       const contactId = contact.id ?? null;
       const lidRaw = contact.lid ?? null;
-      const lidJid = lidRaw
-        ? lidRaw.includes('@')
-          ? lidRaw
-          : `${lidRaw}@lid`
-        : contactId?.endsWith('@lid')
-          ? contactId
-          : null;
-      const phoneJid = contactId && !contactId.endsWith('@lid') ? contactId : null;
-      this.rememberLidMapping(lidJid, phoneJid, source);
+
+      // Determine which field is the LID and which is the phone JID.
+      // Baileys may provide:
+      //   Case A: id = "55...@s.whatsapp.net", lid = "123...@lid"  (most common)
+      //   Case B: id = "123...@lid",           lid = null          (LID-only contact)
+      //   Case C: id = "55...@s.whatsapp.net", lid = "123..."      (raw LID without @)
+      let lidJid: string | null = null;
+      let phoneJid: string | null = null;
+
+      // Parse the explicit lid field
+      if (lidRaw) {
+        lidJid = lidRaw.includes('@') ? lidRaw : `${lidRaw}@lid`;
+      }
+
+      // Parse the id field
+      if (contactId) {
+        if (contactId.endsWith('@lid')) {
+          // id is a LID — use it as lidJid if we don't have one from the lid field
+          if (!lidJid) lidJid = contactId;
+        } else if (contactId.endsWith('@s.whatsapp.net')) {
+          phoneJid = contactId;
+        }
+      }
+
+      if (lidJid && phoneJid) {
+        this.rememberLidMapping(lidJid, phoneJid, source);
+        mappedCount++;
+      }
+    }
+    if (mappedCount > 0) {
+      logger.info('LID_ABSORB: absorbed contact LID mappings', {
+        slotId: this.slotId,
+        source,
+        totalContacts: contacts.length,
+        mappedCount,
+        totalKnownMappings: this.lidToPhoneJid.size
+      });
     }
   }
 
@@ -1686,6 +1730,7 @@ export class WhatsAppClient {
         this.socket.ev.removeAllListeners('connection.update');
         this.socket.ev.removeAllListeners('creds.update');
         this.socket.ev.removeAllListeners('messages.upsert');
+        this.socket.ev.removeAllListeners('messaging-history.set');
         this.socket.ev.removeAllListeners('chats.phoneNumberShare');
         this.socket.ev.removeAllListeners('contacts.upsert');
         this.socket.ev.removeAllListeners('contacts.update');
