@@ -12,6 +12,7 @@ export interface WhatsAppSlotPageData {
 
 interface RenderWhatsAppPageInput {
   slots: WhatsAppSlotPageData[];
+  resetUrl?: string;
 }
 
 function escapeHtml(value: string): string {
@@ -93,9 +94,16 @@ function computeRefreshSec(slots: WhatsAppSlotPageData[]): number {
   return 3;
 }
 
-export function renderWhatsAppPage({ slots }: RenderWhatsAppPageInput): string {
+export function renderWhatsAppPage({ slots, resetUrl }: RenderWhatsAppPageInput): string {
   const refreshSec = computeRefreshSec(slots);
   const cards = slots.map((slot) => renderSlotCard(slot)).join('\n');
+
+  const resetButton = resetUrl
+    ? `
+  <form method="POST" action="${escapeHtml(resetUrl)}" onsubmit="return confirm('Desconectar todos os WhatsApps e gerar novo QR?')">
+    <button type="submit" class="reset-btn">Desconectar e gerar novo QR</button>
+  </form>`
+    : '';
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -204,6 +212,17 @@ export function renderWhatsAppPage({ slots }: RenderWhatsAppPageInput): string {
       color: #64748b;
       margin-top: 4px;
     }
+    .reset-btn {
+      background: #7f1d1d;
+      color: #fecaca;
+      border: 1px solid #991b1b;
+      border-radius: 8px;
+      padding: 8px 18px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .reset-btn:hover { background: #991b1b; }
   </style>
 </head>
 <body>
@@ -211,6 +230,7 @@ export function renderWhatsAppPage({ slots }: RenderWhatsAppPageInput): string {
   <section class="cards">
     ${cards}
   </section>
+  ${resetButton}
   <footer>Atualiza automaticamente</footer>
 </body>
 </html>`;
