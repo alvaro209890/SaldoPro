@@ -1100,6 +1100,18 @@ export class WhatsAppClient {
           ownerUid,
           textLength: text.length
         });
+        // Force fresh Signal sessions with all recipient devices before sending.
+        // This prevents "Aguardando mensagem" errors caused by stale/corrupted
+        // Signal session keys that the recipient's mobile device can't decrypt.
+        try {
+          await this.socket.assertSessions([jid], true);
+        } catch (sessionError) {
+          logger.warn('MSG_SEND: assertSessions failed (continuing anyway)', {
+            slotId: this.slotId,
+            jid,
+            error: sessionError instanceof Error ? sessionError.message : 'unknown'
+          });
+        }
         const response = await this.socket.sendMessage(jid, { text });
         const messageId = response?.key?.id ?? `generated_${Date.now()}`;
         const now = new Date().toISOString();
