@@ -409,6 +409,30 @@ export class WhatsAppClient {
       }
     });
 
+    // CRITICAL: Hook into raw WebSocket stanzas to capture sender_pn from node attributes.
+    // Baileys has sender_pn in node.attrs for LID messages, but does NOT propagate it
+    // to the messages.upsert event proto. We intercept it here BEFORE Baileys processes
+    // the message asynchronously, so the LID→phone mapping is ready when our handler fires.
+    const ws = socket.ws as { on?: (event: string, listener: (...args: unknown[]) => void) => void };
+    if (ws && typeof ws.on === 'function') {
+      ws.on('CB:message', (node: unknown) => {
+        if (this.connectionEpoch !== epoch) return;
+        const attrs = (node as { attrs?: Record<string, string> })?.attrs;
+        if (!attrs) return;
+        const from = attrs.from;
+        const senderPn = attrs.sender_pn;
+        if (from && from.endsWith('@lid') && senderPn && senderPn.includes('@s.whatsapp.net')) {
+          this.rememberLidMapping(from, senderPn, 'message_candidate');
+          logger.info('CB_MESSAGE_SENDER_PN: extracted phone from raw node', {
+            slotId: this.slotId,
+            lidJid: from,
+            senderPn
+          });
+        }
+      });
+      logger.info('Raw CB:message listener registered for sender_pn extraction', { slotId: this.slotId });
+    }
+
     logger.info('WhatsApp socket initialized', { slotId: this.slotId, displayName: this.displayName, epoch });
   }
 
@@ -634,15 +658,30 @@ export class WhatsAppClient {
       return;
     }
 
-    // Also handle non-LID messages with empty payload (Bad MAC without LID)
+    // Handle messages with empty payload — likely PreKeyError or Bad MAC decryption failure.
+    // If we resolved the phone JID (LID was mapped), clear the corrupted Signal session
+    // for the LID to allow a fresh key exchange on the next message attempt.
     if (!message.message) {
       this.rememberInbound(messageId);
-      logger.warn('MSG_SKIP: empty message payload (likely decryption failure)', {
-        slotId: this.slotId,
-        messageId,
-        remoteJid,
-        fromMe: Boolean(key.fromMe)
-      });
+      // Check if this message was originally from a LID (raw remoteJid is @lid)
+      // and we resolved it to a phone JID. If so, the Signal session for the LID
+      // is corrupted (PreKeyError) and needs to be cleared.
+      if (rawRemoteJid && rawRemoteJid.endsWith('@lid') && !remoteJid.endsWith('@lid')) {
+        logger.warn('MSG_PREKEY_CLEAR: empty payload from resolved LID, clearing Signal session', {
+          slotId: this.slotId,
+          messageId,
+          remoteJid,
+          rawRemoteJid
+        });
+        await this.clearSignalSessionsAfterBadMac(message);
+      } else {
+        logger.warn('MSG_SKIP: empty message payload (likely decryption failure)', {
+          slotId: this.slotId,
+          messageId,
+          remoteJid,
+          fromMe: Boolean(key.fromMe)
+        });
+      }
       return;
     }
 
