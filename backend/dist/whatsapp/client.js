@@ -488,14 +488,33 @@ class WhatsAppClient {
             return;
         if (this.alreadyProcessedInbound(messageId))
             return;
+        const rawRemoteJid = key.remoteJid ?? '';
         const remoteJid = this.resolveIncomingRemoteJid(key);
         if (!remoteJid || (0, events_1.isStatusJid)(remoteJid) || (0, events_1.isGroupJid)(remoteJid))
             return;
+        const remotePhone = (0, events_1.jidToPhone)(remoteJid);
+        const replyJid = rawRemoteJid && rawRemoteJid.endsWith('@lid') && !(0, events_1.isStatusJid)(rawRemoteJid) && !(0, events_1.isGroupJid)(rawRemoteJid)
+            ? rawRemoteJid
+            : remoteJid;
+        if (this.phone && remotePhone === this.phone) {
+            this.rememberInbound(messageId);
+            logger_1.logger.info('MSG_SKIP: own-number chat ignored', {
+                slotId: this.slotId,
+                messageId,
+                remoteJid,
+                rawRemoteJid,
+                remotePhone,
+                selfPhone: this.phone
+            });
+            return;
+        }
         if (key.fromMe) {
+            this.rememberInbound(messageId);
             logger_1.logger.info('MSG_SKIP: fromMe message ignored', {
                 slotId: this.slotId,
                 messageId,
-                remoteJid
+                remoteJid,
+                rawRemoteJid
             });
             return;
         }
@@ -506,6 +525,7 @@ class WhatsAppClient {
                 slotId: this.slotId,
                 messageId,
                 remoteJid,
+                rawRemoteJid,
                 fromMe: Boolean(key.fromMe),
                 pendingCount: this.pendingLidMessages.get(remoteJid)?.length ?? 0
             });
@@ -537,11 +557,12 @@ class WhatsAppClient {
             });
             return;
         }
-        const remotePhone = (0, events_1.jidToPhone)(remoteJid);
         logger_1.logger.info('MSG_RECV: new inbound message', {
             messageId,
             from: remotePhone,
             fromMe: Boolean(key.fromMe),
+            rawRemoteJid,
+            replyJid,
             rawType: (0, events_1.extractRawType)(message),
             textPreview: (0, events_1.extractMessageText)(message).slice(0, 50)
         });
@@ -671,7 +692,7 @@ class WhatsAppClient {
             hasImage: Boolean(imageDataUrl),
             hasAudio: Boolean(audioDataUrl)
         });
-        await this.sendSmartReply(binding.uid, remoteJid, remotePhone, conversationText, imageDataUrl, audioDataUrl);
+        await this.sendSmartReply(binding.uid, replyJid, remotePhone, conversationText, imageDataUrl, audioDataUrl);
     }
     async sendSmartReply(ownerUid, remoteJid, remotePhone, inboundText, imageDataUrl, audioDataUrl = null) {
         const hasAiInput = inboundText.trim().length > 0 || Boolean(imageDataUrl) || Boolean(audioDataUrl);
@@ -888,6 +909,13 @@ class WhatsAppClient {
         let lastError;
         for (let attempt = 1; attempt <= 2; attempt += 1) {
             try {
+                logger_1.logger.info('MSG_SEND: attempting WhatsApp send', {
+                    slotId: this.slotId,
+                    attempt,
+                    jid,
+                    ownerUid,
+                    textLength: text.length
+                });
                 const response = await this.socket.sendMessage(jid, { text });
                 const messageId = response?.key?.id ?? `generated_${Date.now()}`;
                 const now = new Date().toISOString();
@@ -912,6 +940,12 @@ class WhatsAppClient {
                 if (ownerUid) {
                     await (0, firestore_1.saveMessageSafe)(sentRecord);
                 }
+                logger_1.logger.info('MSG_SEND_OK: WhatsApp send succeeded', {
+                    slotId: this.slotId,
+                    jid,
+                    ownerUid,
+                    messageId
+                });
                 return { messageId };
             }
             catch (error) {
