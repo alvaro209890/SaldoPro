@@ -410,9 +410,8 @@ export class WhatsAppClient {
     });
 
     // CRITICAL: Hook into raw WebSocket stanzas to capture sender_pn from node attributes.
-    // Baileys has sender_pn in node.attrs for LID messages, but does NOT propagate it
-    // to the messages.upsert event proto. We intercept it here BEFORE Baileys processes
-    // the message asynchronously, so the LID→phone mapping is ready when our handler fires.
+    // Baileys has sender_pn in retry receipt nodes but may also include it in some
+    // initial message nodes. We intercept it BEFORE Baileys processes the message.
     const ws = socket.ws as { on?: (event: string, listener: (...args: unknown[]) => void) => void };
     if (ws && typeof ws.on === 'function') {
       ws.on('CB:message', (node: unknown) => {
@@ -428,9 +427,31 @@ export class WhatsAppClient {
             lidJid: from,
             senderPn
           });
+        } else if (from && from.endsWith('@lid') && !senderPn) {
+          logger.info('CB_MESSAGE_NO_SENDER_PN: LID message without sender_pn', {
+            slotId: this.slotId,
+            lidJid: from,
+            availableAttrs: Object.keys(attrs).join(',')
+          });
         }
       });
-      logger.info('Raw CB:message listener registered for sender_pn extraction', { slotId: this.slotId });
+      // Also listen for CB:receipt which carries sender_pn in retry receipts
+      ws.on('CB:receipt', (node: unknown) => {
+        if (this.connectionEpoch !== epoch) return;
+        const attrs = (node as { attrs?: Record<string, string> })?.attrs;
+        if (!attrs) return;
+        const from = attrs.from;
+        const senderPn = attrs.sender_pn;
+        if (from && from.endsWith('@lid') && senderPn && senderPn.includes('@s.whatsapp.net')) {
+          this.rememberLidMapping(from, senderPn, 'message_candidate');
+          logger.info('CB_RECEIPT_SENDER_PN: extracted phone from receipt node', {
+            slotId: this.slotId,
+            lidJid: from,
+            senderPn
+          });
+        }
+      });
+      logger.info('Raw CB:message/CB:receipt listeners registered for sender_pn extraction', { slotId: this.slotId });
     }
 
     logger.info('WhatsApp socket initialized', { slotId: this.slotId, displayName: this.displayName, epoch });
@@ -637,8 +658,8 @@ export class WhatsAppClient {
         fromMe: Boolean(key.fromMe),
         pendingCount: this.pendingLidMessages.get(remoteJid)?.length ?? 0
       });
-      // Actively request phone number for this LID to speed up resolution
-      this.requestPhoneForLidJid(remoteJid);
+      // Use multiple strategies to resolve the LID to a phone number
+      this.requestPhoneForLidJid(remoteJid, message);
       return;
     }
 
@@ -1666,26 +1687,76 @@ export class WhatsAppClient {
 
   /**
    * Actively request phone number resolution for an unresolved LID JID.
-   * Sending a presence update to the LID can trigger WhatsApp to emit
-   * `chats.phoneNumberShare` or `contacts.upsert` events with the phone mapping.
+   * Uses multiple strategies:
+   * 1. presenceSubscribe — subscribing to the LID's presence can trigger contacts.upsert
+   * 2. readMessages — reading the message triggers Baileys' retry mechanism where sender_pn
+   *    appears in the retry receipt node attributes
+   * 3. fetchStatus — fetching status may trigger contact resolution events
+   * 4. Delayed retry — re-check the mapping after a delay
    */
-  private requestPhoneForLidJid(lidJid: string): void {
+  private requestPhoneForLidJid(lidJid: string, message?: proto.IWebMessageInfo): void {
     if (!this.socket || this.lidToPhoneJid.has(lidJid)) return;
 
     const socket = this.socket;
+    const slotId = this.slotId;
     void (async () => {
+      // Strategy 1: Subscribe to presence — may trigger contacts.upsert with LID→phone
       try {
-        await socket.sendPresenceUpdate('available', lidJid);
-        logger.info('LID_RESOLVE_REQUEST: sent presence to trigger phone mapping', {
-          slotId: this.slotId,
-          lidJid
-        });
+        await socket.presenceSubscribe(lidJid);
+        logger.info('LID_RESOLVE_SUBSCRIBE: subscribed to LID presence', { slotId, lidJid });
       } catch (error) {
-        logger.warn('LID_RESOLVE_REQUEST: presence update failed (best-effort)', {
-          slotId: this.slotId,
+        logger.warn('LID_RESOLVE_SUBSCRIBE: failed (best-effort)', {
+          slotId,
           lidJid,
           error: error instanceof Error ? error.message : 'unknown'
         });
+      }
+
+      // Strategy 2: Read/acknowledge the message — triggers Baileys retry mechanism
+      // which reveals sender_pn in the retry receipt (captured by our CB:receipt hook)
+      if (message?.key) {
+        try {
+          await socket.readMessages([message.key]);
+          logger.info('LID_RESOLVE_READ: sent read receipt to trigger retry with sender_pn', { slotId, lidJid });
+        } catch (error) {
+          logger.warn('LID_RESOLVE_READ: failed (best-effort)', {
+            slotId,
+            lidJid,
+            error: error instanceof Error ? error.message : 'unknown'
+          });
+        }
+      }
+
+      // Strategy 3: Fetch status — may trigger contact events
+      try {
+        await socket.fetchStatus(lidJid);
+        logger.info('LID_RESOLVE_STATUS: fetched status for LID', { slotId, lidJid });
+      } catch (error) {
+        logger.warn('LID_RESOLVE_STATUS: failed (best-effort)', {
+          slotId,
+          lidJid,
+          error: error instanceof Error ? error.message : 'unknown'
+        });
+      }
+
+      // Strategy 4: Delayed retry — check if the mapping arrived after 5 seconds
+      await sleep(5000);
+      if (this.lidToPhoneJid.has(lidJid)) {
+        logger.info('LID_RESOLVE_DELAYED: mapping resolved, triggering replay', { slotId, lidJid });
+        this.replayBufferedLidMessages(lidJid);
+      } else {
+        // Try again after 15 seconds total
+        await sleep(10_000);
+        if (this.lidToPhoneJid.has(lidJid)) {
+          logger.info('LID_RESOLVE_DELAYED_2: mapping resolved on second check', { slotId, lidJid });
+          this.replayBufferedLidMessages(lidJid);
+        } else {
+          logger.warn('LID_RESOLVE_FAILED: could not resolve LID after all strategies', {
+            slotId,
+            lidJid,
+            pendingCount: this.pendingLidMessages.get(lidJid)?.length ?? 0
+          });
+        }
       }
     })();
   }
