@@ -114,12 +114,12 @@ const MESSAGE_QUEUE_CONCURRENCY = 3;
 const COMPOSING_REFRESH_MS = 4000;
 /** If the same JID hits repeated Bad MAC in a short window, perform a soft reconnect. */
 const BAD_MAC_WINDOW_MS = 2 * 60 * 1000;
-const BAD_MAC_RECONNECT_THRESHOLD = 1;
+const BAD_MAC_RECONNECT_THRESHOLD = 3;
 /** After this many soft reconnects without success, escalate to full session reset. */
-const BAD_MAC_HARD_RESET_AFTER = 2;
+const BAD_MAC_HARD_RESET_AFTER = 3;
 /** How long to keep unresolvable-LID messages buffered before discarding. */
-const LID_BUFFER_TTL_MS = 30_000;
-const LID_BUFFER_MAX_PER_JID = 5;
+const LID_BUFFER_TTL_MS = 120_000;
+const LID_BUFFER_MAX_PER_JID = 15;
 /** Debounce for bursts of creds.update events. */
 const AUTH_SYNC_DEBOUNCE_MS = 1200;
 /** Minimum interval between persisted auth snapshots to reduce write volume. */
@@ -559,10 +559,10 @@ export class WhatsAppClient {
     const remoteJid = this.resolveIncomingRemoteJid(key);
     if (!remoteJid || isStatusJid(remoteJid) || isGroupJid(remoteJid)) return;
     const remotePhone = jidToPhone(remoteJid);
-    const replyJid =
-      rawRemoteJid && rawRemoteJid.endsWith('@lid') && !isStatusJid(rawRemoteJid) && !isGroupJid(rawRemoteJid)
-        ? rawRemoteJid
-        : remoteJid;
+    // ALWAYS reply using the phone-based JID (@s.whatsapp.net) to avoid
+    // "Waiting for this message" errors on the recipient's device.
+    // LID JIDs lack the Signal session keys needed for proper E2E delivery.
+    const replyJid = remoteJid;
 
     if (this.phone && remotePhone === this.phone) {
       this.rememberInbound(messageId);
@@ -599,6 +599,8 @@ export class WhatsAppClient {
         fromMe: Boolean(key.fromMe),
         pendingCount: this.pendingLidMessages.get(remoteJid)?.length ?? 0
       });
+      // Actively request phone number for this LID to speed up resolution
+      this.requestPhoneForLidJid(remoteJid);
       return;
     }
 
@@ -1577,6 +1579,32 @@ export class WhatsAppClient {
     for (const entry of validEntries) {
       this.enqueueMessage(entry.message);
     }
+  }
+
+  /**
+   * Actively request phone number resolution for an unresolved LID JID.
+   * Sending a presence update to the LID can trigger WhatsApp to emit
+   * `chats.phoneNumberShare` or `contacts.upsert` events with the phone mapping.
+   */
+  private requestPhoneForLidJid(lidJid: string): void {
+    if (!this.socket || this.lidToPhoneJid.has(lidJid)) return;
+
+    const socket = this.socket;
+    void (async () => {
+      try {
+        await socket.sendPresenceUpdate('available', lidJid);
+        logger.info('LID_RESOLVE_REQUEST: sent presence to trigger phone mapping', {
+          slotId: this.slotId,
+          lidJid
+        });
+      } catch (error) {
+        logger.warn('LID_RESOLVE_REQUEST: presence update failed (best-effort)', {
+          slotId: this.slotId,
+          lidJid,
+          error: error instanceof Error ? error.message : 'unknown'
+        });
+      }
+    })();
   }
 
   /**
