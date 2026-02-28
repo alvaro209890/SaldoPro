@@ -679,30 +679,21 @@ export class WhatsAppClient {
       return;
     }
 
-    // Handle messages with empty payload — likely PreKeyError or Bad MAC decryption failure.
-    // If we resolved the phone JID (LID was mapped), clear the corrupted Signal session
-    // for the LID to allow a fresh key exchange on the next message attempt.
+    // Handle messages with empty payload — likely Bad MAC or PreKeyError decryption failure.
+    // Do NOT clear Signal sessions here — Baileys' built-in retry mechanism will
+    // send retry receipts with pre-keys, allowing the sender to re-establish the session
+    // and re-send the message. Clearing sessions aggressively was counter-productive
+    // (caused "No session record" errors on all retries).
     if (!message.message) {
       this.rememberInbound(messageId);
-      // Check if this message was originally from a LID (raw remoteJid is @lid)
-      // and we resolved it to a phone JID. If so, the Signal session for the LID
-      // is corrupted (PreKeyError) and needs to be cleared.
-      if (rawRemoteJid && rawRemoteJid.endsWith('@lid') && !remoteJid.endsWith('@lid')) {
-        logger.warn('MSG_PREKEY_CLEAR: empty payload from resolved LID, clearing Signal session', {
-          slotId: this.slotId,
-          messageId,
-          remoteJid,
-          rawRemoteJid
-        });
-        await this.clearSignalSessionsAfterBadMac(message);
-      } else {
-        logger.warn('MSG_SKIP: empty message payload (likely decryption failure)', {
-          slotId: this.slotId,
-          messageId,
-          remoteJid,
-          fromMe: Boolean(key.fromMe)
-        });
-      }
+      logger.warn('MSG_SKIP: empty message payload (decrypt failure, awaiting Baileys retry)', {
+        slotId: this.slotId,
+        messageId,
+        remoteJid,
+        rawRemoteJid,
+        fromMe: Boolean(key.fromMe),
+        isFromLid: rawRemoteJid?.endsWith('@lid') ?? false
+      });
       return;
     }
 
