@@ -71,9 +71,15 @@ function computeRefreshSec(slots) {
     }
     return 3;
 }
-function renderWhatsAppPage({ slots }) {
+function renderWhatsAppPage({ slots, resetUrl }) {
     const refreshSec = computeRefreshSec(slots);
     const cards = slots.map((slot) => renderSlotCard(slot)).join('\n');
+    const resetButton = resetUrl
+        ? `
+  <form method="POST" action="${escapeHtml(resetUrl)}" onsubmit="return confirm('Desconectar todos os WhatsApps e gerar novo QR?')">
+    <button type="submit" class="reset-btn">Desconectar e gerar novo QR</button>
+  </form>`
+        : '';
     return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -181,6 +187,17 @@ function renderWhatsAppPage({ slots }) {
       color: #64748b;
       margin-top: 4px;
     }
+    .reset-btn {
+      background: #7f1d1d;
+      color: #fecaca;
+      border: 1px solid #991b1b;
+      border-radius: 8px;
+      padding: 8px 18px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .reset-btn:hover { background: #991b1b; }
   </style>
 </head>
 <body>
@@ -188,6 +205,7 @@ function renderWhatsAppPage({ slots }) {
   <section class="cards">
     ${cards}
   </section>
+  ${resetButton}
   <footer>Atualiza automaticamente</footer>
 </body>
 </html>`;

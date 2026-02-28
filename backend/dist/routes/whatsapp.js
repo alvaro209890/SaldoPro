@@ -41,8 +41,24 @@ function createWhatsAppRouter(manager) {
             return;
         }
         const slots = await buildSlotsPageData(manager);
+        const resetUrl = `/api/whatsapp/qr-page/reset?token=${encodeURIComponent(token)}`;
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        res.send((0, whatsapp_page_1.renderWhatsAppPage)({ slots }));
+        res.send((0, whatsapp_page_1.renderWhatsAppPage)({ slots, resetUrl }));
+    });
+    // Reset all WhatsApp sessions from the QR page (token-auth, no Bearer needed)
+    router.post('/qr-page/reset', async (req, res, next) => {
+        try {
+            const token = req.query.token?.trim() ?? '';
+            if (!token || token !== env_1.env.whatsappApiToken) {
+                res.status(401).send('Unauthorized');
+                return;
+            }
+            await manager.resetSession();
+            res.redirect(`/api/whatsapp/qr-page?token=${encodeURIComponent(token)}`);
+        }
+        catch (error) {
+            next(error);
+        }
     });
     router.use(auth_1.requireAuth);
     router.get('/status', (_req, res) => {

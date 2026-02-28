@@ -147,8 +147,6 @@ export class WhatsAppClient {
   private allowReconnect = true;
   private readonly processedInboundIds = new Set<string>();
   private readonly processedInboundOrder: string[] = [];
-  private readonly sentByBotIds = new Set<string>();
-  private readonly sentByBotOrder: string[] = [];
   private readonly conversationByPhone = new Map<string, ConversationEntry[]>();
   private readonly badMacByJid = new Map<string, { count: number; lastAt: number }>();
   private readonly lidToPhoneJid = new Map<string, string>();
@@ -489,7 +487,14 @@ export class WhatsAppClient {
     type: string;
     messages: proto.IWebMessageInfo[];
   }): Promise<void> {
-    if (upsert.type !== 'notify') return;
+    if (upsert.type !== 'notify' && upsert.type !== 'append') {
+      logger.info('MSG_UPSERT_SKIP: unsupported upsert type', {
+        slotId: this.slotId,
+        type: upsert.type,
+        count: upsert.messages.length
+      });
+      return;
+    }
 
     for (const message of upsert.messages) {
       this.enqueueMessage(message);
@@ -552,6 +557,15 @@ export class WhatsAppClient {
 
     const remoteJid = this.resolveIncomingRemoteJid(key);
     if (!remoteJid || isStatusJid(remoteJid) || isGroupJid(remoteJid)) return;
+    if (key.fromMe) {
+      logger.info('MSG_SKIP: fromMe message ignored', {
+        slotId: this.slotId,
+        messageId,
+        remoteJid
+      });
+      return;
+    }
+
     if (remoteJid.endsWith('@lid')) {
       // Buffer the message — do NOT mark as processed so it can be replayed
       this.bufferLidMessage(remoteJid, message);
@@ -593,39 +607,12 @@ export class WhatsAppClient {
       return;
     }
 
-    // Self-chat detection: compare via phone number AND via the socket's own LID
-    const isSelfChatByPhone = jidToPhone(remoteJid) === this.phone;
-    const isSelfChatByLid = this.isOwnLid(key.remoteJid ?? '');
-    const isSelfChat = isSelfChatByPhone || isSelfChatByLid;
-
-    if (key.fromMe) {
-      if (!isSelfChat || this.sentByBotIds.has(messageId)) {
-        logger.info('MSG_SKIP: fromMe message blocked', {
-          messageId,
-          reason: this.sentByBotIds.has(messageId) ? 'sent_by_bot' : 'not_self_chat',
-          remoteJid,
-          isSelfChatByPhone,
-          isSelfChatByLid,
-          selfPhone: this.phone,
-          remotePhone: jidToPhone(remoteJid)
-        });
-        return;
-      }
-      logger.info('MSG_SELF: processing self-chat message for AI testing', {
-        messageId,
-        phone: this.phone,
-        isSelfChatByPhone,
-        isSelfChatByLid
-      });
-    }
-
-    const remotePhone = isSelfChat ? (this.phone ?? jidToPhone(remoteJid)) : jidToPhone(remoteJid);
+    const remotePhone = jidToPhone(remoteJid);
 
     logger.info('MSG_RECV: new inbound message', {
       messageId,
       from: remotePhone,
       fromMe: Boolean(key.fromMe),
-      isSelfChat,
       rawType: extractRawType(message),
       textPreview: extractMessageText(message).slice(0, 50)
     });
@@ -747,7 +734,6 @@ export class WhatsAppClient {
       metadata: {
         fromMe: Boolean(key.fromMe),
         isGroup: false,
-        isSelfChat,
         hasImage: Boolean(imageDataUrl),
         hasAudio: Boolean(audioDataUrl)
       }
@@ -1034,7 +1020,6 @@ export class WhatsAppClient {
         if (ownerUid) {
           await saveMessageSafe(sentRecord);
         }
-        this.rememberSentByBot(messageId);
         return { messageId };
       } catch (error) {
         lastError = error;
@@ -1559,31 +1544,6 @@ export class WhatsAppClient {
   }
 
   /**
-   * Check if a JID (possibly @lid) corresponds to the bot's own user identity.
-   * Used for self-chat detection when the remoteJid is LID-based.
-   */
-  private isOwnLid(jid: string): boolean {
-    if (!jid || !this.socket?.user) return false;
-
-    // The socket's user object may itself have a LID property
-    const socketUser = this.socket.user as { id?: string; lid?: string };
-    if (socketUser.lid) {
-      const ownLidJid = socketUser.lid.includes('@') ? socketUser.lid : `${socketUser.lid}@lid`;
-      if (jid === ownLidJid) return true;
-    }
-
-    // Also check via the LID→phone mapping: if this LID resolves to our own phone, it's self
-    if (jid.endsWith('@lid')) {
-      const resolved = this.lidToPhoneJid.get(jid);
-      if (resolved && this.phone) {
-        return jidToPhone(resolved) === this.phone;
-      }
-    }
-
-    return false;
-  }
-
-  /**
    * Try to extract phone number information from any available field in the message.
    * Even when Bad MAC prevents decryption, some metadata fields may contain
    * phone numbers that we can use to build LID→phone mappings.
@@ -1706,18 +1666,6 @@ export class WhatsAppClient {
     if (this.processedInboundOrder.length > 5000) {
       const oldest = this.processedInboundOrder.shift();
       if (oldest) this.processedInboundIds.delete(oldest);
-    }
-  }
-
-  private rememberSentByBot(messageId: string): void {
-    if (this.sentByBotIds.has(messageId)) return;
-
-    this.sentByBotIds.add(messageId);
-    this.sentByBotOrder.push(messageId);
-
-    if (this.sentByBotOrder.length > 5000) {
-      const oldest = this.sentByBotOrder.shift();
-      if (oldest) this.sentByBotIds.delete(oldest);
     }
   }
 
@@ -1898,4 +1846,3 @@ export class WhatsAppClient {
     return `${uid}:${phone}`;
   }
 }
-
