@@ -13,7 +13,8 @@ import {
   getRecentTransactions,
   listAdminUserSnapshots,
   getUserReminders,
-  type AdminUserSnapshot
+  type AdminUserSnapshot,
+  getRecentConversationByPhone
 } from '../lib/firestore';
 import { getRecentOperationalLogs, logger, type OperationalLogEntry } from '../lib/logger';
 import { requireAdminAuth } from '../middleware/admin-auth';
@@ -149,7 +150,7 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
         .filter((entry) => entry.level === 'warn' || entry.level === 'error');
       const recentWhatsAppEvents = logs
         .filter(isWhatsAppLog)
-        .slice(-8)
+        .slice(-20)
         .reverse()
         .map(normalizeLogEntry);
 
@@ -217,6 +218,35 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
         recentTransactions,
         recentReminders: reminders.slice(0, 5)
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/users/:uid/messages', async (req: Request, res: Response, next) => {
+    try {
+      const uid = req.params.uid;
+      const snapshot = await getAdminUserSnapshot(uid);
+      if (!snapshot) {
+        res.status(404).json({ error: 'Usuário não encontrado.' });
+        return;
+      }
+
+      const allowedNumbers = snapshot.settings?.whatsappAllowedNumbers ?? [];
+      if (allowedNumbers.length === 0) {
+        res.json({ messages: [] });
+        return;
+      }
+
+      // Fetch up to 50 recent messages per allowed phone
+      const fetchPromises = allowedNumbers.map(phone =>
+        getRecentConversationByPhone(uid, phone, 50)
+      );
+
+      const results = await Promise.all(fetchPromises);
+      const allMessages = results.flat();
+
+      res.json({ messages: allMessages });
     } catch (error) {
       next(error);
     }

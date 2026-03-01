@@ -8,14 +8,13 @@ import { uploadImageToCloudinary } from '@/services/cloudinary';
 import { Button } from '@/components/ui/Button';
 import { Sparkles, Send, Bot, ImagePlus, X, User, MessageSquarePlus, MessageSquare, Trash2, Menu } from 'lucide-react';
 import { toast } from 'sonner';
-import { generateMonthKey } from '@/utils/date';
+import { getCurrentMonthKey } from '@/utils/date';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 export function AIAssistant() {
-    const today = new Date();
-    const currentMonthKey = generateMonthKey(today.toISOString());
-    const { transactions, add, update, remove } = useTransactions(currentMonthKey);
+    const currentMonthKey = getCurrentMonthKey();
+    const { transactions, loading: txLoading, add, update, remove } = useTransactions(currentMonthKey);
     const { categories, loading: catsLoading } = useCategories();
 
     // Sessions
@@ -93,8 +92,8 @@ export function AIAssistant() {
 
     const handleSend = async () => {
         if (!input.trim() && !imagePreview) return;
-        if (catsLoading || chatsLoading || !activeSessionId) {
-            toast.error(activeSessionId ? 'Aguarde o carregamento dos seus dados...' : 'Crie uma nova conversa primeiro.');
+        if (catsLoading || chatsLoading || txLoading || !activeSessionId) {
+            toast.error(activeSessionId ? 'Aguarde o carregamento das suas transacoes e categorias...' : 'Crie uma nova conversa primeiro.');
             return;
         }
 
@@ -435,4 +434,3 @@ export function AIAssistant() {
         </div>
     );
 }
-

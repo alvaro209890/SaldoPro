@@ -41,13 +41,44 @@ export function createAiChatRouter(): Router {
 
         try {
             // Build financial context from what the frontend sent + server-side data
-            const [settings, profile] = await Promise.all([
+            const [settings, profile, serverCategories, serverRecentTransactions] = await Promise.all([
                 getUserSettings(uid),
-                getUserProfile(uid)
+                getUserProfile(uid),
+                getUserCategories(uid),
+                getRecentTransactions(uid, 50)
             ]);
 
-            // Use frontend-provided categories and transactions (they're already filtered by month/user)
-            const categories = (body.categories || []).map(c => ({
+            const requestCategories = Array.isArray(body.categories) ? body.categories : [];
+            const requestTransactions = Array.isArray(body.transactions) ? body.transactions : [];
+
+            // Prefer the frontend payload when available, but fall back to server data
+            // if the page sends empty arrays before snapshots finish loading.
+            const categoriesSource = requestCategories.length > 0
+                ? requestCategories.map(c => ({
+                    id: c.id,
+                    name: c.name,
+                    type: c.type,
+                    color: '',
+                    icon: ''
+                }))
+                : serverCategories;
+
+            const transactionsSource = requestTransactions.length > 0
+                ? requestTransactions.map(t => ({
+                    id: t.id,
+                    date: t.date,
+                    description: t.description,
+                    amount: t.amount,
+                    type: t.type,
+                    category: t.category,
+                    monthKey: t.monthKey || t.date?.substring(0, 7) || '',
+                    paymentMethod: 'pix' as const,
+                    createdAt: '',
+                    updatedAt: ''
+                }))
+                : serverRecentTransactions;
+
+            const categories = categoriesSource.map(c => ({
                 id: c.id,
                 name: c.name,
                 type: c.type,
@@ -55,7 +86,7 @@ export function createAiChatRouter(): Router {
                 icon: ''
             }));
 
-            const recentTransactions = (body.transactions || []).slice(0, 50).map(t => ({
+            const recentTransactions = transactionsSource.slice(0, 50).map(t => ({
                 id: t.id,
                 date: t.date,
                 description: t.description,

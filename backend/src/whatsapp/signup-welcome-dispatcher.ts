@@ -1,3 +1,4 @@
+import { env } from '../config/env';
 import { logger } from '../lib/logger';
 import type { WhatsAppClientsManager } from './manager';
 
@@ -34,7 +35,7 @@ function buildSignupWelcomeMessage(displayName: string): string {
     '✅ *Dúvidas sobre o saldo*: Pergunte como está o seu caixa ou o quanto já gastou no mês.',
     '',
     '*📱 Acesse seu painel completo no site para ver gráficos e relatórios detalhados:*',
-    '🌐 https://saldopro-98049.web.app',
+    `🌐 ${env.appPanelUrl}`,
     '',
     'Estou pronto para começar! O que vamos registrar hoje?'
   ].join('\n');

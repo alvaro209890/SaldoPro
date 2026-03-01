@@ -46,6 +46,7 @@ const VALID_PAYMENT_METHODS: PaymentMethod[] = [
   'transfer',
   'boleto'
 ];
+const DISPLAY_TIMEZONE = 'America/Sao_Paulo';
 const MAX_ACTIONS_PER_MESSAGE = 10;
 
 // ---------------------------------------------------------------------------
@@ -772,7 +773,9 @@ function formatCurrency(value: number, currency: string): string {
 function formatDateBRFromISO(value: string): string {
   const parsed = Date.parse(value);
   if (!Number.isFinite(parsed)) return value;
-  return new Date(parsed).toLocaleDateString('pt-BR');
+  return new Date(parsed).toLocaleDateString('pt-BR', {
+    timeZone: DISPLAY_TIMEZONE
+  });
 }
 
 function formatDateBRFromYmd(value: string): string {
@@ -784,7 +787,10 @@ function formatDateBRFromYmd(value: string): string {
 function formatDateTimeBR(value: string): string {
   const parsed = Date.parse(value);
   if (!Number.isFinite(parsed)) return value;
-  return new Date(parsed).toLocaleString('pt-BR', { hour12: false });
+  return new Date(parsed).toLocaleString('pt-BR', {
+    hour12: false,
+    timeZone: DISPLAY_TIMEZONE
+  });
 }
 
 function formatReminderScheduleLabel(dueDate: string, dueTime?: string | null): string {

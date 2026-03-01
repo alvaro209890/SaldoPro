@@ -87,6 +87,20 @@ function isCapabilitiesIntentMessage(text: string): boolean {
   );
 }
 
+function isPanelLinkIntentMessage(text: string): boolean {
+  const normalized = normalizeForGreeting(text);
+  if (!normalized) return false;
+
+  return (
+    /\b(link|site|acesso|url)\b/.test(normalized) &&
+    /\b(painel|dashboard|app)\b/.test(normalized)
+  ) || /\bme\s+passe\s+o\s+link\s+do\s+painel\b/.test(normalized);
+}
+
+function buildPanelLinkReply(): string {
+  return `Acesse seu painel aqui: ${env.appPanelUrl}`;
+}
+
 const UNDO_KEYWORDS = ['desfaz', 'desfazer', 'desfaca', 'cancela', 'cancelar', 'errou', 'errei', 'anula', 'anular', 'desfizer'];
 
 function isUndoMessage(text: string): boolean {
@@ -991,6 +1005,17 @@ export class WhatsAppClient {
   ): Promise<void> {
     const hasAiInput = inboundText.trim().length > 0 || Boolean(imageDataUrl) || Boolean(audioDataUrl);
     if (env.whatsappAiEnabled && hasAiInput) {
+      if (isPanelLinkIntentMessage(inboundText)) {
+        const panelLinkReply = buildPanelLinkReply();
+        await this.sendWithRetry(remoteJid, panelLinkReply, 'auto_reply', ownerUid);
+        await this.appendConversationMessage(ownerUid, remotePhone, { role: 'user', content: inboundText.trim() });
+        await this.appendConversationMessage(ownerUid, remotePhone, {
+          role: 'assistant',
+          content: panelLinkReply
+        });
+        return;
+      }
+
       // Rate limiting check
       if (this.isRateLimited(ownerUid)) {
         logger.warn('MSG_RATE_LIMITED: AI processing skipped due to rate limit', {
