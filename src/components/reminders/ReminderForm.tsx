@@ -153,12 +153,12 @@ export function ReminderForm({
       onClose={onClose}
       title={initialData ? 'Editar lembrete' : 'Novo lembrete'}
     >
-      <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-6">
-        <div className="rounded-2xl border border-surface-700 bg-surface-900/50 p-1 grid grid-cols-3 gap-1">
+      <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-5 sm:space-y-6">
+        <div className="grid grid-cols-1 gap-1 rounded-2xl border border-surface-700 bg-surface-900/50 p-1 sm:grid-cols-3">
           <button
             type="button"
             onClick={() => setKind('general')}
-            className={`flex items-center justify-center gap-1 rounded-xl py-2 text-xs font-medium transition ${
+            className={`flex items-center justify-start gap-2 rounded-xl px-3 py-2.5 text-xs font-medium transition sm:justify-center ${
               reminderKind === 'general'
                 ? 'bg-blue-500 text-white'
                 : 'text-gray-300 hover:bg-surface-800'
@@ -170,7 +170,7 @@ export function ReminderForm({
           <button
             type="button"
             onClick={() => setKind('payable')}
-            className={`flex items-center justify-center gap-1 rounded-xl py-2 text-xs font-medium transition ${
+            className={`flex items-center justify-start gap-2 rounded-xl px-3 py-2.5 text-xs font-medium transition sm:justify-center ${
               reminderKind === 'payable'
                 ? 'bg-orange-500 text-white'
                 : 'text-gray-300 hover:bg-surface-800'
@@ -182,7 +182,7 @@ export function ReminderForm({
           <button
             type="button"
             onClick={() => setKind('receivable')}
-            className={`flex items-center justify-center gap-1 rounded-xl py-2 text-xs font-medium transition ${
+            className={`flex items-center justify-start gap-2 rounded-xl px-3 py-2.5 text-xs font-medium transition sm:justify-center ${
               reminderKind === 'receivable'
                 ? 'bg-emerald-500 text-white'
                 : 'text-gray-300 hover:bg-surface-800'
@@ -262,14 +262,14 @@ export function ReminderForm({
               key={item.label}
               type="button"
               onClick={() => setValue('dueDate', item.value)}
-              className="rounded-lg bg-surface-800 px-2 py-2 text-xs font-medium text-gray-300 transition hover:bg-surface-700"
+              className="rounded-lg bg-surface-800 px-2 py-2 text-[11px] font-medium text-gray-300 transition hover:bg-surface-700 sm:text-xs"
             >
               {item.label}
             </button>
           ))}
         </div>
 
-        <div className="grid grid-cols-4 gap-2 rounded-xl border border-surface-700 bg-surface-900/30 p-2">
+        <div className="grid grid-cols-2 gap-2 rounded-xl border border-surface-700 bg-surface-900/30 p-2 sm:grid-cols-4">
           {[
             { label: '09:00', value: '09:00' },
             { label: '12:00', value: '12:00' },
@@ -317,11 +317,11 @@ export function ReminderForm({
           </div>
         )}
 
-        <div className="flex flex-col-reverse gap-3 border-t border-surface-700 pt-4 sm:flex-row">
+        <div className="flex flex-col-reverse gap-3 border-t border-surface-700 pt-3 sm:flex-row sm:pt-4">
           {initialData && onDelete && (
             <div className="flex-1">
               {showDeleteConfirm ? (
-                <div className="flex items-center gap-2">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                   <Button
                     type="button"
                     variant="danger"
@@ -335,7 +335,7 @@ export function ReminderForm({
                     type="button"
                     variant="ghost"
                     onClick={() => setShowDeleteConfirm(false)}
-                    className="px-4"
+                    className="w-full px-4 sm:w-auto"
                   >
                     Cancelar
                   </Button>

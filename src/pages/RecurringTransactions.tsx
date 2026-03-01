@@ -73,7 +73,7 @@ export function RecurringTransactions() {
     };
 
     return (
-        <div className="space-y-6 pb-20 lg:pb-0 animate-fade-in">
+        <div className="space-y-6 pb-20 animate-fade-in lg:pb-0">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                     <h1 className="text-2xl font-bold text-white">Recorrentes</h1>
@@ -111,7 +111,7 @@ export function RecurringTransactions() {
                     <>
                         {activeItems.length > 0 && (
                             <div className="mb-4">
-                                <h3 className="px-5 pt-4 pb-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                                <h3 className="px-4 pb-2 pt-4 text-xs font-semibold uppercase tracking-wider text-gray-400 sm:px-5">
                                     Ativas
                                 </h3>
                                 <div className="divide-y divide-surface-800">
@@ -130,7 +130,7 @@ export function RecurringTransactions() {
 
                         {pausedItems.length > 0 && (
                             <div>
-                                <h3 className="px-5 pt-6 pb-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                                <h3 className="px-4 pb-2 pt-6 text-xs font-semibold uppercase tracking-wider text-gray-400 sm:px-5">
                                     Pausadas
                                 </h3>
                                 <div className="divide-y divide-surface-800">

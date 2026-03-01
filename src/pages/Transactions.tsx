@@ -101,7 +101,7 @@ export function Transactions() {
     };
 
     return (
-        <div className="space-y-6 pb-20 lg:pb-0 animate-fade-in">
+        <div className="space-y-6 pb-20 animate-fade-in lg:pb-0">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                     <h1 className="text-2xl font-bold text-white">Transações</h1>
@@ -110,7 +110,7 @@ export function Transactions() {
                     </p>
                 </div>
 
-                <div className="flex flex-col sm:flex-row items-center gap-4 w-full sm:w-auto">
+                <div className="flex w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:items-center sm:gap-4">
                     <MonthSelector currentMonthKey={monthKey} onChange={setMonthKey} />
                     <Button onClick={handleCreate} className="hidden lg:flex">
                         <Plus className="mr-2 h-4 w-4" />
@@ -151,7 +151,7 @@ export function Transactions() {
                         />
                     </div>
                 ) : (
-                    <div className="divide-y divide-surface-800 px-4 py-2">
+                    <div className="divide-y divide-surface-800 px-3 py-2 sm:px-4">
                         {filteredTransactions.map((t) => (
                             <TransactionRow
                                 key={t.id}

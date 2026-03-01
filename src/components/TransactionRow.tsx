@@ -39,8 +39,8 @@ export function TransactionRow({
     }, []);
 
     return (
-        <div className="group flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-xl border border-white/5 bg-surface-900/30 p-3.5 transition-all duration-300 hover:border-white/10 hover:bg-surface-800/60 hover:shadow-lg">
-            <div className="flex items-center gap-4 min-w-0">
+        <div className="group flex flex-col justify-between gap-3 rounded-xl border border-white/5 bg-surface-900/30 p-3 transition-all duration-300 hover:border-white/10 hover:bg-surface-800/60 hover:shadow-lg sm:flex-row sm:items-center sm:gap-4 sm:p-3.5">
+            <div className="flex min-w-0 items-center gap-3 sm:gap-4">
                 <div
                     className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl shadow-inner border border-white/5"
                     style={{
@@ -54,7 +54,7 @@ export function TransactionRow({
 
                 <div className="min-w-0 flex-1">
                     <p className="truncate font-semibold text-gray-100">{transaction.description}</p>
-                    <div className="flex items-center gap-2 text-xs text-gray-400 font-medium mt-0.5">
+                    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium text-gray-400">
                         <span className="truncate">{category?.name || 'Sem categoria'}</span>
                         {showDate && (
                             <>
@@ -68,8 +68,8 @@ export function TransactionRow({
                 </div>
             </div>
 
-            <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0 sm:w-auto w-full pl-15 sm:pl-0">
-                <div className="text-right flex flex-row sm:flex-col items-center sm:items-end gap-3 sm:gap-1">
+            <div className="flex w-full items-center justify-between gap-3 sm:w-auto sm:justify-end sm:gap-4">
+                <div className="flex min-w-0 flex-1 flex-row items-center gap-3 text-left sm:flex-none sm:flex-col sm:items-end sm:gap-1 sm:text-right">
                     <p
                         className={`font-extrabold tracking-tight ${isIncome ? 'text-emerald-400 drop-shadow-[0_0_8px_rgba(16,185,129,0.3)]' : 'text-gray-100'
                             }`}

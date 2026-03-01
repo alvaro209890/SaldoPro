@@ -20,9 +20,9 @@ export function RecurringTransactionRow({ item, categoryName, onEdit, onToggleAc
 
     return (
         <div
-            className={`group flex items-center justify-between p-4 transition-all hover:bg-surface-800/50 ${!isActive ? 'opacity-50' : ''}`}
+            className={`group flex flex-col gap-3 p-4 transition-all hover:bg-surface-800/50 sm:flex-row sm:items-center sm:justify-between ${!isActive ? 'opacity-50' : ''}`}
         >
-            <div className="flex items-center gap-4 min-w-0">
+            <div className="flex min-w-0 items-start gap-3 sm:items-center sm:gap-4">
                 <button
                     onClick={onToggleActive}
                     className={`flex-shrink-0 transition-colors ${isActive ? 'text-indigo-400 hover:text-amber-400' : 'text-gray-500 hover:text-emerald-400'}`}
@@ -32,7 +32,7 @@ export function RecurringTransactionRow({ item, categoryName, onEdit, onToggleAc
                 </button>
 
                 <div className="flex flex-col min-w-0 gap-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                         <p className={`truncate font-medium ${!isActive ? 'text-gray-400' : 'text-gray-200'}`}>
                             {item.description}
                         </p>
@@ -47,7 +47,7 @@ export function RecurringTransactionRow({ item, categoryName, onEdit, onToggleAc
                         )}
                     </div>
 
-                    <div className="flex items-center gap-3 text-sm text-gray-500">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-gray-500">
                         <span className="flex items-center gap-1">
                             {isIncome ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />}
                             {categoryName}
@@ -60,12 +60,12 @@ export function RecurringTransactionRow({ item, categoryName, onEdit, onToggleAc
                 </div>
             </div>
 
-            <div className="flex flex-col items-end gap-1 flex-shrink-0 ml-4">
+            <div className="ml-0 flex w-full flex-row items-center justify-between gap-3 sm:ml-4 sm:w-auto sm:flex-col sm:items-end sm:justify-start sm:gap-1">
                 <p className={`font-semibold ${!isActive ? 'text-gray-500' : isIncome ? 'text-emerald-400' : 'text-gray-200'}`}>
                     {isIncome ? '+' : '-'}{formatBRL(item.amount)}
                 </p>
 
-                <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="flex items-center opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
                     <button
                         onClick={(e) => {
                             e.stopPropagation();

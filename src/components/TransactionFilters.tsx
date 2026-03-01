@@ -58,7 +58,7 @@ export function TransactionFilters({ filters, onChange, categories }: Transactio
 
     return (
         <div className="space-y-4">
-            <div className="flex items-center gap-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
                 <div className="flex-1">
                     <Input
                         icon={Search}
@@ -70,7 +70,7 @@ export function TransactionFilters({ filters, onChange, categories }: Transactio
                 <Button
                     variant={activeFiltersCount > 0 ? 'primary' : 'secondary'}
                     onClick={() => setIsOpen(!isOpen)}
-                    className="shrink-0"
+                    className="w-full shrink-0 justify-center sm:w-auto"
                 >
                     <Filter className="mr-2 h-4 w-4" />
                     Filtros {activeFiltersCount > 0 && `(${activeFiltersCount})`}
@@ -78,8 +78,8 @@ export function TransactionFilters({ filters, onChange, categories }: Transactio
             </div>
 
             {isOpen && (
-                <div className="rounded-xl border border-surface-700 bg-surface-800/50 p-4 animate-fade-in glass">
-                    <div className="mb-4 flex items-center justify-between">
+                <div className="rounded-xl border border-surface-700 bg-surface-800/50 p-3 animate-fade-in glass sm:p-4">
+                    <div className="mb-4 flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <h3 className="text-sm font-medium text-gray-200">Filtros Avançados</h3>
                         <button
                             onClick={handleClear}
@@ -89,7 +89,7 @@ export function TransactionFilters({ filters, onChange, categories }: Transactio
                         </button>
                     </div>
 
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
                         <Select
                             label="Tipo"
                             value={filters.type}
@@ -126,7 +126,7 @@ export function TransactionFilters({ filters, onChange, categories }: Transactio
                             ]}
                         />
 
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                             <Input
                                 label="Data Inicial"
                                 type="date"
@@ -141,7 +141,7 @@ export function TransactionFilters({ filters, onChange, categories }: Transactio
                             />
                         </div>
 
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                             <Input
                                 label="Valor Mín"
                                 type="number"

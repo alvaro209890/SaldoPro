@@ -61,7 +61,7 @@ export function ReminderRow({ reminder, onEdit, onToggleStatus }: ReminderRowPro
             : 'border-surface-700/80 bg-surface-900/60 hover:border-surface-600'
       }`}
     >
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             <h4 className={`truncate text-sm font-semibold ${isPaid ? 'text-gray-400 line-through' : 'text-gray-100'}`}>
@@ -88,13 +88,13 @@ export function ReminderRow({ reminder, onEdit, onToggleStatus }: ReminderRowPro
             )}
           </div>
 
-          <div className="flex items-center gap-2 text-xs text-gray-400">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-gray-400">
             <CalendarDays className="h-3.5 w-3.5" />
             <span>{dueLabel}</span>
           </div>
         </div>
 
-        <div className="text-right">
+        <div className="text-left sm:text-right">
           {hasAmount ? (
             <p className={`text-sm font-semibold ${
               isPaid
@@ -111,11 +111,11 @@ export function ReminderRow({ reminder, onEdit, onToggleStatus }: ReminderRowPro
         </div>
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center gap-2">
+      <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
         <button
           type="button"
           onClick={onToggleStatus}
-          className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+          className={`inline-flex w-full items-center justify-center gap-1 rounded-lg px-3 py-2 text-xs font-medium transition sm:w-auto ${
             isPaid
               ? 'bg-surface-800 text-gray-300 hover:bg-surface-700'
               : 'bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
@@ -128,7 +128,7 @@ export function ReminderRow({ reminder, onEdit, onToggleStatus }: ReminderRowPro
         <button
           type="button"
           onClick={onEdit}
-          className="inline-flex items-center gap-1 rounded-lg bg-surface-800 px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:bg-surface-700 hover:text-white"
+          className="inline-flex w-full items-center justify-center gap-1 rounded-lg bg-surface-800 px-3 py-2 text-xs font-medium text-gray-300 transition hover:bg-surface-700 hover:text-white sm:w-auto"
         >
           <Pencil className="h-3.5 w-3.5" />
           Editar

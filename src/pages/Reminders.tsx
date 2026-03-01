@@ -136,7 +136,7 @@ export function Reminders() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3 xl:grid-cols-4">
         <div className="rounded-2xl border border-surface-700 bg-surface-900/50 p-4">
           <div className="flex items-center justify-between text-gray-400">
             <span className="text-xs uppercase tracking-wider">Pendentes</span>
@@ -170,7 +170,7 @@ export function Reminders() {
         </div>
       </div>
 
-      <div className="rounded-2xl border border-surface-700 bg-surface-900/50 p-4 space-y-4">
+      <div className="rounded-2xl border border-surface-700 bg-surface-900/50 p-3 space-y-4 sm:p-4">
         <Input
           label="Buscar lembretes"
           icon={Search}
@@ -252,7 +252,7 @@ export function Reminders() {
             />
           </div>
         ) : (
-          <div className="space-y-5 p-4">
+          <div className="space-y-5 p-3 sm:p-4">
             {filteredPendingReminders.length > 0 && (
               <section className="space-y-2">
                 <h3 className="px-1 text-xs font-semibold text-gray-400 uppercase tracking-wider">

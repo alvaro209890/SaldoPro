@@ -37,17 +37,17 @@ export function Modal({ isOpen, onClose, title, children, size = 'md' }: ModalPr
     };
 
     return createPortal(
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
+        <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-6">
             <div
                 className="fixed inset-0 bg-gray-950/80 backdrop-blur-sm transition-opacity"
                 onClick={onClose}
             />
             <div
-                className={`w-full ${sizes[size]} relative flex flex-col rounded-2xl border border-surface-700 bg-surface-900 shadow-2xl animate-scale-in`}
+                className={`relative flex max-h-[calc(100dvh-0.75rem)] w-full flex-col rounded-t-3xl border border-b-0 border-x-0 border-surface-700 bg-surface-900 shadow-2xl animate-scale-in sm:max-h-[calc(100vh-3rem)] sm:rounded-2xl sm:border sm:border-surface-700 ${sizes[size]}`}
                 onClick={(e) => e.stopPropagation()}
             >
-                <div className="flex items-center justify-between border-b border-surface-700 px-6 py-4">
-                    <h2 className="text-lg font-semibold text-white">{title}</h2>
+                <div className="flex items-center justify-between border-b border-surface-700 px-4 py-4 sm:px-6">
+                    <h2 className="text-base font-semibold text-white sm:text-lg">{title}</h2>
                     <button
                         onClick={onClose}
                         className="rounded-lg p-1 text-gray-400 hover:bg-surface-800 hover:text-white transition-colors"
@@ -55,7 +55,7 @@ export function Modal({ isOpen, onClose, title, children, size = 'md' }: ModalPr
                         <X className="h-5 w-5" />
                     </button>
                 </div>
-                <div className="p-6 overflow-y-auto max-h-[calc(100vh-10rem)]">
+                <div className="max-h-[calc(100dvh-8.5rem)] overflow-y-auto p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:max-h-[calc(100vh-10rem)] sm:p-6">
                     {children}
                 </div>
             </div>

@@ -24,7 +24,7 @@ export function AppLayout() {
                     </button>
                 </header>
 
-                <div className={`flex-1 overflow-auto bg-gray-950 ${isFullScreenApp ? '' : 'p-4 sm:p-6 lg:p-8'}`}>
+                <div className={`flex-1 overflow-auto bg-gray-950 ${isFullScreenApp ? '' : 'p-3 sm:p-6 lg:p-8'}`}>
                     <div className={isFullScreenApp ? 'h-full w-full' : 'container mx-auto max-w-7xl'}>
                         <Outlet />
                     </div>

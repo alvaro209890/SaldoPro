@@ -128,13 +128,13 @@ export function TransactionForm({
             onClose={onClose}
             title={initialData ? 'Editar Transação' : 'Nova Transação'}
         >
-            <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-6">
+            <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-5 sm:space-y-6">
                 {/* Toggle Type */}
                 <div className="grid grid-cols-2 gap-2 p-1 bg-surface-800 rounded-xl">
                     <button
                         type="button"
                         onClick={() => setValue('type', 'expense')}
-                        className={`flex items-center justify-center gap-2 py-2 text-sm font-medium rounded-lg transition-all ${type === 'expense'
+                        className={`flex flex-col items-center justify-center gap-1 rounded-lg py-2.5 text-xs font-medium transition-all sm:flex-row sm:gap-2 sm:text-sm ${type === 'expense'
                             ? 'bg-red-500 text-white shadow-md'
                             : 'text-gray-400 hover:text-gray-200'
                             }`}
@@ -144,7 +144,7 @@ export function TransactionForm({
                     <button
                         type="button"
                         onClick={() => setValue('type', 'income')}
-                        className={`flex items-center justify-center gap-2 py-2 text-sm font-medium rounded-lg transition-all ${type === 'income'
+                        className={`flex flex-col items-center justify-center gap-1 rounded-lg py-2.5 text-xs font-medium transition-all sm:flex-row sm:gap-2 sm:text-sm ${type === 'income'
                             ? 'bg-emerald-500 text-white shadow-md'
                             : 'text-gray-400 hover:text-gray-200'
                             }`}
@@ -153,7 +153,7 @@ export function TransactionForm({
                     </button>
                 </div>
 
-                <div className="grid gap-6 sm:grid-cols-2">
+                <div className="grid gap-4 sm:grid-cols-2 sm:gap-6">
                     {/* Amount field needs custom parsing so input type text but logic handles it visually better? Number is simpler for MVP */}
                     <div className="sm:col-span-2">
                         <Controller
@@ -240,11 +240,11 @@ export function TransactionForm({
                 </div>
 
                 {/* Actions inside form for context */}
-                <div className="flex flex-col-reverse sm:flex-row gap-3 pt-4 border-t border-surface-700">
+                <div className="flex flex-col-reverse gap-3 border-t border-surface-700 pt-3 sm:flex-row sm:pt-4">
                     {initialData && onDelete && (
                         <div className="flex-1">
                             {showDeleteConfirm ? (
-                                <div className="flex items-center gap-2 animate-fade-in">
+                                <div className="flex flex-col gap-2 animate-fade-in sm:flex-row sm:items-center">
                                     <Button
                                         type="button"
                                         variant="danger"
@@ -258,7 +258,7 @@ export function TransactionForm({
                                         type="button"
                                         variant="ghost"
                                         onClick={() => setShowDeleteConfirm(false)}
-                                        className="flex-none px-4"
+                                        className="w-full px-4 sm:w-auto sm:flex-none"
                                     >
                                         Cancelar
                                     </Button>
