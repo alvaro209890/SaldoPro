@@ -853,7 +853,7 @@ function mapTransaction(row: DbTransactionRow): UserTransaction {
     category: row.category,
     description: row.description,
     paymentMethod: row.payment_method,
-    receiptUrl: row.receipt_url,
+    receiptUrl: row.receipt_url ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -862,7 +862,7 @@ function mapTransaction(row: DbTransactionRow): UserTransaction {
 export async function getRecentTransactions(uid: string, limitCount = 50): Promise<UserTransaction[]> {
   const { data, error } = await db
     .from('app_transactions')
-    .select('id, type, amount, date, month_key, category, description, payment_method, receipt_url, created_at, updated_at')
+    .select('id, type, amount, date, month_key, category, description, payment_method, created_at, updated_at')
     .eq('uid', uid)
     .order('created_at', { ascending: false })
     .limit(limitCount);
@@ -873,7 +873,7 @@ export async function getRecentTransactions(uid: string, limitCount = 50): Promi
 export async function getTransactionsByMonth(uid: string, monthKey: string): Promise<UserTransaction[]> {
   const { data, error } = await db
     .from('app_transactions')
-    .select('id, type, amount, date, month_key, category, description, payment_method, receipt_url, created_at, updated_at')
+    .select('id, type, amount, date, month_key, category, description, payment_method, created_at, updated_at')
     .eq('uid', uid)
     .eq('month_key', monthKey)
     .order('date', { ascending: false });
@@ -895,7 +895,6 @@ export async function addUserTransaction(uid: string, input: CreateTransactionIn
       category: input.category,
       description: input.description,
       payment_method: input.paymentMethod,
-      receipt_url: input.receiptUrl ?? null,
       created_at: now,
       updated_at: now
     })
@@ -924,7 +923,6 @@ export async function updateUserTransaction(
     updates.description = changes.description.slice(0, 500);
   }
   if (changes.paymentMethod) updates.payment_method = changes.paymentMethod;
-  if (changes.receiptUrl !== undefined) updates.receipt_url = changes.receiptUrl ?? null;
 
   if (Object.keys(updates).length <= 1) return; // Only updated_at
 
@@ -948,7 +946,7 @@ export async function deleteUserTransaction(uid: string, transactionId: string):
 export async function getUserTransactionById(uid: string, transactionId: string): Promise<UserTransaction | null> {
   const { data, error } = await db
     .from('app_transactions')
-    .select('id, type, amount, date, month_key, category, description, payment_method, receipt_url, created_at, updated_at')
+    .select('id, type, amount, date, month_key, category, description, payment_method, created_at, updated_at')
     .eq('uid', uid)
     .eq('id', transactionId)
     .maybeSingle<{
@@ -960,7 +958,6 @@ export async function getUserTransactionById(uid: string, transactionId: string)
       category: string;
       description: string;
       payment_method: 'pix' | 'credit' | 'debit' | 'cash' | 'transfer' | 'boleto';
-      receipt_url: string | null;
       created_at: string;
       updated_at: string;
     }>();
@@ -986,7 +983,6 @@ export async function restoreUserTransaction(
         category: transaction.category,
         description: transaction.description,
         payment_method: transaction.paymentMethod,
-        receipt_url: transaction.receiptUrl,
         created_at: transaction.createdAt,
         updated_at: new Date().toISOString()
       },
@@ -1008,7 +1004,7 @@ function mapReminder(row: DbReminderRow): UserReminder {
     notifyPhone: row.notify_phone,
     type: row.type,
     status: row.status,
-    receiptUrl: row.receipt_url,
+    receiptUrl: row.receipt_url ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -1042,7 +1038,6 @@ export async function addUserReminder(uid: string, input: CreateReminderInput): 
       notify_phone: normalizedNotifyPhone.length >= 10 ? normalizedNotifyPhone : null,
       type: financialType,
       status: input.status ?? 'pending',
-      receipt_url: input.receiptUrl ?? null,
       created_at: now,
       updated_at: now
     })
@@ -1067,7 +1062,7 @@ export async function getUserReminders(uid: string): Promise<UserReminder[]> {
 export async function getUserReminderById(uid: string, reminderId: string): Promise<UserReminder | null> {
   const { data, error } = await db
     .from('app_reminders')
-    .select('id, reminder_kind, title, amount, due_date, due_time, due_at, notified_at, notify_phone, type, status, receipt_url, created_at, updated_at')
+    .select('id, reminder_kind, title, amount, due_date, due_time, due_at, notified_at, notify_phone, type, status, created_at, updated_at')
     .eq('uid', uid)
     .eq('id', reminderId)
     .maybeSingle<DbReminderRow>();
@@ -1131,9 +1126,6 @@ export async function updateUserReminder(
       updates.notified_at = null;
     }
   }
-  if ('receiptUrl' in changes) {
-    updates.receipt_url = changes.receiptUrl;
-  }
 
   if ('dueDate' in changes || 'dueTime' in changes) {
     updates.due_at = reminderDueAtFromDateAndTime(nextDueDate, nextDueTime);
@@ -1190,7 +1182,7 @@ export async function getDueWhatsAppReminders(
   const safeLimit = Math.max(1, Math.min(limitCount, 200));
   const { data, error } = await db
     .from('app_reminders')
-    .select('id, uid, reminder_kind, title, amount, due_date, due_time, type, notify_phone, receipt_url')
+    .select('id, uid, reminder_kind, title, amount, due_date, due_time, type, notify_phone')
     .eq('status', 'pending')
     .is('notified_at', null)
     .not('due_at', 'is', null)
@@ -1216,7 +1208,7 @@ export async function getDueWhatsAppReminders(
         dueTime,
         type: row.type,
         notifyPhone,
-        receiptUrl: row.receipt_url
+        receiptUrl: null
       } as DueWhatsAppReminder;
     })
     .filter((entry): entry is DueWhatsAppReminder => Boolean(entry));

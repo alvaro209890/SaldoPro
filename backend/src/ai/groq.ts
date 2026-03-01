@@ -362,8 +362,10 @@ ${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.bu
     const txList = recentTransactions
       .slice(0, PROMPT_TX_LIMIT)
       .map(
-        (t) =>
-          `- ID: "${t.id}", Data: ${t.date}, Desc: "${t.description}", Valor: ${t.amount}, Tipo: ${t.type}, CatID: ${t.category}`
+        (t) => {
+          const receiptInfo = t.receiptUrl ? `, Comprovante: ${t.receiptUrl}` : '';
+          return `- ID: "${t.id}", Data: ${t.date}, Desc: "${t.description}", Valor: ${t.amount}, Tipo: ${t.type}, CatID: ${t.category}${receiptInfo}`;
+        }
       )
       .join('\n');
 
@@ -376,7 +378,8 @@ ${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.bu
       .map((r) => {
         const dueLabel = r.dueTime ? `${r.dueDate} ${r.dueTime}` : r.dueDate;
         const amountPart = r.amount != null ? `, Valor: ${r.amount}` : '';
-        return `- ID: "${r.id}", Titulo: "${r.title}", Tipo: ${r.reminderKind}, Status: ${r.status}, Vencimento: ${dueLabel}${amountPart}`;
+        const receiptInfo = r.receiptUrl ? `, Comprovante: ${r.receiptUrl}` : '';
+        return `- ID: "${r.id}", Titulo: "${r.title}", Tipo: ${r.reminderKind}, Status: ${r.status}, Vencimento: ${dueLabel}${amountPart}${receiptInfo}`;
       })
       .join('\n');
 

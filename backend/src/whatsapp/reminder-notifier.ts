@@ -49,11 +49,11 @@ export function startWhatsAppReminderNotifier(manager: WhatsAppClientsManager): 
   const tick = async (): Promise<void> => {
     if (stopped || inFlight) return;
 
-    const status = manager.getStatuses()[0];
-    if (!status?.connected) return;
-
     inFlight = true;
     try {
+      const status = manager.getStatuses()[0];
+      if (!status?.connected) return;
+
       const nowIso = new Date().toISOString();
       const dueReminders = await getDueWhatsAppReminders(nowIso, REMINDER_BATCH_LIMIT);
       if (dueReminders.length === 0) return;
@@ -89,7 +89,11 @@ export function startWhatsAppReminderNotifier(manager: WhatsAppClientsManager): 
         });
       }
     } catch (error) {
-      logger.error('Failed to process due WhatsApp reminders', error);
+      logger.error('Failed to process due WhatsApp reminders', {
+        name: error instanceof Error ? error.name : 'Error',
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined
+      });
     } finally {
       inFlight = false;
     }

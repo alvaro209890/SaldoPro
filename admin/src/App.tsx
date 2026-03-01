@@ -113,6 +113,7 @@ interface AdminChatMessage {
 }
 
 type QuickFilter = 'all' | 'blocked' | 'no_whatsapp' | 'no_firebase' | 'inactive';
+type AdminTab = 'overview' | 'operations' | 'users';
 
 function readStoredToken(): string {
   if (typeof window === 'undefined') return '';
@@ -261,6 +262,7 @@ export function App() {
   const [directMessage, setDirectMessage] = useState<string>('');
   const [directMessageLoading, setDirectMessageLoading] = useState<boolean>(false);
   const [directMessageSuccess, setDirectMessageSuccess] = useState<boolean>(false);
+  const [activeTab, setActiveTab] = useState<AdminTab>('overview');
 
   useEffect(() => {
     let cancelled = false;
@@ -617,6 +619,11 @@ export function App() {
   const totalWhatsAppMessages = users.reduce((sum, user) => sum + user.metrics.whatsappMessages, 0);
   const usersWithoutWhatsApp = users.filter((user) => user.whatsappAllowedNumbers.length === 0).length;
   const missingFirebaseAccounts = users.filter((user) => !user.firebaseExists).length;
+  const activeTabDescription = activeTab === 'overview'
+    ? 'Indicadores consolidados e crescimento da base.'
+    : activeTab === 'operations'
+      ? 'Saude do backend, sessao do WhatsApp e eventos operacionais.'
+      : 'Triagem de usuarios, busca e acesso rapido aos detalhes.';
   const latestGlobalActivity = users.reduce<string | null>((latest, user) => {
     const current = user.metrics.lastWhatsAppMessageAt;
     if (!current) return latest;
@@ -842,7 +849,7 @@ export function App() {
   // --- Main Dashboard View ---
   return (
     <div className="admin-shell min-h-screen px-4 py-4 sm:px-6 lg:px-8">
-      <div className="mx-auto flex max-w-[1600px] flex-col gap-4 lg:flex-row">
+      <div className={`mx-auto flex max-w-[1600px] flex-col gap-4 ${activeTab === 'users' ? 'lg:flex-row' : ''}`}>
         <main className="min-w-0 flex-1 space-y-4">
           <section className="admin-panel rounded-3xl px-5 py-5 sm:px-6">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -884,9 +891,33 @@ export function App() {
                 Última atividade geral: {formatDate(latestGlobalActivity)}
               </span>
             </div>
+            <div className="mt-5 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+              <div className="inline-flex w-full flex-wrap gap-2 rounded-2xl border border-white/8 bg-black/20 p-2 xl:w-auto">
+                {[
+                  { value: 'overview' as const, label: 'Visão Geral' },
+                  { value: 'operations' as const, label: 'Operação' },
+                  { value: 'users' as const, label: 'Usuários' }
+                ].map((tab) => (
+                  <button
+                    key={tab.value}
+                    type="button"
+                    onClick={() => setActiveTab(tab.value)}
+                    className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${activeTab === tab.value
+                      ? 'bg-emerald-300 text-zinc-950'
+                      : 'bg-white/5 text-zinc-300 hover:bg-white/10 hover:text-white'
+                      }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-sm text-zinc-400">{activeTabDescription}</p>
+            </div>
           </section>
 
-          <section className="grid gap-4 xl:grid-cols-3">
+          {activeTab === 'operations' ? (
+            <>
+              <section className="grid gap-4 xl:grid-cols-3">
             <div className="admin-panel rounded-3xl p-5">
               <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">Backend</p>
               <div className="mt-4 flex items-center justify-between">
@@ -1001,9 +1032,91 @@ export function App() {
                 ) : null}
               </div>
             </div>
-          </section>
+              </section>
 
-          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+              {primarySlot && !primarySlot.connected ? (
+                <section className="admin-panel rounded-3xl p-5">
+                  <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="max-w-xl">
+                      <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">QRCode</p>
+                      <h2 className="mt-3 text-xl font-semibold text-white">Reconexão do WhatsApp</h2>
+                      <p className="mt-2 text-sm leading-6 text-zinc-300">
+                        Quando o WhatsApp estiver desconectado, o QR aparece aqui. Se ainda não houver um QR ativo, o painel mostra o motivo atual.
+                      </p>
+                      {primaryQr?.available ? (
+                        <p className="mt-3 text-sm text-emerald-200">
+                          QR disponível por mais {primaryQr.expiresInSec ?? 0}s.
+                        </p>
+                      ) : (
+                        <p className="mt-3 text-sm text-amber-100">
+                          QR indisponível: {primaryQr?.reason ?? 'aguardando geração'}.
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex justify-center">
+                      {primaryQr?.available && primaryQr.qrPngBase64 ? (
+                        <img
+                          src={primaryQr.qrPngBase64}
+                          alt="QR Code do WhatsApp"
+                          className="h-56 w-56 rounded-3xl border border-white/10 bg-white p-4"
+                        />
+                      ) : (
+                        <div className="flex h-56 w-56 items-center justify-center rounded-3xl border border-dashed border-white/10 bg-white/5 px-6 text-center text-sm text-zinc-400">
+                          Nenhum QR ativo no momento.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </section>
+              ) : null}
+
+              <section className="admin-panel rounded-3xl p-5">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">Eventos</p>
+                    <h2 className="mt-3 text-xl font-semibold text-white">Últimos eventos do WhatsApp</h2>
+                  </div>
+                </div>
+                <div className="mt-5 max-h-96 overflow-y-auto pr-1">
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    {(overview?.whatsapp.recentEvents ?? []).map((entry) => (
+                      <div key={`${entry.timestamp}:${entry.message}`} className="rounded-2xl border border-white/8 bg-white/5 px-4 py-3">
+                        <div className="flex items-center justify-between gap-4 text-xs text-zinc-500">
+                          <span className={`rounded-full px-2.5 py-1 font-semibold uppercase tracking-[0.18em] ${entry.level === 'error' ? 'bg-rose-400/15 text-rose-200' : entry.level === 'warn' ? 'bg-amber-300/15 text-amber-100' : 'bg-emerald-300/15 text-emerald-200'}`}>
+                            {entry.level}
+                          </span>
+                          <span>{formatDate(entry.timestamp)}</span>
+                        </div>
+                        <div className="mt-2 text-sm text-zinc-200">
+                          {entry.message}
+                        </div>
+                        <div className="mt-3 flex">
+                          <div className="group relative">
+                            <span className="flex cursor-help items-center gap-1.5 rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[11px] font-semibold text-zinc-400 transition hover:bg-white/10 hover:text-white">
+                              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                              O que isso significa?
+                            </span>
+                            <div className="pointer-events-none absolute bottom-full left-0 z-10 mb-2 mt-2 hidden w-64 rounded-xl border border-white/10 bg-zinc-900 p-3 text-xs text-zinc-300 opacity-0 shadow-lg group-hover:block group-hover:opacity-100">
+                              {getEventExplanation(entry.message)}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {(overview?.whatsapp.recentEvents ?? []).length === 0 ? (
+                      <div className="rounded-2xl border border-white/8 bg-white/5 px-4 py-3 text-sm text-zinc-400">
+                        Nenhum evento recente do WhatsApp disponível.
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </section>
+            </>
+          ) : null}
+
+          {activeTab === 'overview' ? (
+            <>
+              <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
             <div className="admin-panel rounded-3xl p-5">
               <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">Transações</p>
               <p className="mt-3 text-3xl font-semibold text-white">{totalTransactions}</p>
@@ -1065,89 +1178,11 @@ export function App() {
               </ResponsiveContainer>
             </div>
           </section>
-
-          {primarySlot && !primarySlot.connected ? (
-            <section className="admin-panel rounded-3xl p-5">
-              <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-                <div className="max-w-xl">
-                  <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">QRCode</p>
-                  <h2 className="mt-3 text-xl font-semibold text-white">Reconexão do WhatsApp</h2>
-                  <p className="mt-2 text-sm leading-6 text-zinc-300">
-                    Quando o WhatsApp estiver desconectado, o QR aparece aqui. Se ainda não houver um QR ativo, o painel mostra o motivo atual.
-                  </p>
-                  {primaryQr?.available ? (
-                    <p className="mt-3 text-sm text-emerald-200">
-                      QR disponível por mais {primaryQr.expiresInSec ?? 0}s.
-                    </p>
-                  ) : (
-                    <p className="mt-3 text-sm text-amber-100">
-                      QR indisponível: {primaryQr?.reason ?? 'aguardando geração'}.
-                    </p>
-                  )}
-                </div>
-                <div className="flex justify-center">
-                  {primaryQr?.available && primaryQr.qrPngBase64 ? (
-                    <img
-                      src={primaryQr.qrPngBase64}
-                      alt="QR Code do WhatsApp"
-                      className="h-56 w-56 rounded-3xl border border-white/10 bg-white p-4"
-                    />
-                  ) : (
-                    <div className="flex h-56 w-56 items-center justify-center rounded-3xl border border-dashed border-white/10 bg-white/5 px-6 text-center text-sm text-zinc-400">
-                      Nenhum QR ativo no momento.
-                    </div>
-                  )}
-                </div>
-              </div>
-            </section>
+            </>
           ) : null}
 
-          <section className="admin-panel rounded-3xl p-5">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-              <div>
-                <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">Eventos</p>
-                <h2 className="mt-3 text-xl font-semibold text-white">Últimos eventos do WhatsApp</h2>
-              </div>
-            </div>
-            <div className="mt-5 max-h-96 overflow-y-auto pr-1">
-              <div className="grid gap-3 lg:grid-cols-2">
-                {(overview?.whatsapp.recentEvents ?? []).map((entry) => (
-                  <div key={`${entry.timestamp}:${entry.message}`} className="rounded-2xl border border-white/8 bg-white/5 px-4 py-3">
-                    <div className="flex items-center justify-between gap-4 text-xs text-zinc-500">
-                      <span className={`rounded-full px-2.5 py-1 font-semibold uppercase tracking-[0.18em] ${entry.level === 'error' ? 'bg-rose-400/15 text-rose-200' : entry.level === 'warn' ? 'bg-amber-300/15 text-amber-100' : 'bg-emerald-300/15 text-emerald-200'}`}>
-                        {entry.level}
-                      </span>
-                      <span>{formatDate(entry.timestamp)}</span>
-                    </div>
-                    <div className="mt-2 text-sm text-zinc-200">
-                      {entry.message}
-                    </div>
-                    {/* Botão de explicação / Dica */}
-                    <div className="mt-3 flex">
-                      <div className="group relative">
-                        <span className="flex cursor-help items-center gap-1.5 rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[11px] font-semibold text-zinc-400 transition hover:bg-white/10 hover:text-white">
-                          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                          O que isso significa?
-                        </span>
-
-                        {/* Tooltip Hover */}
-                        <div className="pointer-events-none absolute bottom-full left-0 z-10 mb-2 mt-2 hidden w-64 rounded-xl border border-white/10 bg-zinc-900 p-3 text-xs text-zinc-300 opacity-0 shadow-lg group-hover:block group-hover:opacity-100">
-                          {getEventExplanation(entry.message)}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                {(overview?.whatsapp.recentEvents ?? []).length === 0 ? (
-                  <div className="rounded-2xl border border-white/8 bg-white/5 px-4 py-3 text-sm text-zinc-400">
-                    Nenhum evento recente do WhatsApp disponível.
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          </section>
-
-          <section className="admin-panel rounded-3xl p-5">
+          {activeTab === 'users' ? (
+            <section className="admin-panel rounded-3xl p-5">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
               <div>
                 <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">Usuários</p>
@@ -1242,10 +1277,12 @@ export function App() {
                 ))
               )}
             </div>
-          </section>
+            </section>
+          ) : null}
         </main>
 
-        <aside className="w-full lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:w-[380px] lg:flex-none">
+        {activeTab === 'users' ? (
+          <aside className="w-full lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:w-[380px] lg:flex-none">
           <div className="admin-panel flex h-full min-h-[320px] flex-col rounded-3xl p-5">
             <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">Detalhes</p>
             {!selectedUser ? (
@@ -1411,7 +1448,8 @@ export function App() {
               </div>
             )}
           </div>
-        </aside>
+          </aside>
+        ) : null}
       </div>
     </div>
   );
