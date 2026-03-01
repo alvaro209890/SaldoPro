@@ -157,6 +157,8 @@ export class WhatsAppClient {
   private readonly conversationByPhone = new Map<string, ConversationEntry[]>();
   private readonly badMacByJid = new Map<string, { count: number; lastAt: number }>();
   private readonly lidToPhoneJid = new Map<string, string>();
+  private readonly sentMessagesCache = new Map<string, proto.IMessage>();
+
   private authSyncTimer: NodeJS.Timeout | null = null;
   private authSyncInFlight = false;
   private authSyncQueued = false;
@@ -404,7 +406,16 @@ export class WhatsAppClient {
       // IMPORTANT: Each slot needs a UNIQUE browser fingerprint. If both use the same
       // identifier, WhatsApp may treat them as duplicate linked devices from the same
       // machine and invalidate each other's Signal sessions → Bad MAC errors.
-      browser: [`SaldoPro-${this.slotId.toUpperCase()}`, 'Render', '1.0.0']
+      browser: [`SaldoPro-${this.slotId.toUpperCase()}`, 'Render', '1.0.0'],
+
+      // CRITICAL: Required for Baileys to automatically resolve decryption failures
+      // ("Aguardando mensagem") on linked devices by looking up the missing outgoing message.
+      getMessage: async (key) => {
+        if (key.id && this.sentMessagesCache.has(key.id)) {
+          return this.sentMessagesCache.get(key.id);
+        }
+        return undefined;
+      }
     });
 
     this.socket = socket;
@@ -1254,6 +1265,14 @@ export class WhatsAppClient {
           }
         }
         const response = await this.socket.sendMessage(jid, { text });
+        if (response?.key?.id && response.message) {
+          this.sentMessagesCache.set(response.key.id, response.message);
+          // Prevent memory leaks: cap cache at ~100 messages per instance
+          if (this.sentMessagesCache.size > 100) {
+            const firstKey = this.sentMessagesCache.keys().next().value;
+            if (firstKey) this.sentMessagesCache.delete(firstKey);
+          }
+        }
         const messageId = response?.key?.id ?? `generated_${Date.now()}`;
         const now = new Date().toISOString();
 

@@ -10,10 +10,12 @@ import {
 } from '../lib/firebase-user-access';
 import {
   getAdminUserSnapshot,
+  getRecentTransactions,
   listAdminUserSnapshots,
+  getUserReminders,
   type AdminUserSnapshot
 } from '../lib/firestore';
-import { logger } from '../lib/logger';
+import { getRecentOperationalLogs, logger, type OperationalLogEntry } from '../lib/logger';
 import { requireAdminAuth } from '../middleware/admin-auth';
 import type { WhatsAppClientsManager } from '../whatsapp/manager';
 
@@ -31,6 +33,27 @@ interface AdminApiUser {
     disabled: boolean;
     createdAt: string | null;
     lastSignInAt: string | null;
+  };
+}
+
+function isWhatsAppLog(entry: OperationalLogEntry): boolean {
+  if (entry.message.includes('WhatsApp')) return true;
+  if (entry.message.startsWith('MSG_')) return true;
+  const slotId = entry.meta?.slotId;
+  return slotId === 'wa1';
+}
+
+function normalizeLogEntry(entry: OperationalLogEntry): {
+  timestamp: string;
+  level: OperationalLogEntry['level'];
+  message: string;
+  meta?: Record<string, unknown>;
+} {
+  return {
+    timestamp: entry.timestamp,
+    level: entry.level,
+    message: entry.message,
+    ...(entry.meta ? { meta: entry.meta } : {})
   };
 }
 
@@ -120,16 +143,35 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
         manager.getQrPayloads()
       ]);
       const users = mergeAdminUsers(snapshots, firebaseStates);
+      const logs = getRecentOperationalLogs(80);
+      const fifteenMinutesAgo = Date.now() - 15 * 60 * 1000;
+      const recentAlerts = logs
+        .filter((entry) => entry.level === 'warn' || entry.level === 'error');
+      const recentWhatsAppEvents = logs
+        .filter(isWhatsAppLog)
+        .slice(-8)
+        .reverse()
+        .map(normalizeLogEntry);
 
       res.json({
         backend: {
           ok: true,
           uptime: process.uptime(),
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
+          alerts: {
+            warnings15m: recentAlerts.filter(
+              (entry) => entry.level === 'warn' && Date.parse(entry.timestamp) >= fifteenMinutesAgo
+            ).length,
+            errors15m: recentAlerts.filter(
+              (entry) => entry.level === 'error' && Date.parse(entry.timestamp) >= fifteenMinutesAgo
+            ).length,
+            recent: recentAlerts.slice(-8).reverse().map(normalizeLogEntry)
+          }
         },
         whatsapp: {
           slots: manager.getStatuses(),
-          qr: qrSlots
+          qr: qrSlots,
+          recentEvents: recentWhatsAppEvents
         },
         stats: {
           totalUsers: users.length,
@@ -157,9 +199,11 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
   router.get('/users/:uid', async (req: Request, res: Response, next) => {
     try {
       const uid = req.params.uid;
-      const [snapshot, firebase] = await Promise.all([
+      const [snapshot, firebase, recentTransactions, reminders] = await Promise.all([
         getAdminUserSnapshot(uid),
-        getFirebaseUserAccessState(uid)
+        getFirebaseUserAccessState(uid),
+        getRecentTransactions(uid, 5),
+        getUserReminders(uid)
       ]);
 
       if (!snapshot && !firebase.exists) {
@@ -168,7 +212,40 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
       }
 
       const merged = mergeAdminUsers(snapshot ? [snapshot] : [], new Map([[uid, firebase]]))[0];
-      res.json({ user: merged });
+      res.json({
+        user: merged,
+        recentTransactions,
+        recentReminders: reminders.slice(0, 5)
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/whatsapp/reset-session', async (_req: Request, res: Response, next) => {
+    try {
+      await manager.resetSession('wa1');
+      logger.warn('Admin triggered WhatsApp session reset', { slotId: 'wa1' });
+      res.json({
+        ok: true,
+        slots: manager.getStatuses(),
+        qr: await manager.getQrPayloads()
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/whatsapp/refresh-qr', async (_req: Request, res: Response, next) => {
+    try {
+      await manager.resetSession('wa1');
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      logger.warn('Admin forced WhatsApp QR refresh', { slotId: 'wa1' });
+      res.json({
+        ok: true,
+        slots: manager.getStatuses(),
+        qr: await manager.getQrPayloads()
+      });
     } catch (error) {
       next(error);
     }
