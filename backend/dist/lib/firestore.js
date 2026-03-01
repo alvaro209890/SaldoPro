@@ -55,6 +55,7 @@ exports.addUserChatMessage = addUserChatMessage;
 const supabase_1 = require("./supabase");
 const logger_1 = require("./logger");
 const events_1 = require("../whatsapp/events");
+const date_utils_1 = require("./date-utils");
 const COLLECTION_NAME = 'whatsapp_messages';
 const BINDINGS_COLLECTION_NAME = 'whatsapp_bindings';
 const AUTH_STATE_COLLECTION_NAME = 'whatsapp_runtime';
@@ -1025,7 +1026,7 @@ async function updateRecurringTransactionBackend(uid, recurringId, changes) {
     assertNoError(error, 'updateRecurringTransactionBackend');
 }
 async function generateOverdueRecurringTransactions(uid) {
-    const today = new Date().toISOString().split('T')[0];
+    const today = (0, date_utils_1.getBrasiliaISOString)().split('T')[0];
     const active = await getActiveRecurringTransactions(uid);
     let generated = 0;
     for (const rt of active) {

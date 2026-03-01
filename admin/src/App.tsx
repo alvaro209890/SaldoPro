@@ -23,16 +23,29 @@ interface AdminOverview {
     ok: boolean;
     uptime: number;
     timestamp: string;
+    alerts: {
+      warnings15m: number;
+      errors15m: number;
+      recent: AdminLogEntry[];
+    };
   };
   whatsapp: {
     slots: AdminWhatsAppSlotStatus[];
     qr: Record<string, AdminQrSlot>;
+    recentEvents: AdminLogEntry[];
   };
   stats: {
     totalUsers: number;
     blockedUsers: number;
     activeUsers: number;
   };
+}
+
+interface AdminLogEntry {
+  timestamp: string;
+  level: 'debug' | 'info' | 'warn' | 'error';
+  message: string;
+  meta?: Record<string, unknown>;
 }
 
 interface AdminSettings {
@@ -66,6 +79,33 @@ interface AdminUser {
   };
 }
 
+interface AdminTransactionItem {
+  id: string;
+  type: 'income' | 'expense';
+  amount: number;
+  date: string;
+  monthKey: string;
+  category: string;
+  description: string;
+  paymentMethod: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface AdminReminderItem {
+  id: string;
+  reminderKind: 'general' | 'payable' | 'receivable';
+  title: string;
+  amount: number | null;
+  dueDate: string;
+  dueTime?: string | null;
+  status: 'pending' | 'paid';
+  createdAt: string;
+  updatedAt: string;
+}
+
+type QuickFilter = 'all' | 'blocked' | 'no_whatsapp' | 'no_firebase' | 'inactive';
+
 function readStoredToken(): string {
   if (typeof window === 'undefined') return '';
   return window.localStorage.getItem(STORAGE_KEY)?.trim() ?? '';
@@ -97,6 +137,20 @@ function formatUptime(seconds: number): string {
   const minutes = Math.floor((rounded % 3600) / 60);
   const remainingSeconds = rounded % 60;
   return `${hours}h ${minutes}m ${remainingSeconds}s`;
+}
+
+function formatCurrency(value: number, currency = 'BRL'): string {
+  if (currency === 'BRL') {
+    return `R$ ${value.toFixed(2).replace('.', ',')}`;
+  }
+  return `${currency} ${value.toFixed(2)}`;
+}
+
+function isInactiveRecently(value: string | null): boolean {
+  if (!value) return true;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return true;
+  return parsed < Date.now() - 7 * 24 * 60 * 60 * 1000;
 }
 
 async function parseError(response: Response): Promise<string> {
@@ -134,7 +188,11 @@ export function App() {
   const [dashboardLoading, setDashboardLoading] = useState<boolean>(false);
   const [dashboardError, setDashboardError] = useState<string>('');
   const [userActionUid, setUserActionUid] = useState<string>('');
+  const [whatsAppActionLoading, setWhatsAppActionLoading] = useState<'reset' | 'refreshQr' | ''>('');
   const [searchTerm, setSearchTerm] = useState<string>('');
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>('all');
+  const [recentTransactions, setRecentTransactions] = useState<AdminTransactionItem[]>([]);
+  const [recentReminders, setRecentReminders] = useState<AdminReminderItem[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -174,6 +232,8 @@ export function App() {
       setUsers([]);
       setSelectedUid('');
       setSelectedUser(null);
+      setRecentTransactions([]);
+      setRecentReminders([]);
       return;
     }
 
@@ -228,6 +288,8 @@ export function App() {
   useEffect(() => {
     if (!token || !selectedUid) {
       setSelectedUser(null);
+      setRecentTransactions([]);
+      setRecentReminders([]);
       return;
     }
 
@@ -235,9 +297,15 @@ export function App() {
 
     async function loadUser(): Promise<void> {
       try {
-        const payload = await adminFetch<{ user: AdminUser }>(`/api/admin/users/${selectedUid}`, token);
+        const payload = await adminFetch<{
+          user: AdminUser;
+          recentTransactions: AdminTransactionItem[];
+          recentReminders: AdminReminderItem[];
+        }>(`/api/admin/users/${selectedUid}`, token);
         if (!cancelled) {
           setSelectedUser(payload.user);
+          setRecentTransactions(payload.recentTransactions);
+          setRecentReminders(payload.recentReminders);
         }
       } catch (error) {
         if (!cancelled) {
@@ -317,8 +385,14 @@ export function App() {
       setOverview(overviewPayload);
       setUsers(usersPayload.users);
       if (selectedUid) {
-        const details = await adminFetch<{ user: AdminUser }>(`/api/admin/users/${selectedUid}`, token);
+        const details = await adminFetch<{
+          user: AdminUser;
+          recentTransactions: AdminTransactionItem[];
+          recentReminders: AdminReminderItem[];
+        }>(`/api/admin/users/${selectedUid}`, token);
         setSelectedUser(details.user);
+        setRecentTransactions(details.recentTransactions);
+        setRecentReminders(details.recentReminders);
       }
     } catch (error) {
       setDashboardError(error instanceof Error ? error.message : 'Falha ao atualizar.');
@@ -349,12 +423,43 @@ export function App() {
     }
   }
 
+  async function handleWhatsAppAction(action: 'reset' | 'refreshQr'): Promise<void> {
+    if (!token) return;
+    setWhatsAppActionLoading(action);
+    setDashboardError('');
+
+    try {
+      const payload = await adminFetch<{
+        ok: boolean;
+        slots: AdminWhatsAppSlotStatus[];
+        qr: Record<string, AdminQrSlot>;
+      }>(
+        action === 'reset' ? '/api/admin/whatsapp/reset-session' : '/api/admin/whatsapp/refresh-qr',
+        token,
+        { method: 'POST' }
+      );
+
+      setOverview((current) => current ? {
+        ...current,
+        whatsapp: {
+          ...current.whatsapp,
+          slots: payload.slots,
+          qr: payload.qr
+        }
+      } : current);
+      await handleRefresh();
+    } catch (error) {
+      setDashboardError(error instanceof Error ? error.message : 'Falha na ação do WhatsApp.');
+    } finally {
+      setWhatsAppActionLoading('');
+    }
+  }
+
   const primarySlot = overview?.whatsapp.slots[0] ?? null;
   const primaryQr = primarySlot ? overview?.whatsapp.qr[primarySlot.slotId] : null;
   const filteredUsers = users.filter((user) => {
     const term = searchTerm.trim().toLowerCase();
-    if (!term) return true;
-    return [
+    const matchesSearch = !term || [
       user.displayName,
       user.email ?? '',
       user.uid,
@@ -363,6 +468,14 @@ export function App() {
       .join(' ')
       .toLowerCase()
       .includes(term);
+
+    if (!matchesSearch) return false;
+
+    if (quickFilter === 'blocked') return user.blocked;
+    if (quickFilter === 'no_whatsapp') return user.whatsappAllowedNumbers.length === 0;
+    if (quickFilter === 'no_firebase') return !user.firebaseExists;
+    if (quickFilter === 'inactive') return isInactiveRecently(user.metrics.lastWhatsAppMessageAt);
+    return true;
   });
   const totalTransactions = users.reduce((sum, user) => sum + user.metrics.transactions, 0);
   const totalReminders = users.reduce((sum, user) => sum + user.metrics.reminders, 0);
@@ -522,6 +635,24 @@ export function App() {
                   <dd>{primarySlot?.lastDisconnectReason ?? 'Sem alerta'}</dd>
                 </div>
               </dl>
+              <div className="mt-5 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => void handleWhatsAppAction('reset')}
+                  disabled={whatsAppActionLoading.length > 0}
+                  className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-xs font-semibold text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {whatsAppActionLoading === 'reset' ? 'Resetando...' : 'Resetar sessão'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleWhatsAppAction('refreshQr')}
+                  disabled={whatsAppActionLoading.length > 0}
+                  className="rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-2.5 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-300/15 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {whatsAppActionLoading === 'refreshQr' ? 'Gerando...' : 'Forçar novo QR'}
+                </button>
+              </div>
             </div>
 
             <div className="admin-panel rounded-3xl p-5">
@@ -539,6 +670,37 @@ export function App() {
                   <p className="text-xs uppercase tracking-[0.25em] text-zinc-500">Ativos</p>
                   <p className="mt-3 text-2xl font-semibold text-emerald-200">{overview?.stats.activeUsers ?? 0}</p>
                 </div>
+              </div>
+            </div>
+            <div className="admin-panel rounded-3xl p-5 xl:col-span-2">
+              <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">Alertas recentes</p>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <div className="rounded-2xl border border-amber-300/10 bg-amber-400/5 p-4">
+                  <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Warn em 15 min</p>
+                  <p className="mt-2 text-2xl font-semibold text-amber-100">{overview?.backend.alerts.warnings15m ?? 0}</p>
+                </div>
+                <div className="rounded-2xl border border-rose-300/10 bg-rose-400/5 p-4">
+                  <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Erro em 15 min</p>
+                  <p className="mt-2 text-2xl font-semibold text-rose-200">{overview?.backend.alerts.errors15m ?? 0}</p>
+                </div>
+              </div>
+              <div className="mt-4 space-y-3">
+                {(overview?.backend.alerts.recent ?? []).slice(0, 4).map((entry) => (
+                  <div key={`${entry.timestamp}:${entry.message}`} className="rounded-2xl border border-white/8 bg-white/5 px-4 py-3">
+                    <div className="flex items-center justify-between gap-4 text-xs">
+                      <span className={`rounded-full px-2.5 py-1 font-semibold uppercase tracking-[0.18em] ${entry.level === 'error' ? 'bg-rose-400/15 text-rose-200' : 'bg-amber-300/15 text-amber-100'}`}>
+                        {entry.level}
+                      </span>
+                      <span className="text-zinc-500">{formatDate(entry.timestamp)}</span>
+                    </div>
+                    <p className="mt-2 text-sm text-zinc-200">{entry.message}</p>
+                  </div>
+                ))}
+                {(overview?.backend.alerts.recent ?? []).length === 0 ? (
+                  <div className="rounded-2xl border border-white/8 bg-white/5 px-4 py-3 text-sm text-zinc-400">
+                    Nenhum warn/erro recente capturado.
+                  </div>
+                ) : null}
               </div>
             </div>
           </section>
@@ -608,6 +770,33 @@ export function App() {
           ) : null}
 
           <section className="admin-panel rounded-3xl p-5">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">Eventos</p>
+                <h2 className="mt-3 text-xl font-semibold text-white">Histórico curto do WhatsApp</h2>
+              </div>
+            </div>
+            <div className="mt-5 grid gap-3 lg:grid-cols-2">
+              {(overview?.whatsapp.recentEvents ?? []).slice(0, 6).map((entry) => (
+                <div key={`${entry.timestamp}:${entry.message}`} className="rounded-2xl border border-white/8 bg-white/5 px-4 py-3">
+                  <div className="flex items-center justify-between gap-4 text-xs text-zinc-500">
+                    <span className={`rounded-full px-2.5 py-1 font-semibold uppercase tracking-[0.18em] ${entry.level === 'error' ? 'bg-rose-400/15 text-rose-200' : entry.level === 'warn' ? 'bg-amber-300/15 text-amber-100' : 'bg-emerald-300/15 text-emerald-200'}`}>
+                      {entry.level}
+                    </span>
+                    <span>{formatDate(entry.timestamp)}</span>
+                  </div>
+                  <p className="mt-2 text-sm text-zinc-200">{entry.message}</p>
+                </div>
+              ))}
+              {(overview?.whatsapp.recentEvents ?? []).length === 0 ? (
+                <div className="rounded-2xl border border-white/8 bg-white/5 px-4 py-3 text-sm text-zinc-400">
+                  Nenhum evento recente do WhatsApp disponível.
+                </div>
+              ) : null}
+            </div>
+          </section>
+
+          <section className="admin-panel rounded-3xl p-5">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
               <div>
                 <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">Usuários</p>
@@ -617,6 +806,24 @@ export function App() {
                 <p className="text-sm text-zinc-400">
                   Clique em uma linha para abrir os detalhes do usuário.
                 </p>
+                <div className="flex w-full flex-wrap gap-2">
+                  {[
+                    ['all', 'Todos'],
+                    ['blocked', 'Bloqueados'],
+                    ['no_whatsapp', 'Sem WhatsApp'],
+                    ['no_firebase', 'Sem Firebase'],
+                    ['inactive', 'Sem atividade 7d']
+                  ].map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setQuickFilter(value as QuickFilter)}
+                      className={`rounded-full px-3 py-2 text-xs font-semibold transition ${quickFilter === value ? 'bg-emerald-300 text-zinc-950' : 'border border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10'}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
                 <input
                   type="search"
                   value={searchTerm}
@@ -780,6 +987,57 @@ export function App() {
                   <p className="mt-4 text-sm text-zinc-400">
                     Última atividade registrada: {formatDate(selectedUser.metrics.lastWhatsAppMessageAt)}
                   </p>
+                </div>
+
+                <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
+                  <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Últimas transações</p>
+                  <div className="mt-3 space-y-3">
+                    {recentTransactions.map((item) => (
+                      <div key={item.id} className="rounded-2xl bg-black/15 px-3 py-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-white">{item.description}</p>
+                            <p className="mt-1 text-xs text-zinc-500">{item.category} • {formatDate(item.date)}</p>
+                          </div>
+                          <span className={`text-sm font-semibold ${item.type === 'income' ? 'text-emerald-200' : 'text-rose-200'}`}>
+                            {item.type === 'income' ? '+' : '-'} {formatCurrency(item.amount, selectedUser.settings?.currency ?? 'BRL')}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                    {recentTransactions.length === 0 ? (
+                      <p className="text-sm text-zinc-400">Nenhuma transação recente.</p>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
+                  <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Últimos lembretes</p>
+                  <div className="mt-3 space-y-3">
+                    {recentReminders.map((item) => (
+                      <div key={item.id} className="rounded-2xl bg-black/15 px-3 py-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-white">{item.title}</p>
+                            <p className="mt-1 text-xs text-zinc-500">
+                              {formatDate(item.dueDate)}{item.dueTime ? ` às ${item.dueTime}` : ''}
+                            </p>
+                          </div>
+                          <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${item.status === 'paid' ? 'bg-emerald-300/15 text-emerald-200' : 'bg-amber-300/15 text-amber-100'}`}>
+                            {item.status === 'paid' ? 'Concluído' : 'Pendente'}
+                          </span>
+                        </div>
+                        {item.amount != null ? (
+                          <p className="mt-2 text-sm text-zinc-300">
+                            {formatCurrency(item.amount, selectedUser.settings?.currency ?? 'BRL')}
+                          </p>
+                        ) : null}
+                      </div>
+                    ))}
+                    {recentReminders.length === 0 ? (
+                      <p className="text-sm text-zinc-400">Nenhum lembrete recente.</p>
+                    ) : null}
+                  </div>
                 </div>
 
                 <button
