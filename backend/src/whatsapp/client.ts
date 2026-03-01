@@ -353,10 +353,19 @@ export class WhatsAppClient {
     this.phone = null;
 
     if (this.socket) {
-      try {
-        await this.socket.logout();
-      } catch (error) {
-        logger.warn('Socket logout failed during reset', error);
+      if (this.connected) {
+        try {
+          await this.socket.logout();
+        } catch (error) {
+          logger.warn('Socket logout failed during reset', {
+            slotId: this.slotId,
+            error
+          });
+        }
+      } else {
+        logger.debug('Skipping WhatsApp logout during reset because socket is not connected yet', {
+          slotId: this.slotId
+        });
       }
       try {
         this.socket.ev.removeAllListeners('connection.update');

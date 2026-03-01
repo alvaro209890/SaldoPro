@@ -90,10 +90,11 @@ class WhatsAppClientsManager {
         }
     }
     async resetSession(_slotId) {
-        if (!this.hasLock || !this.clientStarted) {
-            await this.forceTakeoverAndStart();
+        if (!this.hasLock) {
+            await this.forceTakeover(false);
         }
         await this.client.resetSession();
+        this.clientStarted = true;
     }
     async sendTextWithRouting(input) {
         const normalizedPhone = (0, events_1.normalizePhoneNumber)(input.to);
@@ -107,7 +108,7 @@ class WhatsAppClientsManager {
         if (!this.hasLock || !this.clientStarted || !this.client.getStatus().connected) {
             throw new Error('WhatsApp is not connected');
         }
-        const result = await this.client.sendText(input.to, input.text, input.ownerUid);
+        const result = await this.client.sendText(input.to, input.text, input.ownerUid, input.mediaUrl);
         return { ...result, clientId: 'wa1' };
     }
     clearLockRetryTimer() {
@@ -225,7 +226,7 @@ class WhatsAppClientsManager {
             this.lockAttemptInFlight = false;
         }
     }
-    async forceTakeoverAndStart() {
+    async forceTakeover(startClient) {
         if (!this.running) {
             this.running = true;
         }
@@ -239,7 +240,7 @@ class WhatsAppClientsManager {
             slotId: ACTIVE_SLOT,
             instanceId: this.instanceId
         });
-        if (this.clientStarted)
+        if (!startClient || this.clientStarted)
             return;
         await this.client.start();
         this.clientStarted = true;

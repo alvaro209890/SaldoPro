@@ -101,7 +101,7 @@ function createAdminRouter(manager) {
                 .filter((entry) => entry.level === 'warn' || entry.level === 'error');
             const recentWhatsAppEvents = logs
                 .filter(isWhatsAppLog)
-                .slice(-8)
+                .slice(-20)
                 .reverse()
                 .map(normalizeLogEntry);
             res.json({
@@ -153,15 +153,32 @@ function createAdminRouter(manager) {
                 (0, firestore_1.getUserReminders)(uid)
             ]);
             if (!snapshot && !firebase.exists) {
-                res.status(404).json({ error: 'User not found.' });
+                const payload = {
+                    user: null,
+                    recentTransactions: [],
+                    recentReminders: [],
+                    missing: true
+                };
+                res.json(payload);
                 return;
             }
             const merged = mergeAdminUsers(snapshot ? [snapshot] : [], new Map([[uid, firebase]]))[0];
-            res.json({
+            const payload = {
                 user: merged,
                 recentTransactions,
                 recentReminders: reminders.slice(0, 5)
-            });
+            };
+            res.json(payload);
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.get('/users/:uid/messages', async (req, res, next) => {
+        try {
+            const uid = req.params.uid;
+            const messages = await (0, firestore_1.getRecentConversationByOwnerUid)(uid, 100);
+            res.json({ messages });
         }
         catch (error) {
             next(error);
@@ -243,6 +260,42 @@ function createAdminRouter(manager) {
         }
         catch (error) {
             next(error);
+        }
+    });
+    router.post('/users/:uid/message', async (req, res, next) => {
+        try {
+            const uid = req.params.uid;
+            const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+            const phoneOverride = typeof req.body?.phone === 'string' ? req.body.phone.trim() : null;
+            if (!text) {
+                res.status(400).json({ error: 'Mensagem vazia.' });
+                return;
+            }
+            const snapshot = await (0, firestore_1.getAdminUserSnapshot)(uid);
+            if (!snapshot) {
+                res.status(404).json({ error: 'Usuário não encontrado.' });
+                return;
+            }
+            let targetPhone = phoneOverride;
+            if (!targetPhone) {
+                const allowedNumbers = snapshot.settings?.whatsappAllowedNumbers ?? [];
+                if (allowedNumbers.length === 0) {
+                    res.status(400).json({ error: 'Usuário não possui número de WhatsApp cadastrado e nenhum foi fornecido.' });
+                    return;
+                }
+                targetPhone = allowedNumbers[0];
+            }
+            await manager.sendTextWithRouting({
+                to: targetPhone,
+                text,
+                ownerUid: uid
+            });
+            logger_1.logger.info('Admin sent direct message to user', { uid, phone: targetPhone });
+            res.json({ ok: true, sent: true });
+        }
+        catch (error) {
+            logger_1.logger.error('Failed to send admin direct message', error);
+            res.status(500).json({ error: error instanceof Error ? error.message : 'Erro ao enviar mensagem.' });
         }
     });
     router.use((error, _req, res, _next) => {

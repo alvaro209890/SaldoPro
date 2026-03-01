@@ -42,11 +42,11 @@ function startWhatsAppReminderNotifier(manager) {
     const tick = async () => {
         if (stopped || inFlight)
             return;
-        const status = manager.getStatuses()[0];
-        if (!status?.connected)
-            return;
         inFlight = true;
         try {
+            const status = manager.getStatuses()[0];
+            if (!status?.connected)
+                return;
             const nowIso = new Date().toISOString();
             const dueReminders = await (0, firestore_1.getDueWhatsAppReminders)(nowIso, REMINDER_BATCH_LIMIT);
             if (dueReminders.length === 0)
@@ -57,7 +57,8 @@ function startWhatsAppReminderNotifier(manager) {
                     await manager.sendTextWithRouting({
                         to: reminder.notifyPhone,
                         text: buildReminderMessage(reminder),
-                        ownerUid: reminder.uid
+                        ownerUid: reminder.uid,
+                        mediaUrl: reminder.receiptUrl ?? undefined
                     });
                     const marked = await (0, firestore_1.markReminderAsNotified)(reminder.uid, reminder.id, new Date().toISOString());
                     if (marked) {
@@ -81,7 +82,11 @@ function startWhatsAppReminderNotifier(manager) {
             }
         }
         catch (error) {
-            logger_1.logger.error('Failed to process due WhatsApp reminders', error);
+            logger_1.logger.error('Failed to process due WhatsApp reminders', {
+                name: error instanceof Error ? error.name : 'Error',
+                message: error instanceof Error ? error.message : String(error),
+                stack: error instanceof Error ? error.stack : undefined
+            });
         }
         finally {
             inFlight = false;

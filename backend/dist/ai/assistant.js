@@ -6,6 +6,7 @@ exports.processWhatsAppAIMessage = processWhatsAppAIMessage;
 const env_1 = require("../config/env");
 const firestore_1 = require("../lib/firestore");
 const date_utils_1 = require("../lib/date-utils");
+const storage_1 = require("../lib/storage");
 const logger_1 = require("../lib/logger");
 const groq_1 = require("./groq");
 const VALID_PAYMENT_METHODS = [
@@ -16,6 +17,7 @@ const VALID_PAYMENT_METHODS = [
     'transfer',
     'boleto'
 ];
+const DISPLAY_TIMEZONE = 'America/Sao_Paulo';
 const MAX_ACTIONS_PER_MESSAGE = 10;
 // ---------------------------------------------------------------------------
 // Financial context cache — avoids repeated Firestore reads for active users.
@@ -553,7 +555,9 @@ function formatDateBRFromISO(value) {
     const parsed = Date.parse(value);
     if (!Number.isFinite(parsed))
         return value;
-    return new Date(parsed).toLocaleDateString('pt-BR');
+    return new Date(parsed).toLocaleDateString('pt-BR', {
+        timeZone: DISPLAY_TIMEZONE
+    });
 }
 function formatDateBRFromYmd(value) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value))
@@ -565,7 +569,10 @@ function formatDateTimeBR(value) {
     const parsed = Date.parse(value);
     if (!Number.isFinite(parsed))
         return value;
-    return new Date(parsed).toLocaleString('pt-BR', { hour12: false });
+    return new Date(parsed).toLocaleString('pt-BR', {
+        hour12: false,
+        timeZone: DISPLAY_TIMEZONE
+    });
 }
 function formatReminderScheduleLabel(dueDate, dueTime) {
     const timeLabel = dueTime ? ` às ${dueTime}` : '';
@@ -847,7 +854,7 @@ function buildMultiActionMessage(results, aiReply, currency) {
 }
 async function processWhatsAppAIMessage(uid, messages, options = {}) {
     if (!uid || uid.trim().length === 0) {
-        return 'Nao foi possivel identificar a conta vinculada para processar a mensagem.';
+        return { text: 'Nao foi possivel identificar a conta vinculada para processar a mensagem.' };
     }
     const sanitizedMessages = messages
         .slice(-env_1.env.whatsappAiHistoryLimit)
@@ -860,7 +867,7 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
         .filter((message) => message.content.trim() || message.imageDataUrl || message.audioDataUrl);
     const latestUserMessageText = [...sanitizedMessages].reverse().find((message) => message.role === 'user')?.content ?? '';
     if (sanitizedMessages.length === 0) {
-        return 'Nao consegui interpretar a mensagem recebida.';
+        return { text: 'Nao consegui interpretar a mensagem recebida.' };
     }
     // Use cached context if available (TTL 2 min), otherwise fetch from Firestore
     const cached = getCachedContext(uid);
@@ -913,50 +920,54 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
         latestUserMessageText
     });
     const actionableResults = actionResults.filter((result) => result.kind !== 'none');
+    let mediaUrl;
+    const sendMediaAction = actionableResults.find((r) => r.kind === 'send_media');
+    if (sendMediaAction) {
+        mediaUrl = sendMediaAction.url;
+        // Don't show send_media in multi action text summary
+        const index = actionableResults.indexOf(sendMediaAction);
+        if (index > -1)
+            actionableResults.splice(index, 1);
+    }
     if (actionableResults.length === 0) {
-        return `${ai.reply}`.slice(0, env_1.env.maxMessageLength);
+        return { text: `${ai.reply}`.slice(0, env_1.env.maxMessageLength), mediaUrl };
     }
     if (actionableResults.length === 1) {
         const [actionResult] = actionableResults;
-        if (actionResult.kind === 'added') {
-            return buildAddedTransactionMessage(actionResult.receipt, ai.reply, settings.currency)
-                .slice(0, env_1.env.maxMessageLength);
-        }
-        if (actionResult.kind === 'added_recurring') {
-            return buildAddedRecurringTransactionMessage(actionResult.receipt, ai.reply, settings.currency)
-                .slice(0, env_1.env.maxMessageLength);
-        }
-        if (actionResult.kind === 'added_reminder') {
-            return buildAddedReminderMessage(actionResult.receipt, ai.reply, settings.currency)
-                .slice(0, env_1.env.maxMessageLength);
-        }
-        if (actionResult.kind === 'updated_reminder') {
-            return buildUpdatedReminderMessage(actionResult.receipt, ai.reply, settings.currency)
-                .slice(0, env_1.env.maxMessageLength);
-        }
-        if (actionResult.kind === 'completed_reminder') {
-            return buildCompletedReminderMessage(actionResult.receipt, ai.reply)
-                .slice(0, env_1.env.maxMessageLength);
-        }
-        if (actionResult.kind === 'deleted_reminder') {
-            return buildDeletedReminderMessage(actionResult.receipt, ai.reply)
-                .slice(0, env_1.env.maxMessageLength);
-        }
-        if (actionResult.kind === 'updated') {
-            return buildUpdatedTransactionMessage(actionResult.receipt, ai.reply)
-                .slice(0, env_1.env.maxMessageLength);
-        }
-        if (actionResult.kind === 'deleted') {
-            return buildDeletedTransactionMessage(actionResult.receipt, ai.reply)
-                .slice(0, env_1.env.maxMessageLength);
-        }
         if (actionResult.kind === 'error') {
             const baseReply = ai.reply.trim() || 'Nao consegui concluir a acao solicitada.';
-            return `${baseReply}\n\nAviso: ${actionResult.message}`.slice(0, env_1.env.maxMessageLength);
+            return {
+                text: `${baseReply}\n\nAviso: ${actionResult.message}`.slice(0, env_1.env.maxMessageLength),
+                mediaUrl
+            };
         }
+        // Default formatting branch (e.g. added)
+        let formattedText = '';
+        if (actionResult.kind === 'added')
+            formattedText = buildAddedTransactionMessage(actionResult.receipt, ai.reply, settings.currency);
+        else if (actionResult.kind === 'added_recurring')
+            formattedText = buildAddedRecurringTransactionMessage(actionResult.receipt, ai.reply, settings.currency);
+        else if (actionResult.kind === 'added_reminder')
+            formattedText = buildAddedReminderMessage(actionResult.receipt, ai.reply, settings.currency);
+        else if (actionResult.kind === 'updated_reminder')
+            formattedText = buildUpdatedReminderMessage(actionResult.receipt, ai.reply, settings.currency);
+        else if (actionResult.kind === 'completed_reminder')
+            formattedText = buildCompletedReminderMessage(actionResult.receipt, ai.reply);
+        else if (actionResult.kind === 'deleted_reminder')
+            formattedText = buildDeletedReminderMessage(actionResult.receipt, ai.reply);
+        else if (actionResult.kind === 'updated')
+            formattedText = buildUpdatedTransactionMessage(actionResult.receipt, ai.reply);
+        else if (actionResult.kind === 'deleted')
+            formattedText = buildDeletedTransactionMessage(actionResult.receipt, ai.reply);
+        return {
+            text: formattedText.slice(0, env_1.env.maxMessageLength),
+            mediaUrl
+        };
     }
-    return buildMultiActionMessage(actionableResults, ai.reply, settings.currency)
-        .slice(0, env_1.env.maxMessageLength);
+    return {
+        text: buildMultiActionMessage(actionableResults, ai.reply, settings.currency).slice(0, env_1.env.maxMessageLength),
+        mediaUrl
+    };
 }
 async function executeActions(uid, actions, categories, options) {
     const baseActions = Array.isArray(actions) && actions.length > 0
@@ -991,13 +1002,23 @@ async function executeAction(uid, action, categories, options) {
             if (!category) {
                 return { kind: 'none' };
             }
+            let receiptUrl;
+            if (options.latestImageDataUrl) {
+                // Parse the mime type from the data url
+                const mimeMatch = options.latestImageDataUrl.match(/^data:([^;]+);/);
+                const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+                const url = await (0, storage_1.uploadReceipt)(uid, options.latestImageDataUrl, mimeType);
+                if (url)
+                    receiptUrl = url;
+            }
             const payload = {
                 type: action.type,
                 amount: Number(action.amount),
                 description: (action.description || 'Lancamento via WhatsApp').toString().slice(0, 120),
                 category,
                 date: normalizeDate(action.date),
-                paymentMethod: normalizePaymentMethod(action.paymentMethod)
+                paymentMethod: normalizePaymentMethod(action.paymentMethod),
+                receiptUrl
             };
             const transactionId = await (0, firestore_1.addUserTransaction)(uid, payload);
             invalidateContextCache(uid);
@@ -1128,6 +1149,14 @@ async function executeAction(uid, action, categories, options) {
             const inferredSchedule = inferReminderScheduleFromText(options.latestUserMessageText);
             const explicitDueDate = parseYmd(action.dueDate);
             const explicitDueTime = normalizeDueTime(action.dueTime);
+            let receiptUrl;
+            if (options.latestImageDataUrl) {
+                const mimeMatch = options.latestImageDataUrl.match(/^data:([^;]+);/);
+                const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+                const url = await (0, storage_1.uploadReceipt)(uid, options.latestImageDataUrl, mimeType);
+                if (url)
+                    receiptUrl = url;
+            }
             const payload = {
                 reminderKind,
                 title: (action.title || 'Lembrete via WhatsApp').toString().slice(0, 120),
@@ -1136,7 +1165,8 @@ async function executeAction(uid, action, categories, options) {
                 dueTime: explicitDueTime ?? inferredSchedule?.dueTime ?? null,
                 type: isFinancial ? reminderKind : null,
                 status: 'pending',
-                notifyPhone: options.sourcePhone ?? null
+                notifyPhone: options.sourcePhone ?? null,
+                receiptUrl
             };
             const now = (0, date_utils_1.getBrasiliaDate)();
             const currentYmd = formatYmd(now);
@@ -1210,6 +1240,17 @@ async function executeAction(uid, action, categories, options) {
             }
             if (rawChanges.status === 'pending' || rawChanges.status === 'paid') {
                 updates.status = rawChanges.status;
+            }
+            let receiptUrl;
+            if (options.latestImageDataUrl) {
+                const mimeMatch = options.latestImageDataUrl.match(/^data:([^;]+);/);
+                const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+                const url = await (0, storage_1.uploadReceipt)(uid, options.latestImageDataUrl, mimeType);
+                if (url)
+                    receiptUrl = url;
+            }
+            if (receiptUrl) {
+                updates.receiptUrl = receiptUrl;
             }
             if (Object.keys(updates).length === 0) {
                 return { kind: 'none' };
@@ -1295,6 +1336,9 @@ async function executeAction(uid, action, categories, options) {
                     deletedAt: new Date().toISOString()
                 }
             };
+        }
+        if (action.action === 'send_media') {
+            return { kind: 'send_media', url: action.url };
         }
     }
     catch (error) {

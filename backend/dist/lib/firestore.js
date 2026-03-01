@@ -44,6 +44,7 @@ exports.loadWhatsAppAuthSnapshot = loadWhatsAppAuthSnapshot;
 exports.saveWhatsAppAuthSnapshot = saveWhatsAppAuthSnapshot;
 exports.clearWhatsAppAuthSnapshot = clearWhatsAppAuthSnapshot;
 exports.getRecentConversationByPhone = getRecentConversationByPhone;
+exports.getRecentConversationByOwnerUid = getRecentConversationByOwnerUid;
 exports.getLastConversationActivityByPhone = getLastConversationActivityByPhone;
 exports.getLastConversationClientIdByPhone = getLastConversationClientIdByPhone;
 exports.getUserChatSessions = getUserChatSessions;
@@ -620,16 +621,17 @@ function mapTransaction(row) {
         category: row.category,
         description: row.description,
         paymentMethod: row.payment_method,
+        receiptUrl: row.receipt_url ?? null,
         createdAt: row.created_at,
         updatedAt: row.updated_at
     };
 }
-async function getRecentTransactions(uid, limitCount) {
+async function getRecentTransactions(uid, limitCount = 50) {
     const { data, error } = await supabase_1.supabaseAdmin
         .from('app_transactions')
         .select('id, type, amount, date, month_key, category, description, payment_method, created_at, updated_at')
         .eq('uid', uid)
-        .order('date', { ascending: false })
+        .order('created_at', { ascending: false })
         .limit(limitCount);
     assertNoError(error, 'getRecentTransactions');
     return (data ?? []).map(mapTransaction);
@@ -645,6 +647,7 @@ async function getTransactionsByMonth(uid, monthKey) {
     return (data ?? []).map(mapTransaction);
 }
 async function addUserTransaction(uid, input) {
+    const monthKey = monthKeyFromDate(input.date);
     const now = new Date().toISOString();
     const { data, error } = await supabase_1.supabaseAdmin
         .from('app_transactions')
@@ -653,7 +656,7 @@ async function addUserTransaction(uid, input) {
         type: input.type,
         amount: input.amount,
         date: input.date,
-        month_key: monthKeyFromDate(input.date),
+        month_key: monthKey,
         category: input.category,
         description: input.description,
         payment_method: input.paymentMethod,
@@ -681,10 +684,13 @@ async function updateUserTransaction(uid, transactionId, changes) {
         updates.month_key = changes.monthKey;
     if (typeof changes.category === 'string')
         updates.category = changes.category;
-    if (typeof changes.description === 'string')
-        updates.description = changes.description;
-    if (typeof changes.paymentMethod === 'string')
+    if (typeof changes.description === 'string') {
+        updates.description = changes.description.slice(0, 500);
+    }
+    if (changes.paymentMethod)
         updates.payment_method = changes.paymentMethod;
+    if (Object.keys(updates).length <= 1)
+        return; // Only updated_at
     const { error } = await supabase_1.supabaseAdmin
         .from('app_transactions')
         .update(updates)
@@ -741,6 +747,7 @@ function mapReminder(row) {
         notifyPhone: row.notify_phone,
         type: row.type,
         status: row.status,
+        receiptUrl: row.receipt_url ?? null,
         createdAt: row.created_at,
         updatedAt: row.updated_at
     };
@@ -896,7 +903,8 @@ async function getDueWhatsAppReminders(nowIso, limitCount) {
             dueDate: row.due_date,
             dueTime,
             type: row.type,
-            notifyPhone
+            notifyPhone,
+            receiptUrl: null
         };
     })
         .filter((entry) => Boolean(entry));
@@ -1404,6 +1412,12 @@ async function getRecentConversationByPhone(uid, phone, limitCount, _clientId) {
     ]);
     assertNoError(inboundRes.error, 'getRecentConversationByPhone.inbound');
     assertNoError(outboundRes.error, 'getRecentConversationByPhone.outbound');
+    return mapWhatsAppRowsToConversation([
+        ...(inboundRes.data ?? []),
+        ...(outboundRes.data ?? [])
+    ], uid, limitCount);
+}
+function mapWhatsAppRowsToConversation(rows, uid, limitCount) {
     const docsById = new Map();
     const pushRows = (rows) => {
         for (const row of rows) {
@@ -1424,12 +1438,23 @@ async function getRecentConversationByPhone(uid, phone, limitCount, _clientId) {
             });
         }
     };
-    pushRows((inboundRes.data ?? []));
-    pushRows((outboundRes.data ?? []));
+    pushRows(rows);
     return [...docsById.values()]
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
         .slice(-limitCount)
         .map((entry) => ({ role: entry.role, content: entry.content }));
+}
+async function getRecentConversationByOwnerUid(uid, limitCount) {
+    if (!uid || uid.trim().length === 0)
+        return [];
+    const { data, error } = await supabase_1.supabaseAdmin
+        .from(COLLECTION_NAME)
+        .select('id, direction, owner_uid, status, created_at, text, metadata')
+        .eq('owner_uid', uid)
+        .order('created_at', { ascending: false })
+        .limit(Math.max(1, limitCount * 2));
+    assertNoError(error, 'getRecentConversationByOwnerUid');
+    return mapWhatsAppRowsToConversation((data ?? []), uid, limitCount);
 }
 const lastActivityCache = new Map();
 function lastActivityCacheKey(uid, phone) {

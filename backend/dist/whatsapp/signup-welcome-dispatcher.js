@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.startSignupWelcomeDispatcher = startSignupWelcomeDispatcher;
+const env_1 = require("../config/env");
 const logger_1 = require("../lib/logger");
 const SIGNUP_WELCOME_RETRY_MS = 30_000;
 const SIGNUP_WELCOME_MAX_ATTEMPTS = 5;
@@ -19,7 +20,7 @@ function buildSignupWelcomeMessage(displayName) {
         '✅ *Dúvidas sobre o saldo*: Pergunte como está o seu caixa ou o quanto já gastou no mês.',
         '',
         '*📱 Acesse seu painel completo no site para ver gráficos e relatórios detalhados:*',
-        '🌐 https://saldopro-98049.web.app',
+        `🌐 ${env_1.env.appPanelUrl}`,
         '',
         'Estou pronto para começar! O que vamos registrar hoje?'
     ].join('\n');

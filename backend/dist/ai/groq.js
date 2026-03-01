@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.queryGroqAssistant = queryGroqAssistant;
 const env_1 = require("../config/env");
+const date_utils_1 = require("../lib/date-utils");
 const logger_1 = require("../lib/logger");
 function formatCurrency(value, currency) {
     if (currency === 'BRL')
@@ -110,6 +111,13 @@ function enforceActionByPromptMode(actions, mode) {
     }
     return actions.length > 0 ? actions : [{ action: 'none' }];
 }
+function getCurrentBrasiliaPromptContext() {
+    const nowIso = (0, date_utils_1.getBrasiliaISOString)();
+    const [today = '', timePart = '00:00:00.000Z'] = nowIso.split('T');
+    const currentTime = timePart.slice(0, 8);
+    const currentDateTime = `${today} ${currentTime}`;
+    return { today, currentTime, currentDateTime };
+}
 /**
  * Compact system prompt for query-only messages.
  * No action formats, no transaction IDs, just financial summary + reply instructions.
@@ -118,7 +126,7 @@ function buildCompactSystemPrompt(context) {
     const { profile, settings, categories, recentTransactions } = context;
     const userName = profile.displayName?.split(' ')[0] || '';
     const userInfo = userName ? `Nome do usuario: ${userName}.` : '';
-    const today = new Date().toISOString().split('T')[0];
+    const { today, currentTime, currentDateTime } = getCurrentBrasiliaPromptContext();
     const financialSummary = buildFinancialSummary(recentTransactions, settings, categories);
     const categoryNames = categories.map((c) => c.name).join(', ');
     return `Voce e o SaldoPro, assistente financeiro pessoal via WhatsApp.
@@ -128,12 +136,16 @@ Responda a pergunta ou duvida do usuario com base no contexto financeiro abaixo.
 Seja natural, objetivo e util. Nao inclua IDs tecnicos.
 Se o usuario pedir um resumo ou relatorio de seus gastos/ganhos, use os totais por categoria listados no contexto abaixo para fornecer uma quebra detalhada e precisa.
 IMPORTANTE: Se o usuario perguntar se voce pode ver/ler imagens, fotos, recibos ou audios, diga que SIM! Voce tem recursos visuais e de audio integrados no WhatsApp.
+Se o usuario perguntar que horas sao, use EXATAMENTE a hora atual fornecida abaixo no contexto. Nao invente horario e nunca assuma 00:00 so porque recebeu uma data.
+Se o usuario pedir o link do painel, site, dashboard ou app, forneca EXATAMENTE este link: ${env_1.env.appPanelUrl}
 
 
 ${financialSummary}
 
 Categorias: ${categoryNames || '(nenhuma)'}
-Data de hoje: ${today}
+Data de hoje (Brasilia): ${today}
+Hora atual (Brasilia): ${currentTime}
+Data e hora atuais (Brasilia): ${currentDateTime}
 Moeda: ${settings.currency}
 ${settings.budget > 0 ? `Orcamento mensal: ${formatCurrency(settings.budget, settings.currency)}` : ''}
 
@@ -147,7 +159,7 @@ function buildSystemPrompt(context) {
     const userInfo = userName ? `Nome do usuario: ${userName}.` : 'Nome do usuario: nao informado.';
     const lightweight = isLightweightContext(context);
     const shouldSendSummary = lightweight;
-    const today = new Date().toISOString().split('T')[0];
+    const { today, currentTime, currentDateTime } = getCurrentBrasiliaPromptContext();
     const summaryInstruction = shouldSendSummary
         ? `Nesta resposta, inclua um resumo claro do que voce faz como assistente financeiro (6 a 8 bullets) e 2 exemplos de comandos reais que o usuario pode mandar.`
         : `Nao inclua lista de funcionalidades nesta resposta, a menos que o usuario peca explicitamente.`;
@@ -168,7 +180,9 @@ ${financialSummary}
 
 Categorias disponiveis: ${categoryNames || '(nenhuma)'}
 
-Data de hoje: ${today}
+Data de hoje (Brasilia): ${today}
+Hora atual (Brasilia): ${currentTime}
+Data e hora atuais (Brasilia): ${currentDateTime}
 Moeda: ${settings.currency}
 ${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.budget, settings.currency)}` : 'Sem orcamento mensal definido.'}`;
     }
@@ -180,7 +194,10 @@ ${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.bu
             .join('\n');
         const txList = recentTransactions
             .slice(0, PROMPT_TX_LIMIT)
-            .map((t) => `- ID: "${t.id}", Data: ${t.date}, Desc: "${t.description}", Valor: ${t.amount}, Tipo: ${t.type}, CatID: ${t.category}`)
+            .map((t) => {
+            const receiptInfo = t.receiptUrl ? `, Comprovante: ${t.receiptUrl}` : '';
+            return `- ID: "${t.id}", Data: ${t.date}, Desc: "${t.description}", Valor: ${t.amount}, Tipo: ${t.type}, CatID: ${t.category}${receiptInfo}`;
+        })
             .join('\n');
         const txNote = recentTransactions.length > PROMPT_TX_LIMIT
             ? `\n(mostrando ${PROMPT_TX_LIMIT} de ${recentTransactions.length} transacoes recentes)`
@@ -190,7 +207,8 @@ ${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.bu
             .map((r) => {
             const dueLabel = r.dueTime ? `${r.dueDate} ${r.dueTime}` : r.dueDate;
             const amountPart = r.amount != null ? `, Valor: ${r.amount}` : '';
-            return `- ID: "${r.id}", Titulo: "${r.title}", Tipo: ${r.reminderKind}, Status: ${r.status}, Vencimento: ${dueLabel}${amountPart}`;
+            const receiptInfo = r.receiptUrl ? `, Comprovante: ${r.receiptUrl}` : '';
+            return `- ID: "${r.id}", Titulo: "${r.title}", Tipo: ${r.reminderKind}, Status: ${r.status}, Vencimento: ${dueLabel}${amountPart}${receiptInfo}`;
         })
             .join('\n');
         const reminderNote = recentReminders.length > PROMPT_TX_LIMIT
@@ -210,7 +228,9 @@ ${txList || '(nenhuma transacao)'}${txNote}
 Lembretes recentes (referencia interna; nao mostrar IDs):
 ${remindersList || '(nenhum lembrete)'}${reminderNote}
 
-Data de hoje: ${today}
+Data de hoje (Brasilia): ${today}
+Hora atual (Brasilia): ${currentTime}
+Data e hora atuais (Brasilia): ${currentDateTime}
 Moeda: ${settings.currency}
 ${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.budget, settings.currency)}` : 'Sem orcamento mensal definido.'}`;
     }
@@ -234,6 +254,8 @@ ESTILO DE RESPOSTA
 - Em duvidas, orientacoes e analises, prefira 4 a 12 linhas com estrutura clara.
 - Nunca exiba IDs tecnicos para o usuario.
 - REGRA DE CAPACIDADE EXPLICITA: Se o usuario te perguntar se voce pode ver imagens, ler fotos/recibos ou entender audios, responda CONFIRMANDO QUE SIM. Voce e totalmente capaz de processar imagens (visao computacional) e audios pelo WhatsApp.
+- REGRA DE TEMPO: se o usuario perguntar "que horas sao", "qual a hora" ou pedir data/hora atual, use a data e hora atuais de Brasilia fornecidas no contexto abaixo. Nao invente horario.
+- REGRA DO LINK: se o usuario pedir o link do painel, do site, do dashboard ou do app, responda com EXATAMENTE este link: ${env_1.env.appPanelUrl}
 
 COMPREENSAO DE LINGUAGEM NATURAL
 - O usuario pode escrever de forma informal, com erros de digitacao ou abreviacoes. Interprete com boa vontade.
@@ -313,7 +335,7 @@ REGRAS TECNICAS (OBRIGATORIO)
 
 FORMATOS DE ACTIONOBJECT
 - {"action":"none"}
-- {"action":"add_transaction","type":"expense|income","amount":15.5,"description":"Lanche","categoryId":"id","date":"YYYY-MM-DD","paymentMethod":"pix|credit|debit|cash|transfer|boleto"}
+- {"action":"add_transaction","type":"expense|income","amount":15.5,"description":"Lanche","categoryId":"id","date":"YYYY-MM-DD",          "receiptUrl": "string | null (se houver foto do comprovante, esta sera a URL)",}
 - {"action":"add_recurring_transaction","type":"expense|income","amount":500,"description":"Aluguel","categoryId":"id","date":"YYYY-MM-DD","paymentMethod":"pix","frequency":"weekly|monthly|yearly","endDate":null}
 - {"action":"add_reminder","title":"Beber agua","reminderKind":"general","dueDate":"YYYY-MM-DD","dueTime":"HH:mm|null"}
 - {"action":"add_reminder","title":"Pagar aluguel","reminderKind":"payable","amount":1200,"dueDate":"YYYY-MM-DD","dueTime":"HH:mm|null","reminderType":"payable"}
@@ -532,6 +554,12 @@ function validateAction(raw) {
             return { action: 'none' };
         return { action: 'delete_reminder', id };
     }
+    if (action === 'send_media') {
+        const url = typeof obj.url === 'string' ? obj.url.trim() : '';
+        if (!url)
+            return { action: 'none' };
+        return { action: 'send_media', url };
+    }
     return { action: 'none' };
 }
 /**
@@ -745,7 +773,7 @@ async function transcribeAudioWithGroqFallbackChain(audioDataUrl) {
 }
 function buildVisionFallbackResult(content) {
     const amount = parseBrazilianAmount(content);
-    const date = parseDateFromText(content) ?? new Date().toISOString().split('T')[0];
+    const date = parseDateFromText(content) ?? (0, date_utils_1.getBrasiliaISOString)().split('T')[0];
     const paymentMethod = detectPaymentMethod(content);
     const type = detectTransactionType(content);
     const description = extractDescriptionFromText(content);

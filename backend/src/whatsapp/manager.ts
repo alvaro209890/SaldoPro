@@ -109,10 +109,11 @@ export class WhatsAppClientsManager {
   }
 
   async resetSession(_slotId?: WhatsAppSlotId): Promise<void> {
-    if (!this.hasLock || !this.clientStarted) {
-      await this.forceTakeoverAndStart();
+    if (!this.hasLock) {
+      await this.forceTakeover(false);
     }
     await this.client.resetSession();
+    this.clientStarted = true;
   }
 
   async sendTextWithRouting(input: SendWithRoutingInput): Promise<{ messageId: string; clientId: WhatsAppSlotId }> {
@@ -250,7 +251,7 @@ export class WhatsAppClientsManager {
     }
   }
 
-  private async forceTakeoverAndStart(): Promise<void> {
+  private async forceTakeover(startClient: boolean): Promise<void> {
     if (!this.running) {
       this.running = true;
     }
@@ -267,7 +268,7 @@ export class WhatsAppClientsManager {
       instanceId: this.instanceId
     });
 
-    if (this.clientStarted) return;
+    if (!startClient || this.clientStarted) return;
     await this.client.start();
     this.clientStarted = true;
     logger.info('WhatsApp client started after forced lock takeover', {

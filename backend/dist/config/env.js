@@ -41,6 +41,9 @@ function parseInteger(value, fallback) {
     }
     return parsed;
 }
+function normalizeUrl(value) {
+    return value.replace(/\/+$/, '');
+}
 function getOptional(name) {
     const value = process.env[name];
     if (!value || value.trim().length === 0)
@@ -81,7 +84,21 @@ exports.env = {
     groqMaxRetries: parseInteger(process.env.GROQ_MAX_RETRIES, 2),
     whatsappAiRateLimitPerMinute: parseInteger(process.env.WHATSAPP_AI_RATE_LIMIT_PER_MINUTE, 10),
     geminiApiKey: getOptional('GEMINI_API_KEY'),
-    geminiModel: process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash'
+    geminiModel: process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash',
+    appRegisterUrl: (() => {
+        const explicit = getOptional('APP_REGISTER_URL');
+        if (explicit)
+            return normalizeUrl(explicit);
+        const base = getOptional('WEB_APP_URL') || 'https://saldopro-98049.web.app';
+        return `${normalizeUrl(base)}/register`;
+    })(),
+    appPanelUrl: (() => {
+        const explicit = getOptional('APP_PANEL_URL');
+        if (explicit)
+            return normalizeUrl(explicit);
+        const base = getOptional('WEB_APP_URL') || 'https://saldopro-98049.web.app';
+        return `${normalizeUrl(base)}/app/dashboard`;
+    })()
 };
 if (exports.env.whatsappAiEnabled) {
     if (!exports.env.groqApiKey) {

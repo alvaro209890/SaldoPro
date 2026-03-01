@@ -84,6 +84,28 @@ function isCapabilitiesIntentMessage(text) {
         /\bquais?\s+(suas\s+)?(funcoes|funcionalidades|capacidades)\b/.test(normalized) ||
         /\b(o que|oq)\s+faz\b/.test(normalized));
 }
+function isPanelLinkIntentMessage(text) {
+    const normalized = normalizeForGreeting(text);
+    if (!normalized)
+        return false;
+    return (/\b(link|site|acesso|url)\b/.test(normalized) &&
+        /\b(painel|dashboard|app)\b/.test(normalized)) || /\bme\s+passe\s+o\s+link\s+do\s+painel\b/.test(normalized);
+}
+function buildPanelLinkReply() {
+    return `Acesse seu painel aqui: ${env_1.env.appPanelUrl}`;
+}
+function buildRegistrationRequiredReply() {
+    return [
+        'Oi! Eu sou a IA do SaldoPro.',
+        '',
+        'Eu posso te ajudar a registrar gastos e receitas, criar lembretes e acompanhar seu controle financeiro pelo WhatsApp.',
+        '',
+        'Para eu te atender por aqui, primeiro voce precisa fazer seu cadastro no site.',
+        `Faca seu cadastro aqui: ${env_1.env.appRegisterUrl}`,
+        '',
+        'Assim que terminar, pode me mandar mensagem novamente que eu continuo com voce.'
+    ].join('\n');
+}
 const UNDO_KEYWORDS = ['desfaz', 'desfazer', 'desfaca', 'cancela', 'cancelar', 'errou', 'errei', 'anula', 'anular', 'desfizer'];
 function isUndoMessage(text) {
     const normalized = normalizeForGreeting(text);
@@ -225,7 +247,7 @@ class WhatsAppClient {
             expiresInSec
         };
     }
-    async sendText(to, text, ownerUid) {
+    async sendText(to, text, ownerUid, mediaUrl) {
         const normalizedText = text.trim();
         if (!normalizedText) {
             throw new Error('Message text is required');
@@ -262,11 +284,12 @@ class WhatsAppClient {
                 error: err instanceof Error ? err.message : 'unknown'
             });
         }
-        const result = await this.sendWithRetry(jid, normalizedText, 'outbound', ownerUid);
+        const customOptions = mediaUrl ? { image: { url: mediaUrl } } : undefined;
+        const result = await this.sendWithRetry(jid, normalizedText, 'outbound', ownerUid, customOptions);
         if (ownerUid) {
             await this.appendConversationMessage(ownerUid, (0, events_1.jidToPhone)(jid), {
                 role: 'assistant',
-                content: normalizedText
+                content: mediaUrl ? `[Imagem Enviada] ${normalizedText}` : normalizedText
             });
         }
         return result;
@@ -282,11 +305,21 @@ class WhatsAppClient {
         this.clearQr();
         this.phone = null;
         if (this.socket) {
-            try {
-                await this.socket.logout();
+            if (this.connected) {
+                try {
+                    await this.socket.logout();
+                }
+                catch (error) {
+                    logger_1.logger.warn('Socket logout failed during reset', {
+                        slotId: this.slotId,
+                        error
+                    });
+                }
             }
-            catch (error) {
-                logger_1.logger.warn('Socket logout failed during reset', error);
+            else {
+                logger_1.logger.debug('Skipping WhatsApp logout during reset because socket is not connected yet', {
+                    slotId: this.slotId
+                });
             }
             try {
                 this.socket.ev.removeAllListeners('connection.update');
@@ -847,7 +880,8 @@ class WhatsAppClient {
             }
         }
         if (!binding) {
-            logger_1.logger.info('MSG_UNLINKED: no binding found or allowed, ignoring message', { from: remotePhone });
+            logger_1.logger.info('MSG_UNLINKED: no binding found or allowed, asking user to register', { from: remotePhone });
+            await this.handleUnlinkedMessage(replyJid, remotePhone);
             this.rememberInbound(messageId);
             return;
         }
@@ -894,6 +928,16 @@ class WhatsAppClient {
     async sendSmartReply(ownerUid, remoteJid, remotePhone, inboundText, imageDataUrl, audioDataUrl = null) {
         const hasAiInput = inboundText.trim().length > 0 || Boolean(imageDataUrl) || Boolean(audioDataUrl);
         if (env_1.env.whatsappAiEnabled && hasAiInput) {
+            if (isPanelLinkIntentMessage(inboundText)) {
+                const panelLinkReply = buildPanelLinkReply();
+                await this.sendWithRetry(remoteJid, panelLinkReply, 'auto_reply', ownerUid);
+                await this.appendConversationMessage(ownerUid, remotePhone, { role: 'user', content: inboundText.trim() });
+                await this.appendConversationMessage(ownerUid, remotePhone, {
+                    role: 'assistant',
+                    content: panelLinkReply
+                });
+                return;
+            }
             // Rate limiting check
             if (this.isRateLimited(ownerUid)) {
                 logger_1.logger.warn('MSG_RATE_LIMITED: AI processing skipped due to rate limit', {
@@ -948,6 +992,15 @@ class WhatsAppClient {
                         throw new Error(`AI pipeline timed out after ${AI_PIPELINE_TIMEOUT_MS}ms`);
                     })
                 ]);
+                if (aiPipelineResult.mediaUrl) {
+                    const payload = aiPipelineResult.aiReply.trim() || 'Aqui está o recibo solicitado:';
+                    await this.sendWithRetry(remoteJid, payload, 'auto_reply', ownerUid, { image: { url: aiPipelineResult.mediaUrl } });
+                    await this.appendConversationMessage(ownerUid, remotePhone, {
+                        role: 'assistant',
+                        content: `[Imagem Enviada] ${payload}`
+                    });
+                    return;
+                }
                 if (aiPipelineResult.aiReply.trim()) {
                     await this.sendWithRetry(remoteJid, aiPipelineResult.aiReply.trim(), 'auto_reply', ownerUid);
                     await this.appendConversationMessage(ownerUid, remotePhone, {
@@ -1054,15 +1107,15 @@ class WhatsAppClient {
         });
         logger_1.logger.info('MSG_PIPELINE_AI_DONE: AI response received', {
             uid: ownerUid,
-            replyLength: aiReply.length,
-            replyPreview: aiReply.slice(0, 80)
+            replyLength: aiReply.text.length,
+            replyPreview: aiReply.text.slice(0, 80)
         });
         // Save user message AFTER AI processes — enrich media messages with AI-extracted context
         if (inboundText.trim() || imageDataUrl || audioDataUrl) {
             let textForHistory = inboundText.trim();
-            if (!textForHistory && aiReply.trim()) {
+            if (!textForHistory && aiReply.text.trim()) {
                 const mediaType = imageDataUrl ? 'Imagem' : 'Audio';
-                const firstLine = aiReply.trim().split('\n').find((l) => l.replace(/[*_~`]/g, '').trim().length > 0) || '';
+                const firstLine = aiReply.text.trim().split('\n').find((l) => l.replace(/[*_~`]/g, '').trim().length > 0) || '';
                 const cleaned = firstLine.replace(/[*_~`]/g, '').trim().slice(0, 120);
                 textForHistory = cleaned ? `[${mediaType}] ${cleaned}` : `${mediaType} enviado no WhatsApp.`;
             }
@@ -1074,7 +1127,7 @@ class WhatsAppClient {
                 content: textForHistory
             });
         }
-        return { aiReply };
+        return { aiReply: aiReply.text, mediaUrl: aiReply.mediaUrl };
     }
     async sendAutoReply(remoteJid, ownerUid) {
         if (!this.socket || !this.connected)
@@ -1120,7 +1173,7 @@ class WhatsAppClient {
             void sendPresence('paused');
         };
     }
-    async sendWithRetry(jid, text, direction, ownerUid) {
+    async sendWithRetry(jid, text, direction, ownerUid, customOptions) {
         if (!this.socket) {
             throw new Error('WhatsApp socket is not available');
         }
@@ -1149,7 +1202,8 @@ class WhatsAppClient {
                         });
                     }
                 }
-                const response = await this.socket.sendMessage(jid, { text });
+                const payload = customOptions?.image ? { image: { url: customOptions.image.url }, caption: text } : { text };
+                const response = await this.socket.sendMessage(jid, payload);
                 if (response?.key?.id && response.message) {
                     this.sentMessagesCache.set(response.key.id, response.message);
                     // Prevent memory leaks: cap cache at ~100 messages per instance
@@ -1901,9 +1955,21 @@ class WhatsAppClient {
         timestamps.push(Date.now());
         this.aiCallTimestamps.set(uid, timestamps);
     }
-    async handleUnlinkedMessage(remotePhone) {
+    async handleUnlinkedMessage(remoteJid, remotePhone) {
         const normalizedPhone = (0, events_1.normalizePhoneNumber)(remotePhone);
-        logger_1.logger.info('Ignoring WhatsApp message from non-authorized number', { from: normalizedPhone });
+        const reply = buildRegistrationRequiredReply();
+        try {
+            await this.sendWithRetry(remoteJid, reply, 'auto_reply');
+            logger_1.logger.info('Sent registration guidance to unlinked WhatsApp number', {
+                from: normalizedPhone
+            });
+        }
+        catch (error) {
+            logger_1.logger.error('Failed to send registration guidance to unlinked WhatsApp number', {
+                from: normalizedPhone,
+                error: error instanceof Error ? error.message : 'unknown'
+            });
+        }
     }
     getMediaDownloadContext() {
         const socket = this.socket;
