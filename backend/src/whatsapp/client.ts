@@ -705,10 +705,12 @@ export class WhatsAppClient {
     const remoteJid = this.resolveIncomingRemoteJid(key);
     if (!remoteJid || isStatusJid(remoteJid) || isGroupJid(remoteJid)) return;
     const remotePhone = jidToPhone(remoteJid);
-    // ALWAYS reply using the phone-based JID (@s.whatsapp.net) to avoid
-    // "Waiting for this message" errors on the recipient's device.
-    // LID JIDs lack the Signal session keys needed for proper E2E delivery.
-    const replyJid = remoteJid;
+    // CRITICAL: We MUST reply to the JID that the message originally came from
+    // (the rawRemoteJid, which might be an @lid). If we reply to the resolved
+    // phone JID (@s.whatsapp.net), Baileys creates a new Signal session. The
+    // mobile device expects the reply on the LID session, causing an
+    // "Aguardando mensagem" error.
+    const replyJid = rawRemoteJid;
 
     if (this.phone && remotePhone === this.phone) {
       this.rememberInbound(messageId);
