@@ -978,197 +978,268 @@ export function App() {
 
           {activeTab === 'operations' ? (
             <>
-              <section className="grid gap-4 xl:grid-cols-3">
-            <div className="admin-panel rounded-3xl p-5">
-              <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">Backend</p>
-              <div className="mt-4 flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-white">Status do servidor</h2>
-                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${overview?.backend.ok ? 'bg-emerald-300/15 text-emerald-200' : 'bg-rose-400/15 text-rose-200'}`}>
-                  {overview?.backend.ok ? 'Online' : 'Offline'}
-                </span>
-              </div>
-              <dl className="mt-5 space-y-3 text-sm text-zinc-300">
-                <div className="flex justify-between gap-4">
-                  <dt>Uptime</dt>
-                  <dd>{overview ? formatUptime(overview.backend.uptime) : 'Carregando'}</dd>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <dt>Última leitura</dt>
-                  <dd>{overview ? formatDate(overview.backend.timestamp) : 'Carregando'}</dd>
-                </div>
-              </dl>
-            </div>
-
-            <div className="admin-panel rounded-3xl p-5">
-              <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">WhatsApp</p>
-              <div className="mt-4 flex items-center justify-between gap-4">
-                <h2 className="text-lg font-semibold text-white">Conexão ativa</h2>
-                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${primarySlot?.connected ? 'bg-emerald-300/15 text-emerald-200' : 'bg-amber-300/15 text-amber-100'}`}>
-                  {primarySlot?.connected ? 'Conectado' : 'Desconectado'}
-                </span>
-              </div>
-              <dl className="mt-5 space-y-3 text-sm text-zinc-300">
-                <div className="flex justify-between gap-4">
-                  <dt>Slot</dt>
-                  <dd>{primarySlot?.slotId ?? 'wa1'}</dd>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <dt>Telefone</dt>
-                  <dd>{primarySlot?.phone ?? 'Sem sessão'}</dd>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <dt>Estado</dt>
-                  <dd>{primarySlot?.state ?? 'Indisponível'}</dd>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <dt>Motivo</dt>
-                  <dd>{primarySlot?.lastDisconnectReason ?? 'Sem alerta'}</dd>
-                </div>
-              </dl>
-              <div className="mt-5 flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  onClick={() => void handleWhatsAppAction('reset')}
-                  disabled={whatsAppActionLoading.length > 0}
-                  className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-xs font-semibold text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {whatsAppActionLoading === 'reset' ? 'Resetando...' : 'Resetar sessão'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleWhatsAppAction('refreshQr')}
-                  disabled={whatsAppActionLoading.length > 0}
-                  className="rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-2.5 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-300/15 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {whatsAppActionLoading === 'refreshQr' ? 'Gerando...' : 'Forçar novo QR'}
-                </button>
-              </div>
-            </div>
-
-            <div className="admin-panel rounded-3xl p-5">
-              <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">Contas</p>
-              <div className="mt-4 grid gap-3 sm:grid-cols-3 xl:grid-cols-1 2xl:grid-cols-3">
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <p className="text-xs uppercase tracking-[0.25em] text-zinc-500">Total</p>
-                  <p className="mt-3 text-2xl font-semibold text-white">{overview?.stats.totalUsers ?? 0}</p>
-                </div>
-                <div className="rounded-2xl border border-rose-300/10 bg-rose-400/5 p-4">
-                  <p className="text-xs uppercase tracking-[0.25em] text-zinc-500">Bloqueados</p>
-                  <p className="mt-3 text-2xl font-semibold text-rose-200">{overview?.stats.blockedUsers ?? 0}</p>
-                </div>
-                <div className="rounded-2xl border border-emerald-300/10 bg-emerald-300/5 p-4">
-                  <p className="text-xs uppercase tracking-[0.25em] text-zinc-500">Ativos</p>
-                  <p className="mt-3 text-2xl font-semibold text-emerald-200">{overview?.stats.activeUsers ?? 0}</p>
-                </div>
-              </div>
-            </div>
-            <div className="admin-panel rounded-3xl p-5 xl:col-span-2">
-              <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">Alertas recentes</p>
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <div className="rounded-2xl border border-amber-300/10 bg-amber-400/5 p-4">
-                  <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Warn em 15 min</p>
-                  <p className="mt-2 text-2xl font-semibold text-amber-100">{overview?.backend.alerts.warnings15m ?? 0}</p>
-                </div>
-                <div className="rounded-2xl border border-rose-300/10 bg-rose-400/5 p-4">
-                  <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Erro em 15 min</p>
-                  <p className="mt-2 text-2xl font-semibold text-rose-200">{overview?.backend.alerts.errors15m ?? 0}</p>
-                </div>
-              </div>
-              <div className="mt-4 space-y-3">
-                {(overview?.backend.alerts.recent ?? []).slice(0, 4).map((entry) => (
-                  <div key={`${entry.timestamp}:${entry.message}`} className="rounded-2xl border border-white/8 bg-white/5 px-4 py-3">
-                    <div className="flex items-center justify-between gap-4 text-xs">
-                      <span className={`rounded-full px-2.5 py-1 font-semibold uppercase tracking-[0.18em] ${entry.level === 'error' ? 'bg-rose-400/15 text-rose-200' : 'bg-amber-300/15 text-amber-100'}`}>
-                        {entry.level}
-                      </span>
-                      <span className="text-zinc-500">{formatDate(entry.timestamp)}</span>
+              <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <div className="admin-panel rounded-3xl p-5">
+                  <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">Backend</p>
+                  <div className="mt-4 flex items-center justify-between gap-4">
+                    <h2 className="text-lg font-semibold text-white">Servidor</h2>
+                    <span className={`rounded-full px-3 py-1 text-xs font-semibold ${overview?.backend.ok ? 'bg-emerald-300/15 text-emerald-200' : 'bg-rose-400/15 text-rose-200'}`}>
+                      {overview?.backend.ok ? 'Online' : 'Offline'}
+                    </span>
+                  </div>
+                  <dl className="mt-5 space-y-3 text-sm text-zinc-300">
+                    <div className="flex justify-between gap-4">
+                      <dt>Uptime</dt>
+                      <dd>{overview ? formatUptime(overview.backend.uptime) : 'Carregando'}</dd>
                     </div>
-                    <p className="mt-2 text-sm text-zinc-200">{entry.message}</p>
+                    <div className="flex justify-between gap-4">
+                      <dt>Última leitura</dt>
+                      <dd>{overview ? formatDate(overview.backend.timestamp) : 'Carregando'}</dd>
+                    </div>
+                  </dl>
+                </div>
+
+                <div className="admin-panel rounded-3xl p-5">
+                  <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">WhatsApp</p>
+                  <div className="mt-4 flex items-center justify-between gap-4">
+                    <h2 className="text-lg font-semibold text-white">Sessão principal</h2>
+                    <span className={`rounded-full px-3 py-1 text-xs font-semibold ${primarySlot?.connected ? 'bg-emerald-300/15 text-emerald-200' : 'bg-amber-300/15 text-amber-100'}`}>
+                      {primarySlot?.connected ? 'Conectado' : 'Desconectado'}
+                    </span>
                   </div>
-                ))}
-                {(overview?.backend.alerts.recent ?? []).length === 0 ? (
-                  <div className="rounded-2xl border border-white/8 bg-white/5 px-4 py-3 text-sm text-zinc-400">
-                    Nenhum warn/erro recente capturado.
+                  <dl className="mt-5 space-y-3 text-sm text-zinc-300">
+                    <div className="flex justify-between gap-4">
+                      <dt>Slot</dt>
+                      <dd>{primarySlot?.slotId ?? 'wa1'}</dd>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <dt>Telefone</dt>
+                      <dd>{primarySlot?.phone ?? 'Sem sessão'}</dd>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <dt>Estado</dt>
+                      <dd>{primarySlot?.state ?? 'Indisponível'}</dd>
+                    </div>
+                  </dl>
+                </div>
+
+                <div className="admin-panel rounded-3xl p-5">
+                  <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">Alertas</p>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                    <div className="rounded-2xl border border-amber-300/10 bg-amber-400/5 p-4">
+                      <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Warn em 15 min</p>
+                      <p className="mt-2 text-2xl font-semibold text-amber-100">{overview?.backend.alerts.warnings15m ?? 0}</p>
+                    </div>
+                    <div className="rounded-2xl border border-rose-300/10 bg-rose-400/5 p-4">
+                      <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Erro em 15 min</p>
+                      <p className="mt-2 text-2xl font-semibold text-rose-200">{overview?.backend.alerts.errors15m ?? 0}</p>
+                    </div>
                   </div>
-                ) : null}
-              </div>
-            </div>
+                </div>
+
+                <div className="admin-panel rounded-3xl p-5">
+                  <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">Contas</p>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-3 md:grid-cols-1 xl:grid-cols-1 2xl:grid-cols-3">
+                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                      <p className="text-xs uppercase tracking-[0.25em] text-zinc-500">Total</p>
+                      <p className="mt-3 text-2xl font-semibold text-white">{overview?.stats.totalUsers ?? 0}</p>
+                    </div>
+                    <div className="rounded-2xl border border-rose-300/10 bg-rose-400/5 p-4">
+                      <p className="text-xs uppercase tracking-[0.25em] text-zinc-500">Bloqueados</p>
+                      <p className="mt-3 text-2xl font-semibold text-rose-200">{overview?.stats.blockedUsers ?? 0}</p>
+                    </div>
+                    <div className="rounded-2xl border border-emerald-300/10 bg-emerald-300/5 p-4">
+                      <p className="text-xs uppercase tracking-[0.25em] text-zinc-500">Ativos</p>
+                      <p className="mt-3 text-2xl font-semibold text-emerald-200">{overview?.stats.activeUsers ?? 0}</p>
+                    </div>
+                  </div>
+                </div>
               </section>
-
-              {primarySlot && !primarySlot.connected ? (
-                <section className="admin-panel rounded-3xl p-5">
-                  <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="max-w-xl">
-                      <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">QRCode</p>
-                      <h2 className="mt-3 text-xl font-semibold text-white">Reconexão do WhatsApp</h2>
-                      <p className="mt-2 text-sm leading-6 text-zinc-300">
-                        Quando o WhatsApp estiver desconectado, o QR aparece aqui. Se ainda não houver um QR ativo, o painel mostra o motivo atual.
-                      </p>
-                      {primaryQr?.available ? (
-                        <p className="mt-3 text-sm text-emerald-200">
-                          QR disponível por mais {primaryQr.expiresInSec ?? 0}s.
-                        </p>
-                      ) : (
-                        <p className="mt-3 text-sm text-amber-100">
-                          QR indisponível: {primaryQr?.reason ?? 'aguardando geração'}.
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex justify-center">
-                      {primaryQr?.available && primaryQr.qrPngBase64 ? (
-                        <img
-                          src={primaryQr.qrPngBase64}
-                          alt="QR Code do WhatsApp"
-                          className="h-56 w-56 rounded-3xl border border-white/10 bg-white p-4"
-                        />
-                      ) : (
-                        <div className="flex h-56 w-56 items-center justify-center rounded-3xl border border-dashed border-white/10 bg-white/5 px-6 text-center text-sm text-zinc-400">
-                          Nenhum QR ativo no momento.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </section>
-              ) : null}
 
               <section className="admin-panel rounded-3xl p-5">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                   <div>
-                    <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">Eventos</p>
-                    <h2 className="mt-3 text-xl font-semibold text-white">Últimos eventos do WhatsApp</h2>
+                    <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">Central WhatsApp</p>
+                    <h2 className="mt-3 text-xl font-semibold text-white">Sessão, QR Code e ações operacionais</h2>
+                    <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-300">
+                      Todos os controles críticos do WhatsApp ficam aqui: status da sessão, reset, geração de QR e leitura do motivo de desconexão.
+                    </p>
                   </div>
                 </div>
-                <div className="mt-5 max-h-96 overflow-y-auto pr-1">
-                  <div className="grid gap-3 lg:grid-cols-2">
-                    {(overview?.whatsapp.recentEvents ?? []).map((entry) => (
-                      <div key={`${entry.timestamp}:${entry.message}`} className="rounded-2xl border border-white/8 bg-white/5 px-4 py-3">
-                        <div className="flex items-center justify-between gap-4 text-xs text-zinc-500">
-                          <span className={`rounded-full px-2.5 py-1 font-semibold uppercase tracking-[0.18em] ${entry.level === 'error' ? 'bg-rose-400/15 text-rose-200' : entry.level === 'warn' ? 'bg-amber-300/15 text-amber-100' : 'bg-emerald-300/15 text-emerald-200'}`}>
-                            {entry.level}
-                          </span>
-                          <span>{formatDate(entry.timestamp)}</span>
-                        </div>
-                        <div className="mt-2 text-sm text-zinc-200">
-                          {entry.message}
-                        </div>
-                        <div className="mt-3 flex">
-                          <div className="group relative">
-                            <span className="flex cursor-help items-center gap-1.5 rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[11px] font-semibold text-zinc-400 transition hover:bg-white/10 hover:text-white">
-                              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                              O que isso significa?
-                            </span>
-                            <div className="pointer-events-none absolute bottom-full left-0 z-10 mb-2 mt-2 hidden w-64 rounded-xl border border-white/10 bg-zinc-900 p-3 text-xs text-zinc-300 opacity-0 shadow-lg group-hover:block group-hover:opacity-100">
-                              {getEventExplanation(entry.message)}
+
+                <div className="mt-5 grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+                  <div className="space-y-4">
+                    <div className="rounded-3xl border border-white/8 bg-white/[0.04] p-5">
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="space-y-4">
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.26em] text-zinc-500">Sessão atual</p>
+                            <div className="mt-3 flex flex-wrap items-center gap-3">
+                              <span className={`rounded-full px-3 py-1 text-xs font-semibold ${primarySlot?.connected ? 'bg-emerald-300/15 text-emerald-200' : 'bg-amber-300/15 text-amber-100'}`}>
+                                {primarySlot?.connected ? 'Conectado' : 'Desconectado'}
+                              </span>
+                              <span className="rounded-full border border-white/8 bg-black/20 px-3 py-1 text-xs font-semibold text-zinc-300">
+                                {primarySlot?.slotId ?? 'wa1'}
+                              </span>
                             </div>
                           </div>
+
+                          <dl className="grid gap-3 text-sm text-zinc-300 sm:grid-cols-2">
+                            <div className="rounded-2xl border border-white/8 bg-black/15 px-4 py-3">
+                              <dt className="text-xs uppercase tracking-[0.2em] text-zinc-500">Telefone</dt>
+                              <dd className="mt-2 break-all text-zinc-100">{primarySlot?.phone ?? 'Sem sessão'}</dd>
+                            </div>
+                            <div className="rounded-2xl border border-white/8 bg-black/15 px-4 py-3">
+                              <dt className="text-xs uppercase tracking-[0.2em] text-zinc-500">Estado</dt>
+                              <dd className="mt-2 text-zinc-100">{primarySlot?.state ?? 'Indisponível'}</dd>
+                            </div>
+                            <div className="rounded-2xl border border-white/8 bg-black/15 px-4 py-3 sm:col-span-2">
+                              <dt className="text-xs uppercase tracking-[0.2em] text-zinc-500">Último motivo de alerta</dt>
+                              <dd className="mt-2 text-zinc-100">{primarySlot?.lastDisconnectReason ?? 'Sem alerta'}</dd>
+                            </div>
+                          </dl>
+                        </div>
+
+                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:w-[220px]">
+                          <button
+                            type="button"
+                            onClick={() => void handleWhatsAppAction('reset')}
+                            disabled={whatsAppActionLoading.length > 0}
+                            className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {whatsAppActionLoading === 'reset' ? 'Resetando...' : 'Resetar sessão'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleWhatsAppAction('refreshQr')}
+                            disabled={whatsAppActionLoading.length > 0}
+                            className="rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-300/15 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {whatsAppActionLoading === 'refreshQr' ? 'Gerando...' : 'Forçar novo QR'}
+                          </button>
                         </div>
                       </div>
+                    </div>
+
+                    <div className="rounded-3xl border border-white/8 bg-white/[0.04] p-5">
+                      <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+                        <div className="max-w-xl">
+                          <p className="text-xs uppercase tracking-[0.26em] text-zinc-500">QRCode</p>
+                          <h3 className="mt-3 text-lg font-semibold text-white">Reconexão visual</h3>
+                          <p className="mt-2 text-sm leading-6 text-zinc-300">
+                            O QR fica centralizado com o status da sessão. Mesmo quando o bot estiver conectado, o painel mantém este espaço para você forçar uma nova autenticação sem caçar o bloco em outra área.
+                          </p>
+                          {primarySlot?.connected ? (
+                            <p className="mt-3 text-sm text-emerald-200">
+                              Sessão ativa. Gere um novo QR apenas se precisar reconectar manualmente.
+                            </p>
+                          ) : primaryQr?.available ? (
+                            <p className="mt-3 text-sm text-emerald-200">
+                              QR disponível por mais {primaryQr.expiresInSec ?? 0}s.
+                            </p>
+                          ) : (
+                            <p className="mt-3 text-sm text-amber-100">
+                              QR indisponível: {primaryQr?.reason ?? 'aguardando geração'}.
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex justify-center">
+                          {primaryQr?.available && primaryQr.qrPngBase64 ? (
+                            <img
+                              src={primaryQr.qrPngBase64}
+                              alt="QR Code do WhatsApp"
+                              className="h-56 w-56 rounded-3xl border border-white/10 bg-white p-4"
+                            />
+                          ) : (
+                            <div className="flex h-56 w-56 items-center justify-center rounded-3xl border border-dashed border-white/10 bg-white/5 px-6 text-center text-sm text-zinc-400">
+                              Nenhum QR ativo no momento.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-3xl border border-white/8 bg-white/[0.04] p-5">
+                    <p className="text-xs uppercase tracking-[0.26em] text-zinc-500">Eventos</p>
+                    <h3 className="mt-3 text-lg font-semibold text-white">Últimos eventos do WhatsApp</h3>
+                    <div className="mt-5 max-h-[44rem] overflow-y-auto pr-1">
+                      <div className="space-y-3">
+                        {(overview?.whatsapp.recentEvents ?? []).map((entry) => (
+                          <div key={`${entry.timestamp}:${entry.message}`} className="rounded-2xl border border-white/8 bg-black/15 px-4 py-3">
+                            <div className="flex items-center justify-between gap-4 text-xs text-zinc-500">
+                              <span className={`rounded-full px-2.5 py-1 font-semibold uppercase tracking-[0.18em] ${entry.level === 'error' ? 'bg-rose-400/15 text-rose-200' : entry.level === 'warn' ? 'bg-amber-300/15 text-amber-100' : 'bg-emerald-300/15 text-emerald-200'}`}>
+                                {entry.level}
+                              </span>
+                              <span>{formatDate(entry.timestamp)}</span>
+                            </div>
+                            <div className="mt-2 text-sm text-zinc-200">
+                              {entry.message}
+                            </div>
+                            <div className="mt-3 flex">
+                              <div className="group relative">
+                                <span className="flex cursor-help items-center gap-1.5 rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[11px] font-semibold text-zinc-400 transition hover:bg-white/10 hover:text-white">
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                                  O que isso significa?
+                                </span>
+                                <div className="pointer-events-none absolute bottom-full left-0 z-10 mb-2 mt-2 hidden w-64 rounded-xl border border-white/10 bg-zinc-900 p-3 text-xs text-zinc-300 opacity-0 shadow-lg group-hover:block group-hover:opacity-100">
+                                  {getEventExplanation(entry.message)}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                        {(overview?.whatsapp.recentEvents ?? []).length === 0 ? (
+                          <div className="rounded-2xl border border-white/8 bg-black/15 px-4 py-3 text-sm text-zinc-400">
+                            Nenhum evento recente do WhatsApp disponível.
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+                <div className="admin-panel rounded-3xl p-5">
+                  <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">Alertas recentes</p>
+                  <div className="mt-4 space-y-3">
+                    {(overview?.backend.alerts.recent ?? []).slice(0, 6).map((entry) => (
+                      <div key={`${entry.timestamp}:${entry.message}`} className="rounded-2xl border border-white/8 bg-white/5 px-4 py-3">
+                        <div className="flex items-center justify-between gap-4 text-xs">
+                          <span className={`rounded-full px-2.5 py-1 font-semibold uppercase tracking-[0.18em] ${entry.level === 'error' ? 'bg-rose-400/15 text-rose-200' : 'bg-amber-300/15 text-amber-100'}`}>
+                            {entry.level}
+                          </span>
+                          <span className="text-zinc-500">{formatDate(entry.timestamp)}</span>
+                        </div>
+                        <p className="mt-2 text-sm text-zinc-200">{entry.message}</p>
+                      </div>
                     ))}
-                    {(overview?.whatsapp.recentEvents ?? []).length === 0 ? (
+                    {(overview?.backend.alerts.recent ?? []).length === 0 ? (
                       <div className="rounded-2xl border border-white/8 bg-white/5 px-4 py-3 text-sm text-zinc-400">
-                        Nenhum evento recente do WhatsApp disponível.
+                        Nenhum warn/erro recente capturado.
                       </div>
                     ) : null}
+                  </div>
+                </div>
+
+                <div className="admin-panel rounded-3xl p-5">
+                  <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">Leitura rápida</p>
+                  <div className="mt-4 space-y-3">
+                    <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
+                      <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Ambiente</p>
+                      <p className="mt-2 break-all text-sm text-zinc-200">{BACKEND_URL}</p>
+                    </div>
+                    <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
+                      <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Última atividade global</p>
+                      <p className="mt-2 text-sm text-zinc-200">{formatDate(latestGlobalActivity)}</p>
+                    </div>
+                    <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
+                      <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Objetivo desta aba</p>
+                      <p className="mt-2 text-sm leading-6 text-zinc-300">
+                        Resolver incidentes operacionais sem alternar entre blocos dispersos: sessão, QR code, alertas e telemetria ficam agrupados.
+                      </p>
+                    </div>
                   </div>
                 </div>
               </section>
