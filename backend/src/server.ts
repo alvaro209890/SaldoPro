@@ -9,10 +9,12 @@ import { createAiChatRouter } from './routes/ai-chat';
 import { createDataRouter } from './routes/data';
 import { WhatsAppClientsManager } from './whatsapp/manager';
 import { startWhatsAppReminderNotifier } from './whatsapp/reminder-notifier';
+import { startSignupWelcomeDispatcher } from './whatsapp/signup-welcome-dispatcher';
 
 const app = express();
 const whatsappManager = new WhatsAppClientsManager();
 const stopReminderNotifier = startWhatsAppReminderNotifier(whatsappManager);
+const signupWelcomeDispatcher = startSignupWelcomeDispatcher(whatsappManager);
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
@@ -20,7 +22,7 @@ app.use(healthRouter);
 app.use(createQrPageRouter(whatsappManager));
 app.use('/api/whatsapp', createWhatsAppRouter(whatsappManager));
 app.use('/api/ai', createAiChatRouter());
-app.use('/api/data', createDataRouter());
+app.use('/api/data', createDataRouter(signupWelcomeDispatcher));
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   logger.error('Unhandled backend error', error);
@@ -48,6 +50,7 @@ if (env.backendUrl) {
 const shutdown = async (signal: string): Promise<void> => {
   logger.warn('Shutdown signal received — closing gracefully', { signal });
   stopReminderNotifier();
+  signupWelcomeDispatcher.stop();
   server.close();
   await whatsappManager.shutdownAll();
   // Brief pause so the WebSocket close frame is sent before the process exits

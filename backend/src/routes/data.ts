@@ -28,6 +28,7 @@ import {
   updateUserTransaction
 } from '../lib/firestore';
 import { logger } from '../lib/logger';
+import type { SignupWelcomeDispatcher } from '../whatsapp/signup-welcome-dispatcher';
 
 function getUid(req: Request): string {
   return (req as Request & { uid: string }).uid;
@@ -37,7 +38,7 @@ function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-export function createDataRouter(): Router {
+export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatcher): Router {
   const router = Router();
 
   router.use(requireFirebaseAuth);
@@ -54,12 +55,21 @@ export function createDataRouter(): Router {
       return;
     }
 
-    await bootstrapUserData(uid, {
+    const bootstrapResult = await bootstrapUserData(uid, {
       email,
       displayName,
       ...(phone ? { phone } : {})
     });
+
     res.json({ ok: true });
+
+    if (bootstrapResult.isNewUser && bootstrapResult.normalizedPhone) {
+      signupWelcomeDispatcher.enqueue({
+        uid,
+        phone: bootstrapResult.normalizedPhone,
+        displayName
+      });
+    }
   });
 
   router.get('/settings', async (req: Request, res: Response) => {

@@ -14,16 +14,18 @@ const ai_chat_1 = require("./routes/ai-chat");
 const data_1 = require("./routes/data");
 const manager_1 = require("./whatsapp/manager");
 const reminder_notifier_1 = require("./whatsapp/reminder-notifier");
+const signup_welcome_dispatcher_1 = require("./whatsapp/signup-welcome-dispatcher");
 const app = (0, express_1.default)();
 const whatsappManager = new manager_1.WhatsAppClientsManager();
 const stopReminderNotifier = (0, reminder_notifier_1.startWhatsAppReminderNotifier)(whatsappManager);
+const signupWelcomeDispatcher = (0, signup_welcome_dispatcher_1.startSignupWelcomeDispatcher)(whatsappManager);
 app.use((0, cors_1.default)());
 app.use(express_1.default.json({ limit: '2mb' }));
 app.use(health_1.healthRouter);
 app.use((0, qr_page_1.createQrPageRouter)(whatsappManager));
 app.use('/api/whatsapp', (0, whatsapp_1.createWhatsAppRouter)(whatsappManager));
 app.use('/api/ai', (0, ai_chat_1.createAiChatRouter)());
-app.use('/api/data', (0, data_1.createDataRouter)());
+app.use('/api/data', (0, data_1.createDataRouter)(signupWelcomeDispatcher));
 app.use((error, _req, res, _next) => {
     logger_1.logger.error('Unhandled backend error', error);
     const message = error instanceof Error ? error.message : 'Internal server error';
@@ -46,6 +48,7 @@ if (env_1.env.backendUrl) {
 const shutdown = async (signal) => {
     logger_1.logger.warn('Shutdown signal received — closing gracefully', { signal });
     stopReminderNotifier();
+    signupWelcomeDispatcher.stop();
     server.close();
     await whatsappManager.shutdownAll();
     // Brief pause so the WebSocket close frame is sent before the process exits

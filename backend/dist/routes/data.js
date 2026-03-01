@@ -11,7 +11,7 @@ function getUid(req) {
 function asString(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
-function createDataRouter() {
+function createDataRouter(signupWelcomeDispatcher) {
     const router = (0, express_1.Router)();
     router.use(firebase_auth_1.requireFirebaseAuth);
     router.post('/bootstrap', async (req, res) => {
@@ -24,12 +24,19 @@ function createDataRouter() {
             res.status(400).json({ error: '`email` e `displayName` sao obrigatorios.' });
             return;
         }
-        await (0, firestore_1.bootstrapUserData)(uid, {
+        const bootstrapResult = await (0, firestore_1.bootstrapUserData)(uid, {
             email,
             displayName,
             ...(phone ? { phone } : {})
         });
         res.json({ ok: true });
+        if (bootstrapResult.isNewUser && bootstrapResult.normalizedPhone) {
+            signupWelcomeDispatcher.enqueue({
+                uid,
+                phone: bootstrapResult.normalizedPhone,
+                displayName
+            });
+        }
     });
     router.get('/settings', async (req, res) => {
         const uid = getUid(req);

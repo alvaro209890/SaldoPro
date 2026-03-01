@@ -97,12 +97,12 @@ const MESSAGE_QUEUE_CONCURRENCY = 3;
 const COMPOSING_REFRESH_MS = 4000;
 /** If the same JID hits repeated Bad MAC in a short window, perform a soft reconnect. */
 const BAD_MAC_WINDOW_MS = 2 * 60 * 1000;
-const BAD_MAC_RECONNECT_THRESHOLD = 1;
+const BAD_MAC_RECONNECT_THRESHOLD = 3;
 /** After this many soft reconnects without success, escalate to full session reset. */
-const BAD_MAC_HARD_RESET_AFTER = 2;
+const BAD_MAC_HARD_RESET_AFTER = 3;
 /** How long to keep unresolvable-LID messages buffered before discarding. */
-const LID_BUFFER_TTL_MS = 30_000;
-const LID_BUFFER_MAX_PER_JID = 5;
+const LID_BUFFER_TTL_MS = 120_000;
+const LID_BUFFER_MAX_PER_JID = 15;
 /** Debounce for bursts of creds.update events. */
 const AUTH_SYNC_DEBOUNCE_MS = 1200;
 /** Minimum interval between persisted auth snapshots to reduce write volume. */
@@ -171,6 +171,7 @@ class WhatsAppClient {
                 this.socket.ev.removeAllListeners('connection.update');
                 this.socket.ev.removeAllListeners('creds.update');
                 this.socket.ev.removeAllListeners('messages.upsert');
+                this.socket.ev.removeAllListeners('messaging-history.set');
                 this.socket.ev.removeAllListeners('chats.phoneNumberShare');
                 this.socket.ev.removeAllListeners('contacts.upsert');
                 this.socket.ev.removeAllListeners('contacts.update');
@@ -254,6 +255,7 @@ class WhatsAppClient {
                 this.socket.ev.removeAllListeners('connection.update');
                 this.socket.ev.removeAllListeners('creds.update');
                 this.socket.ev.removeAllListeners('messages.upsert');
+                this.socket.ev.removeAllListeners('messaging-history.set');
                 this.socket.ev.removeAllListeners('chats.phoneNumberShare');
                 this.socket.ev.removeAllListeners('contacts.upsert');
                 this.socket.ev.removeAllListeners('contacts.update');
@@ -287,6 +289,7 @@ class WhatsAppClient {
                 this.socket.ev.removeAllListeners('connection.update');
                 this.socket.ev.removeAllListeners('creds.update');
                 this.socket.ev.removeAllListeners('messages.upsert');
+                this.socket.ev.removeAllListeners('messaging-history.set');
                 this.socket.ev.removeAllListeners('chats.phoneNumberShare');
                 this.socket.ev.removeAllListeners('contacts.upsert');
                 this.socket.ev.removeAllListeners('contacts.update');
@@ -354,6 +357,67 @@ class WhatsAppClient {
                 return;
             this.absorbContactLidMappings(contacts, 'contacts_update');
         });
+        // messaging-history.set carries contacts from history sync — main source of LID→phone mappings
+        socket.ev.on('messaging-history.set', (history) => {
+            if (this.connectionEpoch !== epoch)
+                return;
+            if (history.contacts && history.contacts.length > 0) {
+                logger_1.logger.info('HISTORY_SYNC: received contacts with potential LID mappings', {
+                    slotId: this.slotId,
+                    contactCount: history.contacts.length
+                });
+                this.absorbContactLidMappings(history.contacts, 'contacts_upsert');
+            }
+        });
+        // CRITICAL: Hook into raw WebSocket stanzas to capture sender_pn from node attributes.
+        // Baileys has sender_pn in retry receipt nodes but may also include it in some
+        // initial message nodes. We intercept it BEFORE Baileys processes the message.
+        const ws = socket.ws;
+        if (ws && typeof ws.on === 'function') {
+            ws.on('CB:message', (node) => {
+                if (this.connectionEpoch !== epoch)
+                    return;
+                const attrs = node?.attrs;
+                if (!attrs)
+                    return;
+                const from = attrs.from;
+                const senderPn = attrs.sender_pn;
+                if (from && from.endsWith('@lid') && senderPn && senderPn.includes('@s.whatsapp.net')) {
+                    this.rememberLidMapping(from, senderPn, 'message_candidate');
+                    logger_1.logger.info('CB_MESSAGE_SENDER_PN: extracted phone from raw node', {
+                        slotId: this.slotId,
+                        lidJid: from,
+                        senderPn
+                    });
+                }
+                else if (from && from.endsWith('@lid') && !senderPn) {
+                    logger_1.logger.info('CB_MESSAGE_NO_SENDER_PN: LID message without sender_pn', {
+                        slotId: this.slotId,
+                        lidJid: from,
+                        availableAttrs: Object.keys(attrs).join(',')
+                    });
+                }
+            });
+            // Also listen for CB:receipt which carries sender_pn in retry receipts
+            ws.on('CB:receipt', (node) => {
+                if (this.connectionEpoch !== epoch)
+                    return;
+                const attrs = node?.attrs;
+                if (!attrs)
+                    return;
+                const from = attrs.from;
+                const senderPn = attrs.sender_pn;
+                if (from && from.endsWith('@lid') && senderPn && senderPn.includes('@s.whatsapp.net')) {
+                    this.rememberLidMapping(from, senderPn, 'message_candidate');
+                    logger_1.logger.info('CB_RECEIPT_SENDER_PN: extracted phone from receipt node', {
+                        slotId: this.slotId,
+                        lidJid: from,
+                        senderPn
+                    });
+                }
+            });
+            logger_1.logger.info('Raw CB:message/CB:receipt listeners registered for sender_pn extraction', { slotId: this.slotId });
+        }
         logger_1.logger.info('WhatsApp socket initialized', { slotId: this.slotId, displayName: this.displayName, epoch });
     }
     async handleConnectionUpdate(update) {
@@ -493,9 +557,10 @@ class WhatsAppClient {
         if (!remoteJid || (0, events_1.isStatusJid)(remoteJid) || (0, events_1.isGroupJid)(remoteJid))
             return;
         const remotePhone = (0, events_1.jidToPhone)(remoteJid);
-        const replyJid = rawRemoteJid && rawRemoteJid.endsWith('@lid') && !(0, events_1.isStatusJid)(rawRemoteJid) && !(0, events_1.isGroupJid)(rawRemoteJid)
-            ? rawRemoteJid
-            : remoteJid;
+        // ALWAYS reply using the phone-based JID (@s.whatsapp.net) to avoid
+        // "Waiting for this message" errors on the recipient's device.
+        // LID JIDs lack the Signal session keys needed for proper E2E delivery.
+        const replyJid = remoteJid;
         if (this.phone && remotePhone === this.phone) {
             this.rememberInbound(messageId);
             logger_1.logger.info('MSG_SKIP: own-number chat ignored', {
@@ -529,6 +594,8 @@ class WhatsAppClient {
                 fromMe: Boolean(key.fromMe),
                 pendingCount: this.pendingLidMessages.get(remoteJid)?.length ?? 0
             });
+            // Use multiple strategies to resolve the LID to a phone number
+            this.requestPhoneForLidJid(remoteJid, message);
             return;
         }
         if (!message.message && this.hasLidIdentity(key)) {
@@ -546,14 +613,20 @@ class WhatsAppClient {
             });
             return;
         }
-        // Also handle non-LID messages with empty payload (Bad MAC without LID)
+        // Handle messages with empty payload — likely Bad MAC or PreKeyError decryption failure.
+        // Do NOT clear Signal sessions here — Baileys' built-in retry mechanism will
+        // send retry receipts with pre-keys, allowing the sender to re-establish the session
+        // and re-send the message. Clearing sessions aggressively was counter-productive
+        // (caused "No session record" errors on all retries).
         if (!message.message) {
             this.rememberInbound(messageId);
-            logger_1.logger.warn('MSG_SKIP: empty message payload (likely decryption failure)', {
+            logger_1.logger.warn('MSG_SKIP: empty message payload (decrypt failure, awaiting Baileys retry)', {
                 slotId: this.slotId,
                 messageId,
                 remoteJid,
-                fromMe: Boolean(key.fromMe)
+                rawRemoteJid,
+                fromMe: Boolean(key.fromMe),
+                isFromLid: rawRemoteJid?.endsWith('@lid') ?? false
             });
             return;
         }
@@ -916,6 +989,19 @@ class WhatsAppClient {
                     ownerUid,
                     textLength: text.length
                 });
+                // Force fresh Signal sessions with all recipient devices before sending.
+                // This prevents "Aguardando mensagem" errors caused by stale/corrupted
+                // Signal session keys that the recipient's mobile device can't decrypt.
+                try {
+                    await this.socket.assertSessions([jid], true);
+                }
+                catch (sessionError) {
+                    logger_1.logger.warn('MSG_SEND: assertSessions failed (continuing anyway)', {
+                        slotId: this.slotId,
+                        jid,
+                        error: sessionError instanceof Error ? sessionError.message : 'unknown'
+                    });
+                }
                 const response = await this.socket.sendMessage(jid, { text });
                 const messageId = response?.key?.id ?? `generated_${Date.now()}`;
                 const now = new Date().toISOString();
@@ -1048,6 +1134,7 @@ class WhatsAppClient {
                     this.socket.ev.removeAllListeners('connection.update');
                     this.socket.ev.removeAllListeners('creds.update');
                     this.socket.ev.removeAllListeners('messages.upsert');
+                    this.socket.ev.removeAllListeners('messaging-history.set');
                     this.socket.ev.removeAllListeners('chats.phoneNumberShare');
                     this.socket.ev.removeAllListeners('contacts.upsert');
                     this.socket.ev.removeAllListeners('contacts.update');
@@ -1347,18 +1434,45 @@ class WhatsAppClient {
         this.replayBufferedLidMessages(lidJid);
     }
     absorbContactLidMappings(contacts, source) {
+        let mappedCount = 0;
         for (const contact of contacts) {
             const contactId = contact.id ?? null;
             const lidRaw = contact.lid ?? null;
-            const lidJid = lidRaw
-                ? lidRaw.includes('@')
-                    ? lidRaw
-                    : `${lidRaw}@lid`
-                : contactId?.endsWith('@lid')
-                    ? contactId
-                    : null;
-            const phoneJid = contactId && !contactId.endsWith('@lid') ? contactId : null;
-            this.rememberLidMapping(lidJid, phoneJid, source);
+            // Determine which field is the LID and which is the phone JID.
+            // Baileys may provide:
+            //   Case A: id = "55...@s.whatsapp.net", lid = "123...@lid"  (most common)
+            //   Case B: id = "123...@lid",           lid = null          (LID-only contact)
+            //   Case C: id = "55...@s.whatsapp.net", lid = "123..."      (raw LID without @)
+            let lidJid = null;
+            let phoneJid = null;
+            // Parse the explicit lid field
+            if (lidRaw) {
+                lidJid = lidRaw.includes('@') ? lidRaw : `${lidRaw}@lid`;
+            }
+            // Parse the id field
+            if (contactId) {
+                if (contactId.endsWith('@lid')) {
+                    // id is a LID — use it as lidJid if we don't have one from the lid field
+                    if (!lidJid)
+                        lidJid = contactId;
+                }
+                else if (contactId.endsWith('@s.whatsapp.net')) {
+                    phoneJid = contactId;
+                }
+            }
+            if (lidJid && phoneJid) {
+                this.rememberLidMapping(lidJid, phoneJid, source);
+                mappedCount++;
+            }
+        }
+        if (mappedCount > 0) {
+            logger_1.logger.info('LID_ABSORB: absorbed contact LID mappings', {
+                slotId: this.slotId,
+                source,
+                totalContacts: contacts.length,
+                mappedCount,
+                totalKnownMappings: this.lidToPhoneJid.size
+            });
         }
     }
     /**
@@ -1409,6 +1523,83 @@ class WhatsAppClient {
         for (const entry of validEntries) {
             this.enqueueMessage(entry.message);
         }
+    }
+    /**
+     * Actively request phone number resolution for an unresolved LID JID.
+     * Uses multiple strategies:
+     * 1. presenceSubscribe — subscribing to the LID's presence can trigger contacts.upsert
+     * 2. readMessages — reading the message triggers Baileys' retry mechanism where sender_pn
+     *    appears in the retry receipt node attributes
+     * 3. fetchStatus — fetching status may trigger contact resolution events
+     * 4. Delayed retry — re-check the mapping after a delay
+     */
+    requestPhoneForLidJid(lidJid, message) {
+        if (!this.socket || this.lidToPhoneJid.has(lidJid))
+            return;
+        const socket = this.socket;
+        const slotId = this.slotId;
+        void (async () => {
+            // Strategy 1: Subscribe to presence — may trigger contacts.upsert with LID→phone
+            try {
+                await socket.presenceSubscribe(lidJid);
+                logger_1.logger.info('LID_RESOLVE_SUBSCRIBE: subscribed to LID presence', { slotId, lidJid });
+            }
+            catch (error) {
+                logger_1.logger.warn('LID_RESOLVE_SUBSCRIBE: failed (best-effort)', {
+                    slotId,
+                    lidJid,
+                    error: error instanceof Error ? error.message : 'unknown'
+                });
+            }
+            // Strategy 2: Read/acknowledge the message — triggers Baileys retry mechanism
+            // which reveals sender_pn in the retry receipt (captured by our CB:receipt hook)
+            if (message?.key) {
+                try {
+                    await socket.readMessages([message.key]);
+                    logger_1.logger.info('LID_RESOLVE_READ: sent read receipt to trigger retry with sender_pn', { slotId, lidJid });
+                }
+                catch (error) {
+                    logger_1.logger.warn('LID_RESOLVE_READ: failed (best-effort)', {
+                        slotId,
+                        lidJid,
+                        error: error instanceof Error ? error.message : 'unknown'
+                    });
+                }
+            }
+            // Strategy 3: Fetch status — may trigger contact events
+            try {
+                await socket.fetchStatus(lidJid);
+                logger_1.logger.info('LID_RESOLVE_STATUS: fetched status for LID', { slotId, lidJid });
+            }
+            catch (error) {
+                logger_1.logger.warn('LID_RESOLVE_STATUS: failed (best-effort)', {
+                    slotId,
+                    lidJid,
+                    error: error instanceof Error ? error.message : 'unknown'
+                });
+            }
+            // Strategy 4: Delayed retry — check if the mapping arrived after 5 seconds
+            await sleep(5000);
+            if (this.lidToPhoneJid.has(lidJid)) {
+                logger_1.logger.info('LID_RESOLVE_DELAYED: mapping resolved, triggering replay', { slotId, lidJid });
+                this.replayBufferedLidMessages(lidJid);
+            }
+            else {
+                // Try again after 15 seconds total
+                await sleep(10_000);
+                if (this.lidToPhoneJid.has(lidJid)) {
+                    logger_1.logger.info('LID_RESOLVE_DELAYED_2: mapping resolved on second check', { slotId, lidJid });
+                    this.replayBufferedLidMessages(lidJid);
+                }
+                else {
+                    logger_1.logger.warn('LID_RESOLVE_FAILED: could not resolve LID after all strategies', {
+                        slotId,
+                        lidJid,
+                        pendingCount: this.pendingLidMessages.get(lidJid)?.length ?? 0
+                    });
+                }
+            }
+        })();
     }
     /**
      * Try to extract phone number information from any available field in the message.
@@ -1484,6 +1675,7 @@ class WhatsAppClient {
                 this.socket.ev.removeAllListeners('connection.update');
                 this.socket.ev.removeAllListeners('creds.update');
                 this.socket.ev.removeAllListeners('messages.upsert');
+                this.socket.ev.removeAllListeners('messaging-history.set');
                 this.socket.ev.removeAllListeners('chats.phoneNumberShare');
                 this.socket.ev.removeAllListeners('contacts.upsert');
                 this.socket.ev.removeAllListeners('contacts.update');

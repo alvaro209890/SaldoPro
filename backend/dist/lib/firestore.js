@@ -229,6 +229,7 @@ async function bootstrapUserData(uid, input) {
         .eq('uid', uid)
         .maybeSingle();
     assertNoError(userReadError, 'bootstrapUserData.userRead');
+    const isNewUser = !userData;
     if (userData) {
         const { error } = await supabase_1.supabaseAdmin
             .from('app_users')
@@ -296,6 +297,10 @@ async function bootstrapUserData(uid, input) {
     await ensureGlobalCategoriesSeed();
     allowedNumbersCache.delete(uid);
     profileScanCache = null;
+    return {
+        isNewUser,
+        normalizedPhone: normalizedPhone.length >= 10 ? normalizedPhone : null
+    };
 }
 async function getUserSettings(uid) {
     const { data, error } = await supabase_1.supabaseAdmin

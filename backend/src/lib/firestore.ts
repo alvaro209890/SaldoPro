@@ -253,6 +253,11 @@ export interface BootstrapUserInput {
   phone?: string;
 }
 
+export interface BootstrapUserResult {
+  isNewUser: boolean;
+  normalizedPhone: string | null;
+}
+
 export interface UserChatSession {
   id: string;
   title: string;
@@ -375,7 +380,7 @@ async function ensureGlobalCategoriesSeed(): Promise<void> {
   throw new Error(`ensureGlobalCategoriesSeed.insert: ${insertError.message}`);
 }
 
-export async function bootstrapUserData(uid: string, input: BootstrapUserInput): Promise<void> {
+export async function bootstrapUserData(uid: string, input: BootstrapUserInput): Promise<BootstrapUserResult> {
   const now = new Date().toISOString();
 
   const { data: userData, error: userReadError } = await db
@@ -384,6 +389,7 @@ export async function bootstrapUserData(uid: string, input: BootstrapUserInput):
     .eq('uid', uid)
     .maybeSingle();
   assertNoError(userReadError, 'bootstrapUserData.userRead');
+  const isNewUser = !userData;
 
   if (userData) {
     const { error } = await db
@@ -453,6 +459,11 @@ export async function bootstrapUserData(uid: string, input: BootstrapUserInput):
 
   allowedNumbersCache.delete(uid);
   profileScanCache = null;
+
+  return {
+    isNewUser,
+    normalizedPhone: normalizedPhone.length >= 10 ? normalizedPhone : null
+  };
 }
 
 export async function getUserSettings(uid: string): Promise<UserSettingsBackend> {
