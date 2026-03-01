@@ -134,6 +134,7 @@ export function App() {
   const [dashboardLoading, setDashboardLoading] = useState<boolean>(false);
   const [dashboardError, setDashboardError] = useState<string>('');
   const [userActionUid, setUserActionUid] = useState<string>('');
+  const [searchTerm, setSearchTerm] = useState<string>('');
 
   useEffect(() => {
     let cancelled = false;
@@ -350,6 +351,30 @@ export function App() {
 
   const primarySlot = overview?.whatsapp.slots[0] ?? null;
   const primaryQr = primarySlot ? overview?.whatsapp.qr[primarySlot.slotId] : null;
+  const filteredUsers = users.filter((user) => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return true;
+    return [
+      user.displayName,
+      user.email ?? '',
+      user.uid,
+      ...user.whatsappAllowedNumbers
+    ]
+      .join(' ')
+      .toLowerCase()
+      .includes(term);
+  });
+  const totalTransactions = users.reduce((sum, user) => sum + user.metrics.transactions, 0);
+  const totalReminders = users.reduce((sum, user) => sum + user.metrics.reminders, 0);
+  const totalWhatsAppMessages = users.reduce((sum, user) => sum + user.metrics.whatsappMessages, 0);
+  const usersWithoutWhatsApp = users.filter((user) => user.whatsappAllowedNumbers.length === 0).length;
+  const missingFirebaseAccounts = users.filter((user) => !user.firebaseExists).length;
+  const latestGlobalActivity = users.reduce<string | null>((latest, user) => {
+    const current = user.metrics.lastWhatsAppMessageAt;
+    if (!current) return latest;
+    if (!latest || current > latest) return current;
+    return latest;
+  }, null);
 
   if (checkingSession) {
     return (
@@ -440,6 +465,14 @@ export function App() {
                 {dashboardError}
               </div>
             ) : null}
+            <div className="mt-4 flex flex-wrap gap-3 text-xs text-zinc-400">
+              <span className="rounded-full border border-white/8 bg-white/5 px-3 py-1.5">
+                Backend: {BACKEND_URL}
+              </span>
+              <span className="rounded-full border border-white/8 bg-white/5 px-3 py-1.5">
+                Última atividade geral: {formatDate(latestGlobalActivity)}
+              </span>
+            </div>
           </section>
 
           <section className="grid gap-4 xl:grid-cols-3">
@@ -510,6 +543,34 @@ export function App() {
             </div>
           </section>
 
+          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+            <div className="admin-panel rounded-3xl p-5">
+              <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">Transações</p>
+              <p className="mt-3 text-3xl font-semibold text-white">{totalTransactions}</p>
+              <p className="mt-2 text-sm text-zinc-400">Total registrado por todos os usuários.</p>
+            </div>
+            <div className="admin-panel rounded-3xl p-5">
+              <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">Lembretes</p>
+              <p className="mt-3 text-3xl font-semibold text-white">{totalReminders}</p>
+              <p className="mt-2 text-sm text-zinc-400">Pendentes e concluídos somados.</p>
+            </div>
+            <div className="admin-panel rounded-3xl p-5">
+              <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">Mensagens WA</p>
+              <p className="mt-3 text-3xl font-semibold text-white">{totalWhatsAppMessages}</p>
+              <p className="mt-2 text-sm text-zinc-400">Histórico capturado nas conversas.</p>
+            </div>
+            <div className="admin-panel rounded-3xl p-5">
+              <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">Sem WhatsApp</p>
+              <p className="mt-3 text-3xl font-semibold text-amber-100">{usersWithoutWhatsApp}</p>
+              <p className="mt-2 text-sm text-zinc-400">Usuários sem número liberado.</p>
+            </div>
+            <div className="admin-panel rounded-3xl p-5">
+              <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">Sem Firebase</p>
+              <p className="mt-3 text-3xl font-semibold text-rose-200">{missingFirebaseAccounts}</p>
+              <p className="mt-2 text-sm text-zinc-400">Registros órfãos no Supabase.</p>
+            </div>
+          </section>
+
           {primarySlot && !primarySlot.connected ? (
             <section className="admin-panel rounded-3xl p-5">
               <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
@@ -547,14 +608,23 @@ export function App() {
           ) : null}
 
           <section className="admin-panel rounded-3xl p-5">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
               <div>
                 <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">Usuários</p>
                 <h2 className="mt-3 text-xl font-semibold text-white">Base consolidada</h2>
               </div>
-              <p className="text-sm text-zinc-400">
-                Clique em uma linha para abrir os detalhes do usuário.
-              </p>
+              <div className="flex w-full max-w-xl flex-col gap-3 sm:items-end">
+                <p className="text-sm text-zinc-400">
+                  Clique em uma linha para abrir os detalhes do usuário.
+                </p>
+                <input
+                  type="search"
+                  value={searchTerm}
+                  onChange={(event) => setSearchTerm(event.target.value)}
+                  className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-300/50"
+                  placeholder="Buscar por nome, e-mail, UID ou telefone"
+                />
+              </div>
             </div>
 
             <div className="mt-5 overflow-x-auto rounded-3xl border border-white/8 bg-black/10">
@@ -569,12 +639,12 @@ export function App() {
                 <div>Ações</div>
               </div>
 
-              {users.length === 0 ? (
+              {filteredUsers.length === 0 ? (
                 <div className="px-4 py-8 text-sm text-zinc-400">
-                  {dashboardLoading ? 'Carregando usuários...' : 'Nenhum usuário encontrado.'}
+                  {dashboardLoading ? 'Carregando usuários...' : 'Nenhum usuário encontrado para esse filtro.'}
                 </div>
               ) : (
-                users.map((user) => (
+                filteredUsers.map((user) => (
                   <div
                     key={user.uid}
                     onClick={() => {
