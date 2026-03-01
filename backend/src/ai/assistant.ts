@@ -1539,6 +1539,14 @@ async function executeAction(
       const explicitDueDate = parseYmd(action.dueDate);
       const explicitDueTime = normalizeDueTime(action.dueTime);
 
+      let receiptUrl: string | undefined;
+      if (options.latestImageDataUrl) {
+        const mimeMatch = options.latestImageDataUrl.match(/^data:([^;]+);/);
+        const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+        const url = await uploadReceipt(uid, options.latestImageDataUrl, mimeType);
+        if (url) receiptUrl = url;
+      }
+
       const payload: CreateReminderInput = {
         reminderKind,
         title: (action.title || 'Lembrete via WhatsApp').toString().slice(0, 120),
@@ -1547,7 +1555,8 @@ async function executeAction(
         dueTime: explicitDueTime ?? inferredSchedule?.dueTime ?? null,
         type: isFinancial ? reminderKind : null,
         status: 'pending',
-        notifyPhone: options.sourcePhone ?? null
+        notifyPhone: options.sourcePhone ?? null,
+        receiptUrl
       };
 
       const now = getBrasiliaDate();
@@ -1625,6 +1634,18 @@ async function executeAction(
       }
       if (rawChanges.status === 'pending' || rawChanges.status === 'paid') {
         updates.status = rawChanges.status;
+      }
+
+      let receiptUrl: string | undefined;
+      if (options.latestImageDataUrl) {
+        const mimeMatch = options.latestImageDataUrl.match(/^data:([^;]+);/);
+        const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+        const url = await uploadReceipt(uid, options.latestImageDataUrl, mimeType);
+        if (url) receiptUrl = url;
+      }
+
+      if (receiptUrl) {
+        updates.receiptUrl = receiptUrl;
       }
 
       if (Object.keys(updates).length === 0) {

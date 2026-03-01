@@ -64,7 +64,8 @@ export function startWhatsAppReminderNotifier(manager: WhatsAppClientsManager): 
           await manager.sendTextWithRouting({
             to: reminder.notifyPhone,
             text: buildReminderMessage(reminder),
-            ownerUid: reminder.uid
+            ownerUid: reminder.uid,
+            mediaUrl: reminder.receiptUrl ?? undefined
           });
 
           const marked = await markReminderAsNotified(reminder.uid, reminder.id, new Date().toISOString());

@@ -29,6 +29,7 @@ interface SendWithRoutingInput {
   text: string;
   ownerUid: string;
   clientId?: WhatsAppSlotId;
+  mediaUrl?: string;
 }
 
 export class WhatsAppClientsManager {
@@ -129,7 +130,7 @@ export class WhatsAppClientsManager {
       throw new Error('WhatsApp is not connected');
     }
 
-    const result = await this.client.sendText(input.to, input.text, input.ownerUid);
+    const result = await this.client.sendText(input.to, input.text, input.ownerUid, input.mediaUrl);
     return { ...result, clientId: 'wa1' };
   }
 

@@ -126,6 +126,7 @@ interface DbReminderRow {
   reminder_kind: 'general' | 'payable' | 'receivable';
   type: 'payable' | 'receivable' | null;
   status: 'pending' | 'paid';
+  receipt_url?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -237,6 +238,7 @@ export interface CreateReminderInput {
   type?: 'payable' | 'receivable' | null;
   status?: 'pending' | 'paid';
   notifyPhone?: string | null;
+  receiptUrl?: string | null;
 }
 
 export interface UserSettingsBackend {
@@ -315,6 +317,7 @@ export interface UserReminder {
   notifyPhone?: string | null;
   type?: 'payable' | 'receivable' | null;
   status: 'pending' | 'paid';
+  receiptUrl?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -1005,6 +1008,7 @@ function mapReminder(row: DbReminderRow): UserReminder {
     notifyPhone: row.notify_phone,
     type: row.type,
     status: row.status,
+    receiptUrl: row.receipt_url,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -1038,6 +1042,7 @@ export async function addUserReminder(uid: string, input: CreateReminderInput): 
       notify_phone: normalizedNotifyPhone.length >= 10 ? normalizedNotifyPhone : null,
       type: financialType,
       status: input.status ?? 'pending',
+      receipt_url: input.receiptUrl ?? null,
       created_at: now,
       updated_at: now
     })
@@ -1062,7 +1067,7 @@ export async function getUserReminders(uid: string): Promise<UserReminder[]> {
 export async function getUserReminderById(uid: string, reminderId: string): Promise<UserReminder | null> {
   const { data, error } = await db
     .from('app_reminders')
-    .select('id, reminder_kind, title, amount, due_date, due_time, due_at, notified_at, notify_phone, type, status, created_at, updated_at')
+    .select('id, reminder_kind, title, amount, due_date, due_time, due_at, notified_at, notify_phone, type, status, receipt_url, created_at, updated_at')
     .eq('uid', uid)
     .eq('id', reminderId)
     .maybeSingle<DbReminderRow>();
@@ -1126,6 +1131,9 @@ export async function updateUserReminder(
       updates.notified_at = null;
     }
   }
+  if ('receiptUrl' in changes) {
+    updates.receipt_url = changes.receiptUrl;
+  }
 
   if ('dueDate' in changes || 'dueTime' in changes) {
     updates.due_at = reminderDueAtFromDateAndTime(nextDueDate, nextDueTime);
@@ -1159,6 +1167,7 @@ export interface DueWhatsAppReminder {
   dueTime: string;
   type: 'payable' | 'receivable' | null;
   notifyPhone: string;
+  receiptUrl?: string | null;
 }
 
 interface DbDueWhatsAppReminderRow {
@@ -1171,6 +1180,7 @@ interface DbDueWhatsAppReminderRow {
   due_time: string | null;
   type: 'payable' | 'receivable' | null;
   notify_phone: string | null;
+  receipt_url?: string | null;
 }
 
 export async function getDueWhatsAppReminders(
@@ -1180,7 +1190,7 @@ export async function getDueWhatsAppReminders(
   const safeLimit = Math.max(1, Math.min(limitCount, 200));
   const { data, error } = await db
     .from('app_reminders')
-    .select('id, uid, reminder_kind, title, amount, due_date, due_time, type, notify_phone')
+    .select('id, uid, reminder_kind, title, amount, due_date, due_time, type, notify_phone, receipt_url')
     .eq('status', 'pending')
     .is('notified_at', null)
     .not('due_at', 'is', null)
@@ -1205,8 +1215,9 @@ export async function getDueWhatsAppReminders(
         dueDate: row.due_date,
         dueTime,
         type: row.type,
-        notifyPhone
-      } satisfies DueWhatsAppReminder;
+        notifyPhone,
+        receiptUrl: row.receipt_url
+      } as DueWhatsAppReminder;
     })
     .filter((entry): entry is DueWhatsAppReminder => Boolean(entry));
 }

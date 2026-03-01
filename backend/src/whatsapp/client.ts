@@ -292,7 +292,7 @@ export class WhatsAppClient {
     };
   }
 
-  async sendText(to: string, text: string, ownerUid?: string): Promise<{ messageId: string }> {
+  async sendText(to: string, text: string, ownerUid?: string, mediaUrl?: string): Promise<{ messageId: string }> {
     const normalizedText = text.trim();
     if (!normalizedText) {
       throw new Error('Message text is required');
@@ -330,11 +330,12 @@ export class WhatsAppClient {
         error: err instanceof Error ? err.message : 'unknown'
       });
     }
-    const result = await this.sendWithRetry(jid, normalizedText, 'outbound', ownerUid);
+    const customOptions = mediaUrl ? { image: { url: mediaUrl } } : undefined;
+    const result = await this.sendWithRetry(jid, normalizedText, 'outbound', ownerUid, customOptions);
     if (ownerUid) {
       await this.appendConversationMessage(ownerUid, jidToPhone(jid), {
         role: 'assistant',
-        content: normalizedText
+        content: mediaUrl ? `[Imagem Enviada] ${normalizedText}` : normalizedText
       });
     }
     return result;
