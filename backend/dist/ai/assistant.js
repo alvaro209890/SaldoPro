@@ -214,6 +214,29 @@ function buildScheduleFromDate(baseDate, dueTime) {
         dueTime
     };
 }
+function resolveNextFutureDayOfMonth(dayOfMonth, dueTime) {
+    const now = (0, date_utils_1.getBrasiliaDate)();
+    const today = new Date(now);
+    today.setHours(0, 0, 0, 0);
+    for (let monthOffset = 0; monthOffset < 24; monthOffset += 1) {
+        const candidate = new Date(today.getFullYear(), today.getMonth() + monthOffset, dayOfMonth);
+        candidate.setHours(0, 0, 0, 0);
+        if (candidate.getDate() !== dayOfMonth)
+            continue;
+        if (candidate.getTime() < today.getTime())
+            continue;
+        if (candidate.getTime() === today.getTime() && dueTime) {
+            const [hour, minute] = dueTime.split(':').map(Number);
+            const nowMinutes = now.getHours() * 60 + now.getMinutes();
+            const targetMinutes = hour * 60 + minute;
+            if (targetMinutes <= nowMinutes) {
+                continue;
+            }
+        }
+        return candidate;
+    }
+    return today;
+}
 function parseRelativeReminderSchedule(text) {
     const normalized = normalizeHumanText(text);
     if (!normalized)
@@ -254,6 +277,21 @@ function parseTodayTomorrowReminderSchedule(text) {
     }
     baseDate.setHours(0, 0, 0, 0);
     return buildScheduleFromDate(baseDate, extractExplicitTime(normalized) ?? extractPeriodTime(normalized));
+}
+function parseDayOfMonthReminderSchedule(text) {
+    const normalized = normalizeHumanText(text);
+    if (!normalized)
+        return null;
+    const match = normalized.match(/\bdia\s*(0?[1-9]|[12]\d|3[01])\b/);
+    if (!match)
+        return null;
+    const dayOfMonth = Number(match[1]);
+    if (!Number.isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) {
+        return null;
+    }
+    const dueTime = extractExplicitTime(normalized) ?? extractPeriodTime(normalized);
+    const target = resolveNextFutureDayOfMonth(dayOfMonth, dueTime);
+    return buildScheduleFromDate(target, dueTime);
 }
 function lastDayOfMonth(date) {
     return new Date(date.getFullYear(), date.getMonth() + 1, 0);
@@ -337,6 +375,7 @@ function parseWeekdayReminderSchedule(text) {
 function inferReminderScheduleFromText(text) {
     return (parseRelativeReminderSchedule(text) ??
         parseTodayTomorrowReminderSchedule(text) ??
+        parseDayOfMonthReminderSchedule(text) ??
         parseEndOfMonthReminderSchedule(text) ??
         parseDailyReminderSchedule(text) ??
         parseWeekdayReminderSchedule(text));
@@ -346,16 +385,18 @@ function extractFallbackReminderTitle(text) {
         .replace(/\b(?:da\s*qui(?:\s+a)?|daqui(?:\s+a)?|em)\s+\d+\s*(?:min|mins|minuto|minutos|h|hr|hrs|hora|horas)\b/gi, ' ')
         .replace(/\bdepois\s+de\s+amanh[ãa]\b/gi, ' ')
         .replace(/\b(?:amanh[ãa]|hoje)\b(?:\s+(?:(?:às|as|a)\s+)?\d{1,2}(?::\d{2})?\s*h?)?(?:\s+(?:de|a)\s+(?:manh[ãa]|tarde|noite))?/gi, ' ')
+        .replace(/\bdia\s*(0?[1-9]|[12]\d|3[01])\b(?:\s+(?:(?:às|as|a)\s+)?\d{1,2}(?::\d{2})?\s*h?)?(?:\s+(?:de|a)\s+(?:manh[ãa]|tarde|noite))?/gi, ' ')
         .replace(/\b(?:segunda(?:-feira)?|ter[cç]a(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|s[áa]bado|domingo)\b(?:\s+(?:(?:às|as|a)\s+)?\d{1,2}(?::\d{2})?\s*h?)?(?:\s+(?:de|a)\s+(?:manh[ãa]|tarde|noite))?/gi, ' ')
         .replace(/\b(?:fim|final)\s+do\s+m[eê]s\b/gi, ' ')
         .replace(/\btodo\s+dia\b(?:\s+(?:(?:às|as|a)\s+)?\d{1,2}(?::\d{2})?\s*h?)?/gi, ' ')
         .replace(/\b(?:no|ao)\s+alm[oó]co\b/gi, ' ')
         .replace(/\bfim\s+da\s+tarde\b/gi, ' ')
-        .replace(/\b(?:me\s+)?(?:lembra(?:r)?|lembrete)(?:\s+de)?\b/gi, ' ')
+        .replace(/\b(?:me\s+)?(?:lembra(?:r)?|lembre|lembrete)(?:\s+de)?\b/gi, ' ')
         .replace(/[.,;!?]+/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
-    return cleaned.slice(0, 120) || 'Lembrete via WhatsApp';
+    const title = cleaned.replace(/^(?:de|do|da|dos|das)\s+/i, '').trim();
+    return title.slice(0, 120) || 'Lembrete via WhatsApp';
 }
 function buildFallbackScheduledReminderAction(text) {
     if (!text)
@@ -374,6 +415,165 @@ function buildFallbackScheduledReminderAction(text) {
         dueDate: schedule.dueDate,
         ...(schedule.dueTime ? { dueTime: schedule.dueTime } : {})
     };
+}
+function parseLooseAmount(raw) {
+    const digits = raw.replace(/[^\d.,]/g, '');
+    if (!digits)
+        return null;
+    let normalized = digits;
+    const hasComma = normalized.includes(',');
+    const hasDot = normalized.includes('.');
+    if (hasComma && hasDot) {
+        if (normalized.lastIndexOf(',') > normalized.lastIndexOf('.')) {
+            normalized = normalized.replace(/\./g, '').replace(',', '.');
+        }
+        else {
+            normalized = normalized.replace(/,/g, '');
+        }
+    }
+    else if (hasComma) {
+        const fractional = normalized.split(',').pop() ?? '';
+        normalized = fractional.length <= 2
+            ? normalized.replace(/\./g, '').replace(',', '.')
+            : normalized.replace(/,/g, '');
+    }
+    else if (hasDot) {
+        const fractional = normalized.split('.').pop() ?? '';
+        normalized = fractional.length <= 2
+            ? normalized
+            : normalized.replace(/\./g, '');
+    }
+    const amount = Number(normalized);
+    if (!Number.isFinite(amount) || amount <= 0)
+        return null;
+    return amount;
+}
+function extractAmountFromTransactionText(text) {
+    const patterns = [
+        /\b(?:gastei|paguei|comprei|recebi|ganhei|vendi|lucrei|depositei|depositaram|caiu)\b(?:\s+(?:um|uma)\s+\w+)?\s+(?:r\$\s*)?([\d.,]+)/i,
+        /\b(?:gasto|despesa|receita|ganho|entrada|lancamento)\b(?:\s+de)?\s+(?:r\$\s*)?([\d.,]+)/i,
+        /r\$\s*([\d.,]+)/i
+    ];
+    for (const pattern of patterns) {
+        const match = text.match(pattern);
+        const amount = match?.[1] ? parseLooseAmount(match[1]) : null;
+        if (amount != null) {
+            return amount;
+        }
+    }
+    return null;
+}
+function detectFallbackTransactionType(text) {
+    const normalized = normalizeHumanText(text);
+    if (/\b(recebi|ganhei|vendi|lucrei|depositei|depositaram|caiu|entrada|receita|salario)\b/.test(normalized)) {
+        return 'income';
+    }
+    return 'expense';
+}
+function detectFallbackTransactionPaymentMethod(text) {
+    const normalized = normalizeHumanText(text);
+    if (normalized.includes('boleto'))
+        return 'boleto';
+    if (normalized.includes('credito') || normalized.includes('cartao de credito'))
+        return 'credit';
+    if (normalized.includes('debito') || normalized.includes('cartao de debito'))
+        return 'debit';
+    if (normalized.includes('dinheiro'))
+        return 'cash';
+    if (normalized.includes('transferencia') || normalized.includes('ted') || normalized.includes('doc')) {
+        return 'transfer';
+    }
+    return 'pix';
+}
+function parseFallbackTransactionDate(text) {
+    const iso = text.match(/\b(\d{4}-\d{2}-\d{2})\b/)?.[1];
+    if (iso)
+        return iso;
+    const dmy = text.match(/\b(\d{2})[\/\-](\d{2})[\/\-](\d{4})\b/);
+    if (dmy) {
+        return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
+    }
+    const normalized = normalizeHumanText(text);
+    const baseDate = (0, date_utils_1.getBrasiliaDate)();
+    baseDate.setHours(0, 0, 0, 0);
+    if (/\banteontem\b/.test(normalized)) {
+        baseDate.setDate(baseDate.getDate() - 2);
+        return formatYmd(baseDate);
+    }
+    if (/\bontem\b/.test(normalized)) {
+        baseDate.setDate(baseDate.getDate() - 1);
+        return formatYmd(baseDate);
+    }
+    return formatYmd(baseDate);
+}
+function extractFallbackTransactionDescription(text, type) {
+    const cleaned = text
+        .replace(/\b(?:gastei|paguei|comprei|recebi|ganhei|vendi|lucrei|depositei|depositaram|caiu|registra(?:r)?|lanca(?:r)?|lança(?:r)?|adiciona(?:r)?|coloca(?:r)?)\b/gi, ' ')
+        .replace(/\b(?:gasto|despesa|receita|ganho|entrada|lancamento)\b/gi, ' ')
+        .replace(/r\$\s*[\d.,]+/gi, ' ')
+        .replace(/\b\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?\b/g, ' ')
+        .replace(/\b(?:pix|credito|crédito|debito|débito|dinheiro|boleto|transferencia|transferência|ted|doc)\b/gi, ' ')
+        .replace(/\b(?:de|do|da|dos|das|no|na|nos|nas|em|por|pra|pro|para|com|via|um|uma)\b/gi, ' ')
+        .replace(/[.,;!?]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (cleaned) {
+        return cleaned.slice(0, 120);
+    }
+    return type === 'income' ? 'Receita via WhatsApp' : 'Despesa via WhatsApp';
+}
+function buildFallbackTransactionAction(text) {
+    if (!text)
+        return null;
+    const normalized = normalizeHumanText(text);
+    const hasPastTenseIntent = /\b(gastei|paguei|comprei|recebi|ganhei|vendi|lucrei|depositei|depositaram|caiu)\b/.test(normalized);
+    const hasExplicitRegisterIntent = /\b(registra(?:r)?|lanca(?:r)?|adiciona(?:r)?|coloca(?:r)?)\b/.test(normalized) &&
+        /\b(gasto|despesa|receita|ganho|entrada|lancamento)\b/.test(normalized);
+    if (!hasPastTenseIntent && !hasExplicitRegisterIntent) {
+        return null;
+    }
+    const amount = extractAmountFromTransactionText(text);
+    if (amount == null) {
+        return null;
+    }
+    const type = detectFallbackTransactionType(text);
+    return {
+        action: 'add_transaction',
+        type,
+        amount,
+        description: extractFallbackTransactionDescription(text, type),
+        categoryId: '',
+        date: parseFallbackTransactionDate(text),
+        paymentMethod: detectFallbackTransactionPaymentMethod(text)
+    };
+}
+function buildFallbackActionsFromText(text) {
+    if (!text)
+        return null;
+    const normalized = normalizeHumanText(text);
+    const reminderAction = buildFallbackScheduledReminderAction(text);
+    const transactionAction = buildFallbackTransactionAction(text);
+    const candidates = [];
+    if (reminderAction) {
+        const match = normalized.match(/\b(?:me\s+)?(?:lembra(?:r)?|lembre|lembrete)\b/);
+        candidates.push({
+            index: match?.index ?? Number.MAX_SAFE_INTEGER,
+            action: reminderAction
+        });
+    }
+    if (transactionAction) {
+        const match = normalized.match(/\b(?:gastei|paguei|comprei|recebi|ganhei|vendi|lucrei|depositei|depositaram|caiu|registra(?:r)?|lanca(?:r)?|adiciona(?:r)?|coloca(?:r)?)\b/);
+        candidates.push({
+            index: match?.index ?? Number.MAX_SAFE_INTEGER,
+            action: transactionAction
+        });
+    }
+    if (candidates.length === 0) {
+        return null;
+    }
+    return candidates
+        .sort((a, b) => a.index - b.index)
+        .map((entry) => entry.action);
 }
 function inferRecurringFrequencyFromText(text) {
     const normalized = normalizeHumanText(text);
@@ -973,12 +1173,10 @@ async function executeActions(uid, actions, categories, options) {
     const baseActions = Array.isArray(actions) && actions.length > 0
         ? actions.slice(0, MAX_ACTIONS_PER_MESSAGE)
         : [{ action: 'none' }];
-    const fallbackReminderAction = baseActions.every((action) => action.action === 'none')
-        ? buildFallbackScheduledReminderAction(options.latestUserMessageText)
+    const fallbackActions = baseActions.every((action) => action.action === 'none')
+        ? buildFallbackActionsFromText(options.latestUserMessageText)
         : null;
-    const rawActions = fallbackReminderAction
-        ? [fallbackReminderAction]
-        : baseActions;
+    const rawActions = fallbackActions ?? baseActions;
     const safeActions = normalizeTransactionActionsForRecurring(rawActions, options.latestUserMessageText);
     const results = [];
     for (const action of safeActions) {

@@ -1143,15 +1143,27 @@ export function App() {
                             </p>
                           )}
                         </div>
-                        <div className="flex justify-center">
+                        <div
+                          className="flex justify-center lg:justify-end"
+                          style={{ flex: '0 0 14rem' }}
+                        >
                           {primaryQr?.available && primaryQr.qrPngBase64 ? (
-                            <img
-                              src={primaryQr.qrPngBase64}
-                              alt="QR Code do WhatsApp"
-                              className="h-56 w-56 rounded-3xl border border-white/10 bg-white p-4"
-                            />
+                            <div
+                              className="flex items-center justify-center rounded-3xl border border-white/10 bg-white p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.28)]"
+                              style={{ width: '14rem', height: '14rem', minWidth: '14rem', maxWidth: '14rem' }}
+                            >
+                              <img
+                                src={primaryQr.qrPngBase64}
+                                alt="QR Code do WhatsApp"
+                                className="block object-contain"
+                                style={{ width: '100%', height: '100%' }}
+                              />
+                            </div>
                           ) : (
-                            <div className="flex h-56 w-56 items-center justify-center rounded-3xl border border-dashed border-white/10 bg-white/5 px-6 text-center text-sm text-zinc-400">
+                            <div
+                              className="flex items-center justify-center rounded-3xl border border-dashed border-white/10 bg-white/5 px-6 text-center text-sm text-zinc-400"
+                              style={{ width: '14rem', height: '14rem', minWidth: '14rem', maxWidth: '14rem' }}
+                            >
                               Nenhum QR ativo no momento.
                             </div>
                           )}
