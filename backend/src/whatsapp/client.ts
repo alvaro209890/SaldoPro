@@ -1085,6 +1085,16 @@ export class WhatsAppClient {
           })
         ]);
 
+        if (aiPipelineResult.mediaUrl) {
+          const payload = aiPipelineResult.aiReply.trim() || 'Aqui está o recibo solicitado:';
+          await this.sendWithRetry(remoteJid, payload, 'auto_reply', ownerUid, { image: { url: aiPipelineResult.mediaUrl } });
+          await this.appendConversationMessage(ownerUid, remotePhone, {
+            role: 'assistant',
+            content: `[Imagem Enviada] ${payload}`
+          });
+          return;
+        }
+
         if (aiPipelineResult.aiReply.trim()) {
           await this.sendWithRetry(remoteJid, aiPipelineResult.aiReply.trim(), 'auto_reply', ownerUid);
           await this.appendConversationMessage(ownerUid, remotePhone, {
@@ -1133,7 +1143,7 @@ export class WhatsAppClient {
     inboundText: string,
     imageDataUrl: string | null,
     audioDataUrl: string | null
-  ): Promise<{ aiReply: string }> {
+  ): Promise<{ aiReply: string, mediaUrl?: string }> {
     logger.info('MSG_PIPELINE_START: loading conversation history', { uid: ownerUid, phone: remotePhone });
     // Invalidate cached conversation so we get fresh state from DB.
     // This is critical when multiple messages from the same user are
@@ -1201,16 +1211,16 @@ export class WhatsAppClient {
     });
     logger.info('MSG_PIPELINE_AI_DONE: AI response received', {
       uid: ownerUid,
-      replyLength: aiReply.length,
-      replyPreview: aiReply.slice(0, 80)
+      replyLength: aiReply.text.length,
+      replyPreview: aiReply.text.slice(0, 80)
     });
 
     // Save user message AFTER AI processes — enrich media messages with AI-extracted context
     if (inboundText.trim() || imageDataUrl || audioDataUrl) {
       let textForHistory = inboundText.trim();
-      if (!textForHistory && aiReply.trim()) {
+      if (!textForHistory && aiReply.text.trim()) {
         const mediaType = imageDataUrl ? 'Imagem' : 'Audio';
-        const firstLine = aiReply.trim().split('\n').find((l) => l.replace(/[*_~`]/g, '').trim().length > 0) || '';
+        const firstLine = aiReply.text.trim().split('\n').find((l: string) => l.replace(/[*_~`]/g, '').trim().length > 0) || '';
         const cleaned = firstLine.replace(/[*_~`]/g, '').trim().slice(0, 120);
         textForHistory = cleaned ? `[${mediaType}] ${cleaned}` : `${mediaType} enviado no WhatsApp.`;
       } else if (!textForHistory) {
@@ -1222,7 +1232,7 @@ export class WhatsAppClient {
       });
     }
 
-    return { aiReply };
+    return { aiReply: aiReply.text, mediaUrl: aiReply.mediaUrl };
   }
 
   private async sendAutoReply(remoteJid: string, ownerUid?: string): Promise<boolean> {
@@ -1272,7 +1282,8 @@ export class WhatsAppClient {
     jid: string,
     text: string,
     direction: MessageDirection,
-    ownerUid?: string
+    ownerUid?: string,
+    customOptions?: { image?: { url: string } }
   ): Promise<{ messageId: string }> {
     if (!this.socket) {
       throw new Error('WhatsApp socket is not available');
@@ -1303,7 +1314,8 @@ export class WhatsAppClient {
             });
           }
         }
-        const response = await this.socket.sendMessage(jid, { text });
+        const payload = customOptions?.image ? { image: { url: customOptions.image.url }, caption: text } : { text };
+        const response = await this.socket.sendMessage(jid, payload);
         if (response?.key?.id && response.message) {
           this.sentMessagesCache.set(response.key.id, response.message);
           // Prevent memory leaks: cap cache at ~100 messages per instance

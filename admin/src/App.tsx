@@ -397,8 +397,13 @@ export function App() {
 
   // Fetch messages when detailed page is opened
   useEffect(() => {
-    if (!detailedUid || !token) return;
+    if (!detailedUid || !token) {
+      setUserMessages([]);
+      setLoadingMessages(false);
+      return;
+    }
     let cancelled = false;
+    setUserMessages([]);
     setLoadingMessages(true);
 
     adminFetch<{ messages: AdminChatMessage[] }>(`/api/admin/users/${detailedUid}/messages`, token)
@@ -559,19 +564,24 @@ export function App() {
 
   async function handleSendDirectMessage(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (!token || !selectedUid || !directMessage.trim()) return;
+    const targetUid = detailedUid ?? selectedUid;
+    const outgoingMessage = directMessage.trim();
+    if (!token || !targetUid || !outgoingMessage) return;
 
     setDirectMessageLoading(true);
     setDirectMessageSuccess(false);
     setDashboardError('');
 
     try {
-      await adminFetch<{ ok: boolean }>(`/api/admin/users/${selectedUid}/message`, token, {
+      await adminFetch<{ ok: boolean }>(`/api/admin/users/${targetUid}/message`, token, {
         method: 'POST',
-        body: JSON.stringify({ text: directMessage })
+        body: JSON.stringify({ text: outgoingMessage })
       });
       setDirectMessageSuccess(true);
       setDirectMessage('');
+      if (detailedUid) {
+        setUserMessages((current) => [...current, { role: 'assistant', content: outgoingMessage }]);
+      }
       setTimeout(() => setDirectMessageSuccess(false), 3000);
     } catch (error) {
       setDashboardError(error instanceof Error ? error.message : 'Falha ao enviar mensagem.');
@@ -1328,34 +1338,6 @@ export function App() {
                   <p className="mt-4 text-sm text-zinc-400">
                     Última atividade registrada: {formatDate(selectedUser.metrics.lastWhatsAppMessageAt)}
                   </p>
-                </div>
-
-                <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
-                  <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Comunicação Proativa</p>
-                  <form onSubmit={(e) => void handleSendDirectMessage(e)} className="mt-3 flex flex-col gap-3">
-                    <textarea
-                      value={directMessage}
-                      onChange={(e) => setDirectMessage(e.target.value)}
-                      placeholder="Mensagem para o WhatsApp do usuário..."
-                      className="w-full resize-none rounded-xl border border-white/10 bg-black/20 p-3 text-sm text-white outline-none transition focus:border-emerald-300/50"
-                      rows={3}
-                      disabled={directMessageLoading}
-                    />
-                    <div className="flex items-center justify-between">
-                      {directMessageSuccess ? (
-                        <span className="text-xs text-emerald-300">Mensagem enviada!</span>
-                      ) : (
-                        <span className="text-xs text-zinc-500">Chegará pelo bot oficial.</span>
-                      )}
-                      <button
-                        type="submit"
-                        disabled={directMessageLoading || !directMessage.trim() || selectedUser.whatsappAllowedNumbers.length === 0}
-                        className="rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-xs font-semibold text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {directMessageLoading ? 'Enviando...' : 'Enviar Mensagem'}
-                      </button>
-                    </div>
-                  </form>
                 </div>
 
                 <div className="rounded-2xl border border-white/8 bg-white/5 p-4">

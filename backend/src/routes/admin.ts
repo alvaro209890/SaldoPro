@@ -14,7 +14,7 @@ import {
   listAdminUserSnapshots,
   getUserReminders,
   type AdminUserSnapshot,
-  getRecentConversationByPhone
+  getRecentConversationByOwnerUid
 } from '../lib/firestore';
 import { getRecentOperationalLogs, logger, type OperationalLogEntry } from '../lib/logger';
 import { requireAdminAuth } from '../middleware/admin-auth';
@@ -226,27 +226,8 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
   router.get('/users/:uid/messages', async (req: Request, res: Response, next) => {
     try {
       const uid = req.params.uid;
-      const snapshot = await getAdminUserSnapshot(uid);
-      if (!snapshot) {
-        res.status(404).json({ error: 'Usuário não encontrado.' });
-        return;
-      }
-
-      const allowedNumbers = snapshot.settings?.whatsappAllowedNumbers ?? [];
-      if (allowedNumbers.length === 0) {
-        res.json({ messages: [] });
-        return;
-      }
-
-      // Fetch up to 50 recent messages per allowed phone
-      const fetchPromises = allowedNumbers.map(phone =>
-        getRecentConversationByPhone(uid, phone, 50)
-      );
-
-      const results = await Promise.all(fetchPromises);
-      const allMessages = results.flat();
-
-      res.json({ messages: allMessages });
+      const messages = await getRecentConversationByOwnerUid(uid, 100);
+      res.json({ messages });
     } catch (error) {
       next(error);
     }

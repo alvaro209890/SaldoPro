@@ -1812,6 +1812,21 @@ export async function getRecentConversationByPhone(
   assertNoError(inboundRes.error, 'getRecentConversationByPhone.inbound');
   assertNoError(outboundRes.error, 'getRecentConversationByPhone.outbound');
 
+  return mapWhatsAppRowsToConversation(
+    [
+      ...((inboundRes.data ?? []) as DbWhatsAppMessageRow[]),
+      ...((outboundRes.data ?? []) as DbWhatsAppMessageRow[])
+    ],
+    uid,
+    limitCount
+  );
+}
+
+function mapWhatsAppRowsToConversation(
+  rows: DbWhatsAppMessageRow[],
+  uid: string,
+  limitCount: number
+): WhatsAppConversationMessage[] {
   const docsById = new Map<string, { createdAt: string; role: 'user' | 'assistant'; content: string }>();
   const pushRows = (rows: DbWhatsAppMessageRow[]): void => {
     for (const row of rows) {
@@ -1829,13 +1844,29 @@ export async function getRecentConversationByPhone(
     }
   };
 
-  pushRows((inboundRes.data ?? []) as DbWhatsAppMessageRow[]);
-  pushRows((outboundRes.data ?? []) as DbWhatsAppMessageRow[]);
+  pushRows(rows);
 
   return [...docsById.values()]
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .slice(-limitCount)
     .map((entry) => ({ role: entry.role, content: entry.content }));
+}
+
+export async function getRecentConversationByOwnerUid(
+  uid: string,
+  limitCount: number
+): Promise<WhatsAppConversationMessage[]> {
+  if (!uid || uid.trim().length === 0) return [];
+
+  const { data, error } = await db
+    .from(COLLECTION_NAME)
+    .select('id, direction, owner_uid, status, created_at, text, metadata')
+    .eq('owner_uid', uid)
+    .order('created_at', { ascending: false })
+    .limit(Math.max(1, limitCount * 2));
+  assertNoError(error, 'getRecentConversationByOwnerUid');
+
+  return mapWhatsAppRowsToConversation((data ?? []) as DbWhatsAppMessageRow[], uid, limitCount);
 }
 
 const lastActivityCache = new Map<string, { activity: string | null; cachedAt: number }>();

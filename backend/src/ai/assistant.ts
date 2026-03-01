@@ -288,6 +288,7 @@ type ActionExecutionResult =
   | { kind: 'deleted_reminder'; receipt: DeletedReminderReceipt }
   | { kind: 'updated'; receipt: UpdatedTransactionReceipt }
   | { kind: 'deleted'; receipt: DeletedTransactionReceipt }
+  | { kind: 'send_media'; url: string }
   | { kind: 'error'; message: string };
 
 function todayISO(): string {
@@ -1179,13 +1180,18 @@ export interface ProcessWhatsAppAIOptions {
   latestImageDataUrl?: string; // Passed from whatsapp client
 }
 
+export interface ProcessedWhatsAppMessageResult {
+  text: string;
+  mediaUrl?: string;
+}
+
 export async function processWhatsAppAIMessage(
   uid: string,
   messages: GroqChatMessage[],
   options: ProcessWhatsAppAIOptions = {}
-): Promise<string> {
+): Promise<ProcessedWhatsAppMessageResult> {
   if (!uid || uid.trim().length === 0) {
-    return 'Nao foi possivel identificar a conta vinculada para processar a mensagem.';
+    return { text: 'Nao foi possivel identificar a conta vinculada para processar a mensagem.' };
   }
 
   const sanitizedMessages = messages
@@ -1201,7 +1207,7 @@ export async function processWhatsAppAIMessage(
     [...sanitizedMessages].reverse().find((message) => message.role === 'user')?.content ?? '';
 
   if (sanitizedMessages.length === 0) {
-    return 'Nao consegui interpretar a mensagem recebida.';
+    return { text: 'Nao consegui interpretar a mensagem recebida.' };
   }
 
   // Use cached context if available (TTL 2 min), otherwise fetch from Firestore
@@ -1258,61 +1264,51 @@ export async function processWhatsAppAIMessage(
   });
   const actionableResults = actionResults.filter((result) => result.kind !== 'none');
 
+  let mediaUrl: string | undefined;
+  const sendMediaAction = actionableResults.find((r) => r.kind === 'send_media') as Extract<ActionExecutionResult, { kind: 'send_media' }> | undefined;
+  if (sendMediaAction) {
+    mediaUrl = sendMediaAction.url;
+    // Don't show send_media in multi action text summary
+    const index = actionableResults.indexOf(sendMediaAction);
+    if (index > -1) actionableResults.splice(index, 1);
+  }
+
   if (actionableResults.length === 0) {
-    return `${ai.reply}`.slice(0, env.maxMessageLength);
+    return { text: `${ai.reply}`.slice(0, env.maxMessageLength), mediaUrl };
   }
 
   if (actionableResults.length === 1) {
     const [actionResult] = actionableResults;
 
-    if (actionResult.kind === 'added') {
-      return buildAddedTransactionMessage(actionResult.receipt, ai.reply, settings.currency)
-        .slice(0, env.maxMessageLength);
-    }
-
-    if (actionResult.kind === 'added_recurring') {
-      return buildAddedRecurringTransactionMessage(actionResult.receipt, ai.reply, settings.currency)
-        .slice(0, env.maxMessageLength);
-    }
-
-    if (actionResult.kind === 'added_reminder') {
-      return buildAddedReminderMessage(actionResult.receipt, ai.reply, settings.currency)
-        .slice(0, env.maxMessageLength);
-    }
-
-    if (actionResult.kind === 'updated_reminder') {
-      return buildUpdatedReminderMessage(actionResult.receipt, ai.reply, settings.currency)
-        .slice(0, env.maxMessageLength);
-    }
-
-    if (actionResult.kind === 'completed_reminder') {
-      return buildCompletedReminderMessage(actionResult.receipt, ai.reply)
-        .slice(0, env.maxMessageLength);
-    }
-
-    if (actionResult.kind === 'deleted_reminder') {
-      return buildDeletedReminderMessage(actionResult.receipt, ai.reply)
-        .slice(0, env.maxMessageLength);
-    }
-
-    if (actionResult.kind === 'updated') {
-      return buildUpdatedTransactionMessage(actionResult.receipt, ai.reply)
-        .slice(0, env.maxMessageLength);
-    }
-
-    if (actionResult.kind === 'deleted') {
-      return buildDeletedTransactionMessage(actionResult.receipt, ai.reply)
-        .slice(0, env.maxMessageLength);
-    }
-
     if (actionResult.kind === 'error') {
       const baseReply = ai.reply.trim() || 'Nao consegui concluir a acao solicitada.';
-      return `${baseReply}\n\nAviso: ${actionResult.message}`.slice(0, env.maxMessageLength);
+      return {
+        text: `${baseReply}\n\nAviso: ${actionResult.message}`.slice(0, env.maxMessageLength),
+        mediaUrl
+      };
     }
+
+    // Default formatting branch (e.g. added)
+    let formattedText = '';
+    if (actionResult.kind === 'added') formattedText = buildAddedTransactionMessage(actionResult.receipt, ai.reply, settings.currency);
+    else if (actionResult.kind === 'added_recurring') formattedText = buildAddedRecurringTransactionMessage(actionResult.receipt, ai.reply, settings.currency);
+    else if (actionResult.kind === 'added_reminder') formattedText = buildAddedReminderMessage(actionResult.receipt, ai.reply, settings.currency);
+    else if (actionResult.kind === 'updated_reminder') formattedText = buildUpdatedReminderMessage(actionResult.receipt, ai.reply, settings.currency);
+    else if (actionResult.kind === 'completed_reminder') formattedText = buildCompletedReminderMessage(actionResult.receipt, ai.reply);
+    else if (actionResult.kind === 'deleted_reminder') formattedText = buildDeletedReminderMessage(actionResult.receipt, ai.reply);
+    else if (actionResult.kind === 'updated') formattedText = buildUpdatedTransactionMessage(actionResult.receipt, ai.reply);
+    else if (actionResult.kind === 'deleted') formattedText = buildDeletedTransactionMessage(actionResult.receipt, ai.reply);
+
+    return {
+      text: formattedText.slice(0, env.maxMessageLength),
+      mediaUrl
+    };
   }
 
-  return buildMultiActionMessage(actionableResults, ai.reply, settings.currency)
-    .slice(0, env.maxMessageLength);
+  return {
+    text: buildMultiActionMessage(actionableResults, ai.reply, settings.currency).slice(0, env.maxMessageLength),
+    mediaUrl
+  };
 }
 
 async function executeActions(
@@ -1725,6 +1721,10 @@ async function executeAction(
           deletedAt: new Date().toISOString()
         }
       };
+    }
+
+    if (action.action === 'send_media') {
+      return { kind: 'send_media', url: action.url };
     }
   } catch (error) {
     logger.error('Failed executing AI financial action', error);
