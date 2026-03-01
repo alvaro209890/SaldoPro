@@ -7,6 +7,8 @@ exports.bootstrapUserData = bootstrapUserData;
 exports.getUserSettings = getUserSettings;
 exports.updateUserSettings = updateUserSettings;
 exports.getUserProfile = getUserProfile;
+exports.listAdminUserSnapshots = listAdminUserSnapshots;
+exports.getAdminUserSnapshot = getAdminUserSnapshot;
 exports.getUserCategories = getUserCategories;
 exports.addUserCategory = addUserCategory;
 exports.updateUserCategory = updateUserCategory;
@@ -146,6 +148,26 @@ const DEFAULT_GLOBAL_CATEGORIES = [
     ...DEFAULT_EXPENSE_CATEGORIES,
     ...DEFAULT_INCOME_CATEGORIES
 ];
+function normalizeStoredPhoneList(value) {
+    if (!Array.isArray(value))
+        return [];
+    const unique = new Set();
+    for (const item of value) {
+        if (typeof item !== 'string')
+            continue;
+        const normalized = (0, events_1.normalizePhoneNumber)(item);
+        if (normalized.length < 10)
+            continue;
+        unique.add(normalized);
+    }
+    return [...unique];
+}
+function incrementCounter(counter, uid) {
+    const normalizedUid = typeof uid === 'string' ? uid.trim() : '';
+    if (!normalizedUid || normalizedUid === GLOBAL_CATEGORIES_UID)
+        return;
+    counter.set(normalizedUid, (counter.get(normalizedUid) ?? 0) + 1);
+}
 async function saveWhatsAppMessage(record) {
     const docId = getDocId(record);
     const { error } = await supabase_1.supabaseAdmin.from(COLLECTION_NAME).upsert({
@@ -382,6 +404,96 @@ async function getUserProfile(uid) {
         .maybeSingle();
     assertNoError(error, 'getUserProfile');
     return { displayName: data?.display_name ?? '' };
+}
+async function listAdminUserSnapshots() {
+    const [usersRes, settingsRes, transactionsRes, remindersRes, categoriesRes, messagesRes] = await Promise.all([
+        supabase_1.supabaseAdmin
+            .from('app_users')
+            .select('uid, email, display_name, created_at')
+            .neq('uid', GLOBAL_CATEGORIES_UID)
+            .order('created_at', { ascending: false }),
+        supabase_1.supabaseAdmin
+            .from('app_user_settings')
+            .select('uid, budget, start_day, currency, whatsapp_allowed_numbers, updated_at'),
+        supabase_1.supabaseAdmin
+            .from('app_transactions')
+            .select('uid'),
+        supabase_1.supabaseAdmin
+            .from('app_reminders')
+            .select('uid'),
+        supabase_1.supabaseAdmin
+            .from('app_categories')
+            .select('uid')
+            .neq('uid', GLOBAL_CATEGORIES_UID),
+        supabase_1.supabaseAdmin
+            .from(COLLECTION_NAME)
+            .select('owner_uid, created_at')
+    ]);
+    assertNoError(usersRes.error, 'listAdminUserSnapshots.users');
+    assertNoError(settingsRes.error, 'listAdminUserSnapshots.settings');
+    assertNoError(transactionsRes.error, 'listAdminUserSnapshots.transactions');
+    assertNoError(remindersRes.error, 'listAdminUserSnapshots.reminders');
+    assertNoError(categoriesRes.error, 'listAdminUserSnapshots.categories');
+    assertNoError(messagesRes.error, 'listAdminUserSnapshots.messages');
+    const settingsByUid = new Map();
+    for (const row of settingsRes.data ?? []) {
+        const uid = row.uid;
+        settingsByUid.set(uid, {
+            budget: toNumber(row.budget),
+            startDay: toNumber(row.start_day) || 1,
+            currency: typeof row.currency === 'string' && row.currency.trim() ? row.currency : 'BRL',
+            whatsappAllowedNumbers: normalizeStoredPhoneList(row.whatsapp_allowed_numbers),
+            updatedAt: typeof row.updated_at === 'string' ? row.updated_at : null
+        });
+    }
+    const transactionCounts = new Map();
+    for (const row of transactionsRes.data ?? []) {
+        incrementCounter(transactionCounts, row.uid);
+    }
+    const reminderCounts = new Map();
+    for (const row of remindersRes.data ?? []) {
+        incrementCounter(reminderCounts, row.uid);
+    }
+    const categoryCounts = new Map();
+    for (const row of categoriesRes.data ?? []) {
+        incrementCounter(categoryCounts, row.uid);
+    }
+    const whatsappMessageCounts = new Map();
+    const lastWhatsAppMessageAt = new Map();
+    for (const row of messagesRes.data ?? []) {
+        const uid = typeof row.owner_uid === 'string' ? row.owner_uid.trim() : '';
+        if (!uid || uid === GLOBAL_CATEGORIES_UID)
+            continue;
+        whatsappMessageCounts.set(uid, (whatsappMessageCounts.get(uid) ?? 0) + 1);
+        const createdAt = typeof row.created_at === 'string' ? row.created_at : '';
+        if (!createdAt)
+            continue;
+        const current = lastWhatsAppMessageAt.get(uid);
+        if (!current || createdAt > current) {
+            lastWhatsAppMessageAt.set(uid, createdAt);
+        }
+    }
+    return (usersRes.data ?? []).map((row) => {
+        const uid = row.uid;
+        return {
+            uid,
+            email: typeof row.email === 'string' ? row.email : null,
+            displayName: typeof row.display_name === 'string' ? row.display_name : '',
+            createdAt: typeof row.created_at === 'string' ? row.created_at : null,
+            settings: settingsByUid.get(uid) ?? null,
+            metrics: {
+                transactions: transactionCounts.get(uid) ?? 0,
+                reminders: reminderCounts.get(uid) ?? 0,
+                categories: categoryCounts.get(uid) ?? 0,
+                whatsappMessages: whatsappMessageCounts.get(uid) ?? 0,
+                lastWhatsAppMessageAt: lastWhatsAppMessageAt.get(uid) ?? null
+            }
+        };
+    });
+}
+async function getAdminUserSnapshot(uid) {
+    const snapshots = await listAdminUserSnapshots();
+    return snapshots.find((entry) => entry.uid === uid) ?? null;
 }
 async function getUserCategories(uid) {
     await ensureGlobalCategoriesSeed();

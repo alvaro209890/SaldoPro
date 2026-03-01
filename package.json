@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:admin": "vite build --config admin.vite.config.ts",
+    "build:all": "npm run build && npm run build:admin",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -1,5 +1,17 @@
 {
   "projects": {
     "default": "saldopro-98049"
+  },
+  "targets": {
+    "saldopro-98049": {
+      "hosting": {
+        "app": [
+          "saldopro-98049"
+        ],
+        "admin": [
+          "saldopro-98049-admin"
+        ]
+      }
+    }
   }
 }

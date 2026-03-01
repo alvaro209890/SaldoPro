@@ -1049,6 +1049,15 @@ async function executeAction(uid, action, categories, options) {
                 status: 'pending',
                 notifyPhone: options.sourcePhone ?? null
             };
+            const now = new Date();
+            const currentYmd = formatYmd(now);
+            const currentHm = formatHm(now);
+            if (payload.dueDate < currentYmd || (payload.dueDate === currentYmd && payload.dueTime && payload.dueTime < currentHm)) {
+                return {
+                    kind: 'error',
+                    message: 'Não é possível agendar um lembrete para uma data ou horário no passado. Por favor, informe um horário futuro.'
+                };
+            }
             const reminderId = await (0, firestore_1.addUserReminder)(uid, payload);
             invalidateContextCache(uid);
             trackUndoableAction(uid, {

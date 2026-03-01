@@ -89,14 +89,14 @@ const UNDO_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 interface UndoableAction {
   actionKind:
-    | 'added'
-    | 'added_recurring'
-    | 'updated'
-    | 'deleted'
-    | 'added_reminder'
-    | 'updated_reminder'
-    | 'completed_reminder'
-    | 'deleted_reminder';
+  | 'added'
+  | 'added_recurring'
+  | 'updated'
+  | 'deleted'
+  | 'added_reminder'
+  | 'updated_reminder'
+  | 'completed_reminder'
+  | 'deleted_reminder';
   /** ID of the created/modified/deleted resource */
   resourceId: string;
   timestamp: number;
@@ -1419,6 +1419,17 @@ async function executeAction(
         status: 'pending',
         notifyPhone: options.sourcePhone ?? null
       };
+
+      const now = new Date();
+      const currentYmd = formatYmd(now);
+      const currentHm = formatHm(now);
+
+      if (payload.dueDate < currentYmd || (payload.dueDate === currentYmd && payload.dueTime && payload.dueTime < currentHm)) {
+        return {
+          kind: 'error',
+          message: 'Não é possível agendar um lembrete para uma data ou horário no passado. Por favor, informe um horário futuro.'
+        };
+      }
 
       const reminderId = await addUserReminder(uid, payload);
       invalidateContextCache(uid);

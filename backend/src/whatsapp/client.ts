@@ -12,6 +12,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import QRCode from 'qrcode';
 import qrcodeTerminal from 'qrcode-terminal';
 import { handleReminderShortcut, processWhatsAppAIMessage, undoLastAction } from '../ai/assistant';
+import { isFirebaseUserActive } from '../lib/firebase-user-access';
 import type { GroqChatMessage } from '../ai/groq';
 import { env } from '../config/env';
 import {
@@ -730,12 +731,10 @@ export class WhatsAppClient {
     const remoteJid = this.resolveIncomingRemoteJid(key);
     if (!remoteJid || isStatusJid(remoteJid) || isGroupJid(remoteJid)) return;
     const remotePhone = jidToPhone(remoteJid);
-    // CRITICAL: We MUST reply to the JID that the message originally came from
-    // (the rawRemoteJid, which might be an @lid). If we reply to the resolved
-    // phone JID (@s.whatsapp.net), Baileys creates a new Signal session. The
-    // mobile device expects the reply on the LID session, causing an
-    // "Aguardando mensagem" error.
-    const replyJid = rawRemoteJid;
+    // CRITICAL: Always reply to the resolved phone JID (@s.whatsapp.net).
+    // Sending directly to @lid causes encryption session errors ("Aguardando mensagem")
+    // on iOS because the mobile app expects replies to arrive on the standard phone jid.
+    const replyJid = remoteJid;
 
     if (this.phone && remotePhone === this.phone) {
       this.rememberInbound(messageId);
@@ -922,6 +921,16 @@ export class WhatsAppClient {
 
     if (!binding) {
       logger.info('MSG_UNLINKED: no binding found or allowed, ignoring message', { from: remotePhone });
+      this.rememberInbound(messageId);
+      return;
+    }
+
+    const ownerActive = await isFirebaseUserActive(binding.uid);
+    if (!ownerActive) {
+      logger.warn('MSG_BLOCKED_USER: ignoring inbound WhatsApp message for blocked/unavailable account', {
+        uid: binding.uid,
+        phone: remotePhone
+      });
       this.rememberInbound(messageId);
       return;
     }

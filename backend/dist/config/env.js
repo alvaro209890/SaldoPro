@@ -53,6 +53,9 @@ exports.env = {
     port: parsePort(process.env.PORT, 10000),
     nodeEnv: process.env.NODE_ENV ?? 'development',
     whatsappApiToken: getRequired('WHATSAPP_API_TOKEN'),
+    adminPanelPassword: process.env.ADMIN_PANEL_PASSWORD?.trim() || '7464584657364dccddc',
+    adminPanelSessionSecret: process.env.ADMIN_PANEL_SESSION_SECRET?.trim() || `${getRequired('WHATSAPP_API_TOKEN')}:admin-panel`,
+    adminPanelSessionTtlHours: parseInteger(process.env.ADMIN_PANEL_SESSION_TTL_HOURS, 12),
     whatsappAutoReplyEnabled: parseBoolean(process.env.WHATSAPP_AUTO_REPLY_ENABLED, true),
     whatsappAutoReplyText: process.env.WHATSAPP_AUTO_REPLY_TEXT?.trim() ||
         'Recebemos sua mensagem. Em breve retornamos.',

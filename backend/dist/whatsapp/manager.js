@@ -4,6 +4,7 @@ exports.WhatsAppClientsManager = exports.WHATSAPP_SLOT_IDS = void 0;
 exports.isWhatsAppSlotId = isWhatsAppSlotId;
 const node_crypto_1 = require("node:crypto");
 const env_1 = require("../config/env");
+const firebase_user_access_1 = require("../lib/firebase-user-access");
 const logger_1 = require("../lib/logger");
 const whatsapp_lock_1 = require("../lib/whatsapp-lock");
 const client_1 = require("./client");
@@ -98,6 +99,10 @@ class WhatsAppClientsManager {
         const normalizedPhone = (0, events_1.normalizePhoneNumber)(input.to);
         if (normalizedPhone.length < 10) {
             throw new Error('Invalid destination phone');
+        }
+        const ownerActive = await (0, firebase_user_access_1.isFirebaseUserActive)(input.ownerUid);
+        if (!ownerActive) {
+            throw new Error('Target account is blocked or unavailable');
         }
         if (!this.hasLock || !this.clientStarted || !this.client.getStatus().connected) {
             throw new Error('WhatsApp is not connected');

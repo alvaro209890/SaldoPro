@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { getAuth } from 'firebase-admin/auth';
 import { ensureFirebaseAdmin } from '../lib/firebase-admin';
+import { getFirebaseUserAccessState } from '../lib/firebase-user-access';
 import { logger } from '../lib/logger';
 
 /**
@@ -24,6 +25,11 @@ export async function requireFirebaseAuth(req: Request, res: Response, next: Nex
 
     try {
         const decoded = await getAuth().verifyIdToken(idToken);
+        const userState = await getFirebaseUserAccessState(decoded.uid);
+        if (!userState.exists || userState.disabled) {
+            res.status(403).json({ error: 'Conta bloqueada ou indisponível.' });
+            return;
+        }
         (req as Request & { uid: string }).uid = decoded.uid;
         next();
     } catch (error) {

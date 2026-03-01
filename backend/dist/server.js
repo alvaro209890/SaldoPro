@@ -10,6 +10,7 @@ const logger_1 = require("./lib/logger");
 const health_1 = require("./routes/health");
 const qr_page_1 = require("./routes/qr-page");
 const whatsapp_1 = require("./routes/whatsapp");
+const admin_1 = require("./routes/admin");
 const ai_chat_1 = require("./routes/ai-chat");
 const data_1 = require("./routes/data");
 const manager_1 = require("./whatsapp/manager");
@@ -24,6 +25,7 @@ app.use(express_1.default.json({ limit: '2mb' }));
 app.use(health_1.healthRouter);
 app.use((0, qr_page_1.createQrPageRouter)(whatsappManager));
 app.use('/api/whatsapp', (0, whatsapp_1.createWhatsAppRouter)(whatsappManager));
+app.use('/api/admin', (0, admin_1.createAdminRouter)(whatsappManager));
 app.use('/api/ai', (0, ai_chat_1.createAiChatRouter)());
 app.use('/api/data', (0, data_1.createDataRouter)(signupWelcomeDispatcher));
 app.use((error, _req, res, _next) => {

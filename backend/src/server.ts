@@ -5,6 +5,7 @@ import { logger } from './lib/logger';
 import { healthRouter } from './routes/health';
 import { createQrPageRouter } from './routes/qr-page';
 import { createWhatsAppRouter } from './routes/whatsapp';
+import { createAdminRouter } from './routes/admin';
 import { createAiChatRouter } from './routes/ai-chat';
 import { createDataRouter } from './routes/data';
 import { WhatsAppClientsManager } from './whatsapp/manager';
@@ -21,6 +22,7 @@ app.use(express.json({ limit: '2mb' }));
 app.use(healthRouter);
 app.use(createQrPageRouter(whatsappManager));
 app.use('/api/whatsapp', createWhatsAppRouter(whatsappManager));
+app.use('/api/admin', createAdminRouter(whatsappManager));
 app.use('/api/ai', createAiChatRouter());
 app.use('/api/data', createDataRouter(signupWelcomeDispatcher));
 
