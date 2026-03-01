@@ -26,6 +26,7 @@ import {
   type UserSettingsBackend,
   type UserTransaction
 } from '../lib/firestore';
+import { getBrasiliaDate, getBrasiliaISOString } from '../lib/date-utils';
 import { logger } from '../lib/logger';
 import {
   queryGroqAssistant,
@@ -287,7 +288,7 @@ type ActionExecutionResult =
   | { kind: 'error'; message: string };
 
 function todayISO(): string {
-  return new Date().toISOString().split('T')[0];
+  return getBrasiliaISOString().split('T')[0];
 }
 
 function normalizeDate(date: unknown): string {
@@ -404,7 +405,7 @@ function parseTodayTomorrowReminderSchedule(text: string | undefined): InferredR
   const isToday = /\bhoje\b/.test(normalized);
   if (!isToday && !isTomorrow && !isDayAfterTomorrow) return null;
 
-  const baseDate = new Date();
+  const baseDate = getBrasiliaDate();
   if (isDayAfterTomorrow) {
     baseDate.setDate(baseDate.getDate() + 2);
   } else if (isTomorrow) {
@@ -424,7 +425,7 @@ function parseEndOfMonthReminderSchedule(text: string | undefined): InferredRemi
   if (!normalized) return null;
   if (!/\b(?:fim|final)\s+do\s+mes\b/.test(normalized)) return null;
 
-  const now = new Date();
+  const now = getBrasiliaDate();
   let target = lastDayOfMonth(now);
   const dueTime = extractExplicitTime(normalized) ?? extractPeriodTime(normalized);
 
@@ -452,7 +453,7 @@ function parseDailyReminderSchedule(text: string | undefined): InferredReminderS
 
   const dueTime = extractExplicitTime(normalized) ?? extractPeriodTime(normalized) ?? '09:00';
   const [hour, minute] = dueTime.split(':').map(Number);
-  const now = new Date();
+  const now = getBrasiliaDate();
   const target = new Date(now);
   target.setHours(hour, minute, 0, 0);
 
@@ -480,7 +481,7 @@ function parseWeekdayReminderSchedule(text: string | undefined): InferredReminde
   const match = weekdayPatterns.find((item) => item.regex.test(normalized));
   if (!match) return null;
 
-  const now = new Date();
+  const now = getBrasiliaDate();
   const dueTime = extractExplicitTime(normalized) ?? extractPeriodTime(normalized);
   const target = new Date(now);
   target.setHours(0, 0, 0, 0);
@@ -676,7 +677,7 @@ function formatReminderScheduleLabel(dueDate: string, dueTime?: string | null): 
   const timeLabel = dueTime ? ` às ${dueTime}` : '';
   const today = todayISO();
 
-  const tomorrowDate = new Date();
+  const tomorrowDate = getBrasiliaDate();
   tomorrowDate.setDate(tomorrowDate.getDate() + 1);
   const tomorrow = formatYmd(tomorrowDate);
 
@@ -1420,7 +1421,7 @@ async function executeAction(
         notifyPhone: options.sourcePhone ?? null
       };
 
-      const now = new Date();
+      const now = getBrasiliaDate();
       const currentYmd = formatYmd(now);
       const currentHm = formatHm(now);
 

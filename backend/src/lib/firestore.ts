@@ -2,6 +2,7 @@ import { supabaseAdmin as db } from './supabase';
 import { logger } from './logger';
 import type { WhatsAppMessageRecord, WhatsAppSlotId } from '../types/whatsapp';
 import { brazilianPhoneVariants, normalizePhoneNumber } from '../whatsapp/events';
+import { getBrasiliaISOString } from './date-utils';
 
 const COLLECTION_NAME = 'whatsapp_messages';
 const BINDINGS_COLLECTION_NAME = 'whatsapp_bindings';
@@ -536,9 +537,9 @@ export async function getUserSettings(uid: string): Promise<UserSettingsBackend>
 
   const whatsappAllowedNumbers = Array.isArray(data.whatsapp_allowed_numbers)
     ? data.whatsapp_allowed_numbers
-        .filter((value): value is string => typeof value === 'string')
-        .map((value) => normalizePhoneNumber(value))
-        .filter((value) => value.length >= 10)
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => normalizePhoneNumber(value))
+      .filter((value) => value.length >= 10)
     : [];
 
   return {
@@ -1344,7 +1345,7 @@ export async function updateRecurringTransactionBackend(
 }
 
 export async function generateOverdueRecurringTransactions(uid: string): Promise<number> {
-  const today = new Date().toISOString().split('T')[0];
+  const today = getBrasiliaISOString().split('T')[0];
   const active = await getActiveRecurringTransactions(uid);
   let generated = 0;
 

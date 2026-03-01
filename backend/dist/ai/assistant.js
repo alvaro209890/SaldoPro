@@ -5,6 +5,7 @@ exports.handleReminderShortcut = handleReminderShortcut;
 exports.processWhatsAppAIMessage = processWhatsAppAIMessage;
 const env_1 = require("../config/env");
 const firestore_1 = require("../lib/firestore");
+const date_utils_1 = require("../lib/date-utils");
 const logger_1 = require("../lib/logger");
 const groq_1 = require("./groq");
 const VALID_PAYMENT_METHODS = [
@@ -135,7 +136,7 @@ async function undoLastAction(uid) {
     }
 }
 function todayISO() {
-    return new Date().toISOString().split('T')[0];
+    return (0, date_utils_1.getBrasiliaISOString)().split('T')[0];
 }
 function normalizeDate(date) {
     if (typeof date !== 'string')
@@ -242,7 +243,7 @@ function parseTodayTomorrowReminderSchedule(text) {
     const isToday = /\bhoje\b/.test(normalized);
     if (!isToday && !isTomorrow && !isDayAfterTomorrow)
         return null;
-    const baseDate = new Date();
+    const baseDate = (0, date_utils_1.getBrasiliaDate)();
     if (isDayAfterTomorrow) {
         baseDate.setDate(baseDate.getDate() + 2);
     }
@@ -261,7 +262,7 @@ function parseEndOfMonthReminderSchedule(text) {
         return null;
     if (!/\b(?:fim|final)\s+do\s+mes\b/.test(normalized))
         return null;
-    const now = new Date();
+    const now = (0, date_utils_1.getBrasiliaDate)();
     let target = lastDayOfMonth(now);
     const dueTime = extractExplicitTime(normalized) ?? extractPeriodTime(normalized);
     if (formatYmd(target) === formatYmd(now)) {
@@ -288,7 +289,7 @@ function parseDailyReminderSchedule(text) {
         return null;
     const dueTime = extractExplicitTime(normalized) ?? extractPeriodTime(normalized) ?? '09:00';
     const [hour, minute] = dueTime.split(':').map(Number);
-    const now = new Date();
+    const now = (0, date_utils_1.getBrasiliaDate)();
     const target = new Date(now);
     target.setHours(hour, minute, 0, 0);
     if (target.getTime() <= now.getTime()) {
@@ -312,7 +313,7 @@ function parseWeekdayReminderSchedule(text) {
     const match = weekdayPatterns.find((item) => item.regex.test(normalized));
     if (!match)
         return null;
-    const now = new Date();
+    const now = (0, date_utils_1.getBrasiliaDate)();
     const dueTime = extractExplicitTime(normalized) ?? extractPeriodTime(normalized);
     const target = new Date(now);
     target.setHours(0, 0, 0, 0);
@@ -482,7 +483,7 @@ function formatDateTimeBR(value) {
 function formatReminderScheduleLabel(dueDate, dueTime) {
     const timeLabel = dueTime ? ` às ${dueTime}` : '';
     const today = todayISO();
-    const tomorrowDate = new Date();
+    const tomorrowDate = (0, date_utils_1.getBrasiliaDate)();
     tomorrowDate.setDate(tomorrowDate.getDate() + 1);
     const tomorrow = formatYmd(tomorrowDate);
     if (dueDate === today)
@@ -1049,7 +1050,7 @@ async function executeAction(uid, action, categories, options) {
                 status: 'pending',
                 notifyPhone: options.sourcePhone ?? null
             };
-            const now = new Date();
+            const now = (0, date_utils_1.getBrasiliaDate)();
             const currentYmd = formatYmd(now);
             const currentHm = formatHm(now);
             if (payload.dueDate < currentYmd || (payload.dueDate === currentYmd && payload.dueTime && payload.dueTime < currentHm)) {
