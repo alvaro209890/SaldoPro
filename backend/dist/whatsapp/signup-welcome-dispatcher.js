@@ -11,9 +11,17 @@ function buildSignupWelcomeMessage(displayName) {
     const firstName = displayName.split(/\s+/).find(Boolean) ?? '';
     const greetingName = firstName ? `, ${firstName}` : '';
     return [
-        `Oi${greetingName}! Eu sou a IA do SaldoPro.`,
-        'Vou te ajudar aqui no WhatsApp com organizacao financeira, registros e lembretes.',
-        'Quando quiser, e so me chamar por aqui.'
+        `Oi${greetingName}! Eu sou a IA do SaldoPro. 🚀`,
+        '',
+        '*Como posso te ajudar aqui no WhatsApp:*',
+        '✅ Registrar seus ganhos e gastos diários (basta me mandar texto ou áudio)',
+        '✅ Tirar dúvidas rápidas sobre o seu saldo',
+        '✅ Te lembrar de contas a pagar e receber',
+        '',
+        '*Acesse seu painel completo no site para ver gráficos e relatórios detallhados:*',
+        '🌐 https://saldopro-98049.web.app',
+        '',
+        'Quando quiser registrar algo, é só me mandar uma mensagem!'
     ].join('\n');
 }
 function startSignupWelcomeDispatcher(manager) {
