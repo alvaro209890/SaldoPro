@@ -14,6 +14,7 @@
     "@hookform/resolvers": "^3.9.0",
     "@supabase/supabase-js": "^2.98.0",
     "@tailwindcss/typography": "^0.5.19",
+    "date-fns": "^4.1.0",
     "firebase": "^11.0.0",
     "lucide-react": "^0.460.0",
     "react": "^19.0.0",
@@ -21,7 +22,7 @@
     "react-hook-form": "^7.54.0",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.0.0",
-    "recharts": "^2.15.0",
+    "recharts": "^2.15.4",
     "remark-gfm": "^4.0.1",
     "sonner": "^1.7.0",
     "zod": "^3.24.0"

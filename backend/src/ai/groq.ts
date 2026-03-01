@@ -1,4 +1,5 @@
 ﻿import { env } from '../config/env';
+import { getBrasiliaISOString } from '../lib/date-utils';
 import { logger } from '../lib/logger';
 import type { UserCategory, UserProfileBackend, UserReminder, UserSettingsBackend, UserTransaction } from '../lib/firestore';
 
@@ -251,6 +252,18 @@ function enforceActionByPromptMode(actions: AIAction[], mode: PromptMode): AIAct
   return actions.length > 0 ? actions : [{ action: 'none' }];
 }
 
+function getCurrentBrasiliaPromptContext(): {
+  today: string;
+  currentTime: string;
+  currentDateTime: string;
+} {
+  const nowIso = getBrasiliaISOString();
+  const [today = '', timePart = '00:00:00.000Z'] = nowIso.split('T');
+  const currentTime = timePart.slice(0, 8);
+  const currentDateTime = `${today} ${currentTime}`;
+  return { today, currentTime, currentDateTime };
+}
+
 /**
  * Compact system prompt for query-only messages.
  * No action formats, no transaction IDs, just financial summary + reply instructions.
@@ -260,7 +273,7 @@ function buildCompactSystemPrompt(context: UserFinancialContext): string {
 
   const userName = profile.displayName?.split(' ')[0] || '';
   const userInfo = userName ? `Nome do usuario: ${userName}.` : '';
-  const today = new Date().toISOString().split('T')[0];
+  const { today, currentTime, currentDateTime } = getCurrentBrasiliaPromptContext();
 
   const financialSummary = buildFinancialSummary(recentTransactions, settings, categories);
   const categoryNames = categories.map((c) => c.name).join(', ');
@@ -271,11 +284,16 @@ ${userInfo}
 Responda a pergunta ou duvida do usuario com base no contexto financeiro abaixo.
 Seja natural, objetivo e util. Nao inclua IDs tecnicos.
 Se o usuario pedir um resumo ou relatorio de seus gastos/ganhos, use os totais por categoria listados no contexto abaixo para fornecer uma quebra detalhada e precisa.
+IMPORTANTE: Se o usuario perguntar se voce pode ver/ler imagens, fotos, recibos ou audios, diga que SIM! Voce tem recursos visuais e de audio integrados no WhatsApp.
+Se o usuario perguntar que horas sao, use EXATAMENTE a hora atual fornecida abaixo no contexto. Nao invente horario e nunca assuma 00:00 so porque recebeu uma data.
+
 
 ${financialSummary}
 
 Categorias: ${categoryNames || '(nenhuma)'}
-Data de hoje: ${today}
+Data de hoje (Brasilia): ${today}
+Hora atual (Brasilia): ${currentTime}
+Data e hora atuais (Brasilia): ${currentDateTime}
 Moeda: ${settings.currency}
 ${settings.budget > 0 ? `Orcamento mensal: ${formatCurrency(settings.budget, settings.currency)}` : ''}
 
@@ -294,7 +312,7 @@ function buildSystemPrompt(context: UserFinancialContext): string {
 
   const shouldSendSummary = lightweight;
 
-  const today = new Date().toISOString().split('T')[0];
+  const { today, currentTime, currentDateTime } = getCurrentBrasiliaPromptContext();
 
   const summaryInstruction = shouldSendSummary
     ? `Nesta resposta, inclua um resumo claro do que voce faz como assistente financeiro (6 a 8 bullets) e 2 exemplos de comandos reais que o usuario pode mandar.`
@@ -321,7 +339,9 @@ ${financialSummary}
 
 Categorias disponiveis: ${categoryNames || '(nenhuma)'}
 
-Data de hoje: ${today}
+Data de hoje (Brasilia): ${today}
+Hora atual (Brasilia): ${currentTime}
+Data e hora atuais (Brasilia): ${currentDateTime}
 Moeda: ${settings.currency}
 ${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.budget, settings.currency)}` : 'Sem orcamento mensal definido.'}`;
   } else {
@@ -371,7 +391,9 @@ ${txList || '(nenhuma transacao)'}${txNote}
 Lembretes recentes (referencia interna; nao mostrar IDs):
 ${remindersList || '(nenhum lembrete)'}${reminderNote}
 
-Data de hoje: ${today}
+Data de hoje (Brasilia): ${today}
+Hora atual (Brasilia): ${currentTime}
+Data e hora atuais (Brasilia): ${currentDateTime}
 Moeda: ${settings.currency}
 ${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.budget, settings.currency)}` : 'Sem orcamento mensal definido.'}`;
   }
@@ -395,11 +417,13 @@ ESTILO DE RESPOSTA
 - Pode escrever respostas mais completas no WhatsApp quando isso ajudar o usuario.
 - Em duvidas, orientacoes e analises, prefira 4 a 12 linhas com estrutura clara.
 - Nunca exiba IDs tecnicos para o usuario.
+- REGRA DE CAPACIDADE EXPLICITA: Se o usuario te perguntar se voce pode ver imagens, ler fotos/recibos ou entender audios, responda CONFIRMANDO QUE SIM. Voce e totalmente capaz de processar imagens (visao computacional) e audios pelo WhatsApp.
+- REGRA DE TEMPO: se o usuario perguntar "que horas sao", "qual a hora" ou pedir data/hora atual, use a data e hora atuais de Brasilia fornecidas no contexto abaixo. Nao invente horario.
 
 COMPREENSAO DE LINGUAGEM NATURAL
 - O usuario pode escrever de forma informal, com erros de digitacao ou abreviacoes. Interprete com boa vontade.
 - SE A MENSAGEM TIVER IMAGEM/COMPROVANTE: analise a imagem e extraia valor, data, forma de pagamento e descricao.
-- NUNCA diga "nao consigo ver/visualizar imagem" quando houver imagem enviada.
+- NUNCA diga "nao consigo ver/visualizar imagem" ou assuma que e um modelo de texto apenas. Você tem visão habilitada.
 - Se houver valor identificado no comprovante, registre automaticamente a transacao (add_transaction), mesmo sem categoria explicita.
 - VERBOS DE ACAO = REGISTRAR AUTOMATICAMENTE (use add_transaction, NAO pergunte se quer registrar):
   - "gastei 50 no mercado" = registrar despesa de R$50 em supermercado
@@ -414,11 +438,14 @@ COMPREENSAO DE LINGUAGEM NATURAL
   - "quanto gastei esse mes?" = pergunta, responda com resumo
 - REGRA: quando o usuario usa verbos no passado (gastei, paguei, comprei, recebi, ganhei) com um valor, SEMPRE registre automaticamente. Nao pergunte "quer registrar?". Apenas registre e confirme.
 - TRANSACOES RECORRENTES: quando o usuario mencionar frequencia, use "add_recurring_transaction" em vez de "add_transaction":
-  - Palavras-chave: "todo mes", "toda semana", "mensal", "semanal", "anual", "todo ano", "semanalmente", "mensalmente", "por mes", "por semana"
+  - Palavras-chave: "todo mes", "toda semana", "mensal", "semanal", "anual", "todo ano", "semanalmente", "mensalmente", "por mes", "por semana", "todo dia 05", "dia 5 de cada mes", "recorrente", "recorrentes"
   - "pago 500 de aluguel todo mes" = add_recurring_transaction, frequency "monthly"
   - "gasto 50 por semana no transporte" = add_recurring_transaction, frequency "weekly"
   - "recebo 3000 de salario mensalmente" = add_recurring_transaction, frequency "monthly"
   - "pago 1200 de seguro por ano" = add_recurring_transaction, frequency "yearly"
+  - "meu salario e 2100 e recebo todo dia 05, coloque nas recorrentes" = add_recurring_transaction, frequency "monthly"
+  - Quando o usuario disser "todo dia 05" (ou outro dia do mes), interprete como recorrencia mensal. O campo "date" deve ser a PROXIMA ocorrencia futura desse dia.
+  - Se o usuario pedir explicitamente para "colocar nas recorrentes" ou "deixar recorrente" e houver frequencia/cadencia na frase, use "add_recurring_transaction".
 - LEMBRETES: quando o usuario pedir para lembrar de algo no futuro, use "add_reminder":
   - Lembrete comum: use reminderKind "general" (sem amount e sem reminderType).
   - Lembrete financeiro: use reminderKind "payable" ou "receivable" com amount > 0.
@@ -931,7 +958,7 @@ async function transcribeAudioWithGroqFallbackChain(
 
 function buildVisionFallbackResult(content: string): GroqAssistantResult {
   const amount = parseBrazilianAmount(content);
-  const date = parseDateFromText(content) ?? new Date().toISOString().split('T')[0];
+  const date = parseDateFromText(content) ?? getBrasiliaISOString().split('T')[0];
   const paymentMethod = detectPaymentMethod(content);
   const type = detectTransactionType(content);
   const description = extractDescriptionFromText(content);

@@ -1,5 +1,8 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, useMemo, type FormEvent } from 'react';
 import { BACKEND_URL } from './config';
+import { LineChart, Line, XAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { format, parseISO, startOfMonth, subMonths, isAfter } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 
 const STORAGE_KEY = 'saldopro_admin_token';
 
@@ -193,6 +196,9 @@ export function App() {
   const [quickFilter, setQuickFilter] = useState<QuickFilter>('all');
   const [recentTransactions, setRecentTransactions] = useState<AdminTransactionItem[]>([]);
   const [recentReminders, setRecentReminders] = useState<AdminReminderItem[]>([]);
+  const [directMessage, setDirectMessage] = useState<string>('');
+  const [directMessageLoading, setDirectMessageLoading] = useState<boolean>(false);
+  const [directMessageSuccess, setDirectMessageSuccess] = useState<boolean>(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -320,6 +326,12 @@ export function App() {
       cancelled = true;
     };
   }, [selectedUid, token]);
+
+  // Reset states when selected UID changes
+  useEffect(() => {
+    setDirectMessage('');
+    setDirectMessageSuccess(false);
+  }, [selectedUid]);
 
   async function handleLogin(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -455,6 +467,29 @@ export function App() {
     }
   }
 
+  async function handleSendDirectMessage(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (!token || !selectedUid || !directMessage.trim()) return;
+
+    setDirectMessageLoading(true);
+    setDirectMessageSuccess(false);
+    setDashboardError('');
+
+    try {
+      await adminFetch<{ ok: boolean }>(`/api/admin/users/${selectedUid}/message`, token, {
+        method: 'POST',
+        body: JSON.stringify({ text: directMessage })
+      });
+      setDirectMessageSuccess(true);
+      setDirectMessage('');
+      setTimeout(() => setDirectMessageSuccess(false), 3000);
+    } catch (error) {
+      setDashboardError(error instanceof Error ? error.message : 'Falha ao enviar mensagem.');
+    } finally {
+      setDirectMessageLoading(false);
+    }
+  }
+
   const primarySlot = overview?.whatsapp.slots[0] ?? null;
   const primaryQr = primarySlot ? overview?.whatsapp.qr[primarySlot.slotId] : null;
   const filteredUsers = users.filter((user) => {
@@ -488,6 +523,34 @@ export function App() {
     if (!latest || current > latest) return current;
     return latest;
   }, null);
+
+  const growthData = useMemo(() => {
+    const months = Array.from({ length: 6 }, (_, i) => {
+      const d = subMonths(new Date(), 5 - i);
+      return startOfMonth(d);
+    });
+
+    const data = months.map(m => ({
+      name: format(m, 'MMM/yy', { locale: ptBR }),
+      date: m,
+      current: 0
+    }));
+
+    const minDate = months[0];
+
+    users.forEach(user => {
+      const createdAt = user.createdAt ? parseISO(user.createdAt) : null;
+      if (createdAt && (isAfter(createdAt, minDate) || createdAt.getTime() === minDate.getTime())) {
+        const monthStart = startOfMonth(createdAt).getTime();
+        const bucket = data.find(d => d.date.getTime() === monthStart);
+        if (bucket) {
+          bucket.current += 1;
+        }
+      }
+    });
+
+    return data;
+  }, [users]);
 
   if (checkingSession) {
     return (
@@ -730,6 +793,41 @@ export function App() {
               <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">Sem Firebase</p>
               <p className="mt-3 text-3xl font-semibold text-rose-200">{missingFirebaseAccounts}</p>
               <p className="mt-2 text-sm text-zinc-400">Registros órfãos no Supabase.</p>
+            </div>
+          </section>
+
+          <section className="admin-panel rounded-3xl p-5">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.32em] text-zinc-400">Crescimento</p>
+                <h2 className="mt-3 text-xl font-semibold text-white">Cadastros de usuários nos últimos 6 meses</h2>
+              </div>
+            </div>
+            <div className="mt-6 h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={growthData}>
+                  <XAxis
+                    dataKey="name"
+                    stroke="#52525b"
+                    fontSize={12}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#18181b', borderColor: '#3f3f46', borderRadius: '16px', color: '#e4e4e7', fontSize: '13px' }}
+                    itemStyle={{ color: '#6ee7b7' }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="current"
+                    name="Novos Usuários"
+                    stroke="#6ee7b7"
+                    strokeWidth={3}
+                    dot={{ r: 4, strokeWidth: 2, fill: '#18181b' }}
+                    activeDot={{ r: 6, strokeWidth: 0, fill: '#6ee7b7' }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
           </section>
 
@@ -987,6 +1085,34 @@ export function App() {
                   <p className="mt-4 text-sm text-zinc-400">
                     Última atividade registrada: {formatDate(selectedUser.metrics.lastWhatsAppMessageAt)}
                   </p>
+                </div>
+
+                <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
+                  <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Comunicação Proativa</p>
+                  <form onSubmit={(e) => void handleSendDirectMessage(e)} className="mt-3 flex flex-col gap-3">
+                    <textarea
+                      value={directMessage}
+                      onChange={(e) => setDirectMessage(e.target.value)}
+                      placeholder="Mensagem para o WhatsApp do usuário..."
+                      className="w-full resize-none rounded-xl border border-white/10 bg-black/20 p-3 text-sm text-white outline-none transition focus:border-emerald-300/50"
+                      rows={3}
+                      disabled={directMessageLoading}
+                    />
+                    <div className="flex items-center justify-between">
+                      {directMessageSuccess ? (
+                        <span className="text-xs text-emerald-300">Mensagem enviada!</span>
+                      ) : (
+                        <span className="text-xs text-zinc-500">Chegará pelo bot oficial.</span>
+                      )}
+                      <button
+                        type="submit"
+                        disabled={directMessageLoading || !directMessage.trim() || selectedUser.whatsappAllowedNumbers.length === 0}
+                        className="rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-xs font-semibold text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {directMessageLoading ? 'Enviando...' : 'Enviar Mensagem'}
+                      </button>
+                    </div>
+                  </form>
                 </div>
 
                 <div className="rounded-2xl border border-white/8 bg-white/5 p-4">

@@ -306,6 +306,47 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
     }
   });
 
+  router.post('/users/:uid/message', async (req: Request, res: Response, next) => {
+    try {
+      const uid = req.params.uid;
+      const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+      const phoneOverride = typeof req.body?.phone === 'string' ? req.body.phone.trim() : null;
+
+      if (!text) {
+        res.status(400).json({ error: 'Mensagem vazia.' });
+        return;
+      }
+
+      const snapshot = await getAdminUserSnapshot(uid);
+      if (!snapshot) {
+        res.status(404).json({ error: 'Usuário não encontrado.' });
+        return;
+      }
+
+      let targetPhone = phoneOverride;
+      if (!targetPhone) {
+        const allowedNumbers = snapshot.settings?.whatsappAllowedNumbers ?? [];
+        if (allowedNumbers.length === 0) {
+          res.status(400).json({ error: 'Usuário não possui número de WhatsApp cadastrado e nenhum foi fornecido.' });
+          return;
+        }
+        targetPhone = allowedNumbers[0];
+      }
+
+      await manager.sendTextWithRouting({
+        to: targetPhone,
+        text,
+        ownerUid: uid
+      });
+
+      logger.info('Admin sent direct message to user', { uid, phone: targetPhone });
+      res.json({ ok: true, sent: true });
+    } catch (error) {
+      logger.error('Failed to send admin direct message', error);
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Erro ao enviar mensagem.' });
+    }
+  });
+
   router.use((error: unknown, _req: Request, res: Response, _next: unknown) => {
     logger.error('Admin route error', error);
     const message = error instanceof Error ? error.message : 'Unexpected error';

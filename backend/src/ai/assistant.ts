@@ -31,6 +31,7 @@ import { logger } from '../lib/logger';
 import {
   queryGroqAssistant,
   type AIAction,
+  type AIActionAddRecurring,
   type AIActionAddReminder,
   type GroqChatMessage,
   type PaymentMethod,
@@ -550,6 +551,119 @@ function buildFallbackScheduledReminderAction(text: string | undefined): AIActio
     dueDate: schedule.dueDate,
     ...(schedule.dueTime ? { dueTime: schedule.dueTime } : {})
   };
+}
+
+function inferRecurringFrequencyFromText(
+  text: string | undefined
+): AIActionAddRecurring['frequency'] | null {
+  const normalized = normalizeHumanText(text);
+  if (!normalized) return null;
+
+  if (/\b(?:toda|todo)\s+semana\b|\bsemanal(?:mente)?\b|\bpor\s+semana\b/.test(normalized)) {
+    return 'weekly';
+  }
+
+  if (/\b(?:todo)\s+ano\b|\banual(?:mente)?\b|\bpor\s+ano\b/.test(normalized)) {
+    return 'yearly';
+  }
+
+  if (
+    /\btodo\s+mes\b|\bmensal(?:mente)?\b|\bpor\s+mes\b/.test(normalized) ||
+    /\btodo\s+dia\s*(0?[1-9]|[12]\d|3[01])\b/.test(normalized) ||
+    /\bdia\s*(0?[1-9]|[12]\d|3[01])\s+de\s+cada\s+mes\b/.test(normalized)
+  ) {
+    return 'monthly';
+  }
+
+  return null;
+}
+
+function inferRecurringDayOfMonth(text: string | undefined): number | null {
+  const normalized = normalizeHumanText(text);
+  if (!normalized) return null;
+
+  const match = normalized.match(/\btodo\s+dia\s*(0?[1-9]|[12]\d|3[01])\b/)
+    ?? normalized.match(/\bdia\s*(0?[1-9]|[12]\d|3[01])\s+de\s+cada\s+mes\b/);
+  if (!match) return null;
+
+  const day = Number(match[1]);
+  if (!Number.isInteger(day) || day < 1 || day > 31) return null;
+  return day;
+}
+
+function resolveNextMonthlyStartDate(dayOfMonth: number): string {
+  const today = getBrasiliaDate();
+  today.setHours(0, 0, 0, 0);
+
+  for (let monthOffset = 0; monthOffset < 24; monthOffset += 1) {
+    const candidate = new Date(today.getFullYear(), today.getMonth() + monthOffset, dayOfMonth);
+    candidate.setHours(0, 0, 0, 0);
+
+    if (candidate.getDate() !== dayOfMonth) continue;
+    if (candidate.getTime() < today.getTime()) continue;
+
+    return formatYmd(candidate);
+  }
+
+  return todayISO();
+}
+
+function normalizeRecurringStartDateFromText(
+  text: string | undefined,
+  frequency: AIActionAddRecurring['frequency'],
+  fallbackDate: string
+): string {
+  if (frequency === 'monthly') {
+    const dayOfMonth = inferRecurringDayOfMonth(text);
+    if (dayOfMonth) {
+      return resolveNextMonthlyStartDate(dayOfMonth);
+    }
+  }
+
+  return normalizeDate(fallbackDate);
+}
+
+function normalizeTransactionActionsForRecurring(
+  actions: AIAction[],
+  text: string | undefined
+): AIAction[] {
+  const inferredFrequency = inferRecurringFrequencyFromText(text);
+  if (!inferredFrequency) return actions;
+
+  const transactionCreationCount = actions.filter(
+    (action) => action.action === 'add_transaction' || action.action === 'add_recurring_transaction'
+  ).length;
+
+  return actions.map((action) => {
+    if (action.action === 'add_recurring_transaction') {
+      const normalizedDate = normalizeRecurringStartDateFromText(text, action.frequency, action.date);
+      if (normalizedDate === action.date) return action;
+      return { ...action, date: normalizedDate };
+    }
+
+    if (action.action !== 'add_transaction' || transactionCreationCount !== 1) {
+      return action;
+    }
+
+    const normalizedDate = normalizeRecurringStartDateFromText(text, inferredFrequency, action.date);
+    logger.info('Promoting AI transaction to recurring transaction based on user text', {
+      inferredFrequency,
+      originalDate: action.date,
+      normalizedDate
+    });
+
+    return {
+      action: 'add_recurring_transaction',
+      type: action.type,
+      amount: action.amount,
+      description: action.description,
+      categoryId: action.categoryId,
+      date: normalizedDate,
+      paymentMethod: action.paymentMethod,
+      frequency: inferredFrequency,
+      endDate: null
+    };
+  });
 }
 
 function isReminderSnoozeIntent(text: string): boolean {
@@ -1206,9 +1320,10 @@ async function executeActions(
     baseActions.every((action) => action.action === 'none')
       ? buildFallbackScheduledReminderAction(options.latestUserMessageText)
       : null;
-  const safeActions = fallbackReminderAction
+  const rawActions = fallbackReminderAction
     ? [fallbackReminderAction]
     : baseActions;
+  const safeActions = normalizeTransactionActionsForRecurring(rawActions, options.latestUserMessageText);
 
   const results: ActionExecutionResult[] = [];
   for (const action of safeActions) {
