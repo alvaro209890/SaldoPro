@@ -27,6 +27,7 @@ import {
   type UserTransaction
 } from '../lib/firestore';
 import { getBrasiliaDate, getBrasiliaISOString } from '../lib/date-utils';
+import { uploadReceipt } from '../lib/storage';
 import { logger } from '../lib/logger';
 import {
   queryGroqAssistant,
@@ -1175,6 +1176,7 @@ export interface ProcessWhatsAppAIOptions {
   shouldSendCapabilitiesSummary?: boolean;
   sourcePhone?: string;
   latestUserMessageText?: string;
+  latestImageDataUrl?: string; // Passed from whatsapp client
 }
 
 export async function processWhatsAppAIMessage(
@@ -1362,13 +1364,23 @@ async function executeAction(
         return { kind: 'none' };
       }
 
+      let receiptUrl: string | undefined;
+      if (options.latestImageDataUrl) {
+        // Parse the mime type from the data url
+        const mimeMatch = options.latestImageDataUrl.match(/^data:([^;]+);/);
+        const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+        const url = await uploadReceipt(uid, options.latestImageDataUrl, mimeType);
+        if (url) receiptUrl = url;
+      }
+
       const payload: CreateTransactionInput = {
         type: action.type,
         amount: Number(action.amount),
         description: (action.description || 'Lancamento via WhatsApp').toString().slice(0, 120),
         category,
         date: normalizeDate(action.date),
-        paymentMethod: normalizePaymentMethod(action.paymentMethod)
+        paymentMethod: normalizePaymentMethod(action.paymentMethod),
+        receiptUrl
       };
 
       const transactionId = await addUserTransaction(uid, payload);

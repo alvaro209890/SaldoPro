@@ -93,6 +93,7 @@ interface DbTransactionRow {
   category: string;
   description: string;
   payment_method: 'pix' | 'credit' | 'debit' | 'cash' | 'transfer' | 'boleto';
+  receipt_url?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -200,6 +201,7 @@ export interface UserTransaction {
   category: string;
   description: string;
   paymentMethod: 'pix' | 'credit' | 'debit' | 'cash' | 'transfer' | 'boleto';
+  receiptUrl?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -223,6 +225,7 @@ export interface CreateTransactionInput {
   category: string;
   description: string;
   paymentMethod: 'pix' | 'credit' | 'debit' | 'cash' | 'transfer' | 'boleto';
+  receiptUrl?: string | null;
 }
 
 export interface CreateReminderInput {
@@ -847,17 +850,18 @@ function mapTransaction(row: DbTransactionRow): UserTransaction {
     category: row.category,
     description: row.description,
     paymentMethod: row.payment_method,
+    receiptUrl: row.receipt_url,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
 }
 
-export async function getRecentTransactions(uid: string, limitCount: number): Promise<UserTransaction[]> {
+export async function getRecentTransactions(uid: string, limitCount = 50): Promise<UserTransaction[]> {
   const { data, error } = await db
     .from('app_transactions')
-    .select('id, type, amount, date, month_key, category, description, payment_method, created_at, updated_at')
+    .select('id, type, amount, date, month_key, category, description, payment_method, receipt_url, created_at, updated_at')
     .eq('uid', uid)
-    .order('date', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(limitCount);
   assertNoError(error, 'getRecentTransactions');
   return ((data ?? []) as DbTransactionRow[]).map(mapTransaction);
@@ -866,7 +870,7 @@ export async function getRecentTransactions(uid: string, limitCount: number): Pr
 export async function getTransactionsByMonth(uid: string, monthKey: string): Promise<UserTransaction[]> {
   const { data, error } = await db
     .from('app_transactions')
-    .select('id, type, amount, date, month_key, category, description, payment_method, created_at, updated_at')
+    .select('id, type, amount, date, month_key, category, description, payment_method, receipt_url, created_at, updated_at')
     .eq('uid', uid)
     .eq('month_key', monthKey)
     .order('date', { ascending: false });
@@ -875,6 +879,7 @@ export async function getTransactionsByMonth(uid: string, monthKey: string): Pro
 }
 
 export async function addUserTransaction(uid: string, input: CreateTransactionInput): Promise<string> {
+  const monthKey = monthKeyFromDate(input.date);
   const now = new Date().toISOString();
   const { data, error } = await db
     .from('app_transactions')
@@ -883,10 +888,11 @@ export async function addUserTransaction(uid: string, input: CreateTransactionIn
       type: input.type,
       amount: input.amount,
       date: input.date,
-      month_key: monthKeyFromDate(input.date),
+      month_key: monthKey,
       category: input.category,
       description: input.description,
       payment_method: input.paymentMethod,
+      receipt_url: input.receiptUrl ?? null,
       created_at: now,
       updated_at: now
     })
@@ -911,8 +917,13 @@ export async function updateUserTransaction(
   }
   if (typeof changes.monthKey === 'string') updates.month_key = changes.monthKey;
   if (typeof changes.category === 'string') updates.category = changes.category;
-  if (typeof changes.description === 'string') updates.description = changes.description;
-  if (typeof changes.paymentMethod === 'string') updates.payment_method = changes.paymentMethod;
+  if (typeof changes.description === 'string') {
+    updates.description = changes.description.slice(0, 500);
+  }
+  if (changes.paymentMethod) updates.payment_method = changes.paymentMethod;
+  if (changes.receiptUrl !== undefined) updates.receipt_url = changes.receiptUrl ?? null;
+
+  if (Object.keys(updates).length <= 1) return; // Only updated_at
 
   const { error } = await db
     .from('app_transactions')
@@ -934,10 +945,22 @@ export async function deleteUserTransaction(uid: string, transactionId: string):
 export async function getUserTransactionById(uid: string, transactionId: string): Promise<UserTransaction | null> {
   const { data, error } = await db
     .from('app_transactions')
-    .select('id, type, amount, date, month_key, category, description, payment_method, created_at, updated_at')
+    .select('id, type, amount, date, month_key, category, description, payment_method, receipt_url, created_at, updated_at')
     .eq('uid', uid)
     .eq('id', transactionId)
-    .maybeSingle<DbTransactionRow>();
+    .maybeSingle<{
+      id: string;
+      type: 'income' | 'expense';
+      amount: number;
+      date: string;
+      month_key: string;
+      category: string;
+      description: string;
+      payment_method: 'pix' | 'credit' | 'debit' | 'cash' | 'transfer' | 'boleto';
+      receipt_url: string | null;
+      created_at: string;
+      updated_at: string;
+    }>();
   assertNoError(error, 'getUserTransactionById');
   return data ? mapTransaction(data) : null;
 }
@@ -960,6 +983,7 @@ export async function restoreUserTransaction(
         category: transaction.category,
         description: transaction.description,
         payment_method: transaction.paymentMethod,
+        receipt_url: transaction.receiptUrl,
         created_at: transaction.createdAt,
         updated_at: new Date().toISOString()
       },

@@ -90,6 +90,13 @@ export const env = {
   whatsappAiRateLimitPerMinute: parseInteger(process.env.WHATSAPP_AI_RATE_LIMIT_PER_MINUTE, 10),
   geminiApiKey: getOptional('GEMINI_API_KEY'),
   geminiModel: process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash',
+  appRegisterUrl: (() => {
+    const explicit = getOptional('APP_REGISTER_URL');
+    if (explicit) return normalizeUrl(explicit);
+
+    const base = getOptional('WEB_APP_URL') || 'https://saldopro-98049.web.app';
+    return `${normalizeUrl(base)}/register`;
+  })(),
   appPanelUrl: (() => {
     const explicit = getOptional('APP_PANEL_URL');
     if (explicit) return normalizeUrl(explicit);

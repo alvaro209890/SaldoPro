@@ -101,6 +101,19 @@ function buildPanelLinkReply(): string {
   return `Acesse seu painel aqui: ${env.appPanelUrl}`;
 }
 
+function buildRegistrationRequiredReply(): string {
+  return [
+    'Oi! Eu sou a IA do SaldoPro.',
+    '',
+    'Eu posso te ajudar a registrar gastos e receitas, criar lembretes e acompanhar seu controle financeiro pelo WhatsApp.',
+    '',
+    'Para eu te atender por aqui, primeiro voce precisa fazer seu cadastro no site.',
+    `Faca seu cadastro aqui: ${env.appRegisterUrl}`,
+    '',
+    'Assim que terminar, pode me mandar mensagem novamente que eu continuo com voce.'
+  ].join('\n');
+}
+
 const UNDO_KEYWORDS = ['desfaz', 'desfazer', 'desfaca', 'cancela', 'cancelar', 'errou', 'errei', 'anula', 'anular', 'desfizer'];
 
 function isUndoMessage(text: string): boolean {
@@ -945,7 +958,8 @@ export class WhatsAppClient {
     }
 
     if (!binding) {
-      logger.info('MSG_UNLINKED: no binding found or allowed, ignoring message', { from: remotePhone });
+      logger.info('MSG_UNLINKED: no binding found or allowed, asking user to register', { from: remotePhone });
+      await this.handleUnlinkedMessage(replyJid, remotePhone);
       this.rememberInbound(messageId);
       return;
     }
@@ -2103,9 +2117,21 @@ export class WhatsAppClient {
     this.aiCallTimestamps.set(uid, timestamps);
   }
 
-  private async handleUnlinkedMessage(remotePhone: string): Promise<void> {
+  private async handleUnlinkedMessage(remoteJid: string, remotePhone: string): Promise<void> {
     const normalizedPhone = normalizePhoneNumber(remotePhone);
-    logger.info('Ignoring WhatsApp message from non-authorized number', { from: normalizedPhone });
+    const reply = buildRegistrationRequiredReply();
+
+    try {
+      await this.sendWithRetry(remoteJid, reply, 'auto_reply');
+      logger.info('Sent registration guidance to unlinked WhatsApp number', {
+        from: normalizedPhone
+      });
+    } catch (error) {
+      logger.error('Failed to send registration guidance to unlinked WhatsApp number', {
+        from: normalizedPhone,
+        error: error instanceof Error ? error.message : 'unknown'
+      });
+    }
   }
 
   private getMediaDownloadContext():

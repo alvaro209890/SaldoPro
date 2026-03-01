@@ -80,6 +80,11 @@ export interface AIActionDeleteReminder {
   id: string;
 }
 
+export interface AIActionSendMedia {
+  action: 'send_media';
+  url: string;
+}
+
 export interface AIActionNone {
   action: 'none';
 }
@@ -93,6 +98,7 @@ export type AIAction =
   | AIActionUpdateReminder
   | AIActionCompleteReminder
   | AIActionDeleteReminder
+  | AIActionSendMedia
   | AIActionNone;
 
 export interface GroqAssistantResult {
@@ -500,7 +506,7 @@ REGRAS TECNICAS (OBRIGATORIO)
 
 FORMATOS DE ACTIONOBJECT
 - {"action":"none"}
-- {"action":"add_transaction","type":"expense|income","amount":15.5,"description":"Lanche","categoryId":"id","date":"YYYY-MM-DD","paymentMethod":"pix|credit|debit|cash|transfer|boleto"}
+- {"action":"add_transaction","type":"expense|income","amount":15.5,"description":"Lanche","categoryId":"id","date":"YYYY-MM-DD",          "receiptUrl": "string | null (se houver foto do comprovante, esta sera a URL)",}
 - {"action":"add_recurring_transaction","type":"expense|income","amount":500,"description":"Aluguel","categoryId":"id","date":"YYYY-MM-DD","paymentMethod":"pix","frequency":"weekly|monthly|yearly","endDate":null}
 - {"action":"add_reminder","title":"Beber agua","reminderKind":"general","dueDate":"YYYY-MM-DD","dueTime":"HH:mm|null"}
 - {"action":"add_reminder","title":"Pagar aluguel","reminderKind":"payable","amount":1200,"dueDate":"YYYY-MM-DD","dueTime":"HH:mm|null","reminderType":"payable"}
@@ -726,6 +732,12 @@ function validateAction(raw: unknown): AIAction {
     const id = typeof obj.id === 'string' ? obj.id.trim() : '';
     if (!id) return { action: 'none' };
     return { action: 'delete_reminder', id };
+  }
+
+  if (action === 'send_media') {
+    const url = typeof obj.url === 'string' ? obj.url.trim() : '';
+    if (!url) return { action: 'none' };
+    return { action: 'send_media', url };
   }
 
   return { action: 'none' };
