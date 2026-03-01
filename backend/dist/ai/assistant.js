@@ -127,13 +127,44 @@ function formatYmd(date) {
 function formatHm(date) {
     return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
-function parseRelativeReminderDateTime(text) {
-    if (!text)
-        return null;
-    const normalized = text
+function normalizeHumanText(text) {
+    return (text ?? '')
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '')
         .toLowerCase();
+}
+function extractExplicitTime(normalized) {
+    const match = normalized.match(/\b(?:as|a)\s+(\d{1,2})(?::(\d{2}))?\s*h?\b/);
+    if (!match)
+        return null;
+    const hour = Number(match[1]);
+    const minute = match[2] ? Number(match[2]) : 0;
+    if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+        return null;
+    }
+    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+function extractPeriodTime(normalized) {
+    if (/\b(?:a|de)\s+manha\b/.test(normalized))
+        return '09:00';
+    if (/\b(?:a|de)\s+tarde\b/.test(normalized))
+        return '15:00';
+    if (/\b(?:a|de)\s+noite\b/.test(normalized))
+        return '20:00';
+    if (/\bao\s+meio\s+dia\b/.test(normalized))
+        return '12:00';
+    return null;
+}
+function buildScheduleFromDate(baseDate, dueTime) {
+    return {
+        dueDate: formatYmd(baseDate),
+        dueTime
+    };
+}
+function parseRelativeReminderSchedule(text) {
+    const normalized = normalizeHumanText(text);
+    if (!normalized)
+        return null;
     const minuteMatch = normalized.match(/\b(?:da\s*qui(?:\s+a)?|daqui(?:\s+a)?|em)\s+(\d+)\s*(min|mins|minuto|minutos)\b/);
     if (minuteMatch) {
         const minutes = Number(minuteMatch[1]);
@@ -152,26 +183,80 @@ function parseRelativeReminderDateTime(text) {
     }
     return null;
 }
+function parseTodayTomorrowReminderSchedule(text) {
+    const normalized = normalizeHumanText(text);
+    if (!normalized)
+        return null;
+    const isTomorrow = /\bamanha\b/.test(normalized);
+    const isToday = /\bhoje\b/.test(normalized);
+    if (!isToday && !isTomorrow)
+        return null;
+    const baseDate = new Date();
+    if (isTomorrow) {
+        baseDate.setDate(baseDate.getDate() + 1);
+    }
+    baseDate.setHours(0, 0, 0, 0);
+    return buildScheduleFromDate(baseDate, extractExplicitTime(normalized) ?? extractPeriodTime(normalized));
+}
+function parseWeekdayReminderSchedule(text) {
+    const normalized = normalizeHumanText(text);
+    if (!normalized)
+        return null;
+    const weekdayPatterns = [
+        { regex: /\bsegunda(?:-feira)?\b/, day: 1 },
+        { regex: /\bterca(?:-feira)?\b/, day: 2 },
+        { regex: /\bquarta(?:-feira)?\b/, day: 3 },
+        { regex: /\bquinta(?:-feira)?\b/, day: 4 },
+        { regex: /\bsexta(?:-feira)?\b/, day: 5 },
+        { regex: /\bsabado\b/, day: 6 },
+        { regex: /\bdomingo\b/, day: 0 }
+    ];
+    const match = weekdayPatterns.find((item) => item.regex.test(normalized));
+    if (!match)
+        return null;
+    const now = new Date();
+    const dueTime = extractExplicitTime(normalized) ?? extractPeriodTime(normalized);
+    const target = new Date(now);
+    target.setHours(0, 0, 0, 0);
+    let diff = (match.day - now.getDay() + 7) % 7;
+    if (diff === 0) {
+        if (dueTime) {
+            const [hour, minute] = dueTime.split(':').map(Number);
+            const nowMinutes = now.getHours() * 60 + now.getMinutes();
+            const targetMinutes = hour * 60 + minute;
+            diff = targetMinutes > nowMinutes ? 0 : 7;
+        }
+        else {
+            diff = 7;
+        }
+    }
+    target.setDate(target.getDate() + diff);
+    return buildScheduleFromDate(target, dueTime);
+}
+function inferReminderScheduleFromText(text) {
+    return (parseRelativeReminderSchedule(text) ??
+        parseTodayTomorrowReminderSchedule(text) ??
+        parseWeekdayReminderSchedule(text));
+}
 function extractFallbackReminderTitle(text) {
     const cleaned = text
         .replace(/\b(?:da\s*qui(?:\s+a)?|daqui(?:\s+a)?|em)\s+\d+\s*(?:min|mins|minuto|minutos|h|hr|hrs|hora|horas)\b/gi, ' ')
+        .replace(/\b(?:amanh[ãa]|hoje)\b(?:\s+(?:às|as|a)\s+\d{1,2}(?::\d{2})?\s*h?)?(?:\s+(?:de|a)\s+(?:manh[ãa]|tarde|noite))?/gi, ' ')
+        .replace(/\b(?:segunda(?:-feira)?|ter[cç]a(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|s[áa]bado|domingo)\b(?:\s+(?:às|as|a)\s+\d{1,2}(?::\d{2})?\s*h?)?(?:\s+(?:de|a)\s+(?:manh[ãa]|tarde|noite))?/gi, ' ')
         .replace(/\b(?:me\s+)?(?:lembra(?:r)?|lembrete)(?:\s+de)?\b/gi, ' ')
         .replace(/[.,;!?]+/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
     return cleaned.slice(0, 120) || 'Lembrete via WhatsApp';
 }
-function buildFallbackRelativeReminderAction(text) {
+function buildFallbackScheduledReminderAction(text) {
     if (!text)
         return null;
-    const normalized = text
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .toLowerCase();
+    const normalized = normalizeHumanText(text);
     const mentionsReminderIntent = /\b(lembra|lembrar|lembrete|lembre)\b/.test(normalized);
     if (!mentionsReminderIntent)
         return null;
-    const schedule = parseRelativeReminderDateTime(text);
+    const schedule = inferReminderScheduleFromText(text);
     if (!schedule)
         return null;
     return {
@@ -179,7 +264,7 @@ function buildFallbackRelativeReminderAction(text) {
         title: extractFallbackReminderTitle(text),
         reminderKind: 'general',
         dueDate: schedule.dueDate,
-        dueTime: schedule.dueTime
+        ...(schedule.dueTime ? { dueTime: schedule.dueTime } : {})
     };
 }
 function formatCurrency(value, currency) {
@@ -205,6 +290,18 @@ function formatDateTimeBR(value) {
     if (!Number.isFinite(parsed))
         return value;
     return new Date(parsed).toLocaleString('pt-BR', { hour12: false });
+}
+function formatReminderScheduleLabel(dueDate, dueTime) {
+    const timeLabel = dueTime ? ` às ${dueTime}` : '';
+    const today = todayISO();
+    const tomorrowDate = new Date();
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+    const tomorrow = formatYmd(tomorrowDate);
+    if (dueDate === today)
+        return `hoje${timeLabel}`;
+    if (dueDate === tomorrow)
+        return `amanhã${timeLabel}`;
+    return `${formatDateBRFromYmd(dueDate)}${timeLabel}`;
 }
 function paymentMethodLabel(value) {
     const labels = {
@@ -330,11 +427,13 @@ function buildAddedReminderMessage(receipt, aiReply, currency) {
     const dueLabel = receipt.dueTime
         ? `${formatDateBRFromYmd(receipt.dueDate)} ${receipt.dueTime}`
         : formatDateBRFromYmd(receipt.dueDate);
+    const scheduledLabel = formatReminderScheduleLabel(receipt.dueDate, receipt.dueTime);
     const lines = [
         `⏰ *Lembrete criado*`,
         '',
         `*${receipt.title}*`,
         `Tipo: ${reminderKindLabel(receipt.reminderKind)}`,
+        `Agendado para: ${scheduledLabel}`,
         `Vencimento: ${dueLabel}`
     ];
     if (receipt.reminderKind !== 'general') {
@@ -588,7 +687,7 @@ async function executeActions(uid, actions, categories, options) {
         ? actions.slice(0, MAX_ACTIONS_PER_MESSAGE)
         : [{ action: 'none' }];
     const fallbackReminderAction = baseActions.every((action) => action.action === 'none')
-        ? buildFallbackRelativeReminderAction(options.latestUserMessageText)
+        ? buildFallbackScheduledReminderAction(options.latestUserMessageText)
         : null;
     const safeActions = fallbackReminderAction
         ? [fallbackReminderAction]
@@ -749,15 +848,15 @@ async function executeAction(uid, action, categories, options) {
             if (isFinancial && (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0)) {
                 return { kind: 'none' };
             }
-            const relativeSchedule = parseRelativeReminderDateTime(options.latestUserMessageText);
+            const inferredSchedule = inferReminderScheduleFromText(options.latestUserMessageText);
             const explicitDueDate = parseYmd(action.dueDate);
             const explicitDueTime = normalizeDueTime(action.dueTime);
             const payload = {
                 reminderKind,
                 title: (action.title || 'Lembrete via WhatsApp').toString().slice(0, 120),
                 amount: isFinancial ? normalizedAmount : null,
-                dueDate: explicitDueDate ?? relativeSchedule?.dueDate ?? todayISO(),
-                dueTime: explicitDueTime ?? relativeSchedule?.dueTime ?? null,
+                dueDate: explicitDueDate ?? inferredSchedule?.dueDate ?? todayISO(),
+                dueTime: explicitDueTime ?? inferredSchedule?.dueTime ?? null,
                 type: isFinancial ? reminderKind : null,
                 status: 'pending',
                 notifyPhone: options.sourcePhone ?? null

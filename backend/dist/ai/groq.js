@@ -239,6 +239,7 @@ COMPREENSAO DE LINGUAGEM NATURAL
   - Lembrete financeiro: use reminderKind "payable" ou "receivable" com amount > 0.
   - Exemplos: "me lembra de beber agua amanha" (general), "me lembre de pagar aluguel dia 10" (payable), "cria um lembrete de receber 500 dia 20" (receivable)
   - Para pedidos relativos como "daqui a 10 minutos", "em 2 horas" ou "daqui a 1 hora", converta para data e horario absolutos com base no momento atual.
+  - Tambem converta expressoes como "amanha as 14h", "hoje a noite" e "segunda as 9h" para data e horario absolutos.
   - Campos: title (descricao curta), dueDate (YYYY-MM-DD), dueTime opcional (HH:mm), reminderKind
   - Se reminderKind for payable/receivable, inclua amount e reminderType correspondente.
   - Se o usuario informar horario, inclua dueTime no formato HH:mm (24h). Ex.: "16:40" -> "dueTime":"16:40"
