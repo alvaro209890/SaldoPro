@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Wallet, Mail, Lock, User, Phone } from 'lucide-react';
@@ -9,6 +9,34 @@ import { Input } from '@/components/ui/Input';
 import { registerUser } from '@/firebase/auth';
 import { toast } from 'sonner';
 
+function normalizeSignupPhone(value: string): string {
+    const digits = value.replace(/\D/g, '');
+    if (digits.startsWith('55') && digits.length > 11) {
+        return digits.slice(2);
+    }
+    return digits;
+}
+
+function formatSignupPhone(value: string): string {
+    const digits = normalizeSignupPhone(value).slice(0, 11);
+    if (digits.length <= 2) {
+        return digits;
+    }
+
+    const ddd = digits.slice(0, 2);
+    const local = digits.slice(2);
+
+    if (local.length <= 4) {
+        return `(${ddd}) ${local}`;
+    }
+
+    if (local.length <= 8) {
+        return `(${ddd}) ${local.slice(0, 4)}-${local.slice(4)}`;
+    }
+
+    return `(${ddd}) ${local.slice(0, 5)}-${local.slice(5)}`;
+}
+
 const schema = z
     .object({
         displayName: z.string().min(2, 'Nome deve ter no mínimo 2 caracteres'),
@@ -16,8 +44,11 @@ const schema = z
             .string()
             .min(1, 'Número do WhatsApp é obrigatório')
             .refine(
-                (val) => val.replace(/\D/g, '').length >= 10,
-                'Digite o número com código do país e DDD (ex: 5511999999999)'
+                (val) => {
+                    const digits = normalizeSignupPhone(val);
+                    return digits.length >= 10 && digits.length <= 11;
+                },
+                'Digite apenas DDD + número (ex: 11999999999)'
             ),
         email: z.string().email('Email inválido'),
         password: z.string().min(6, 'Senha deve ter no mínimo 6 caracteres'),
@@ -34,6 +65,7 @@ export function Register() {
     const navigate = useNavigate();
     const [isLoading, setIsLoading] = useState(false);
     const {
+        control,
         register,
         handleSubmit,
         formState: { errors },
@@ -44,7 +76,8 @@ export function Register() {
     const onSubmit = async (data: FormData) => {
         setIsLoading(true);
         try {
-            const normalizedPhone = data.whatsappPhone.replace(/\D/g, '');
+            const normalizedLocalPhone = normalizeSignupPhone(data.whatsappPhone);
+            const normalizedPhone = `55${normalizedLocalPhone}`;
             await registerUser(data.email, data.password, data.displayName, normalizedPhone);
             toast.success('Conta criada com sucesso!');
             navigate('/app/dashboard');
@@ -85,17 +118,28 @@ export function Register() {
                         />
 
                         <div>
-                            <Input
-                                label="Número do WhatsApp"
-                                icon={Phone}
-                                placeholder="5511999999999"
-                                autoComplete="tel"
-                                inputMode="numeric"
-                                error={errors.whatsappPhone?.message}
-                                {...register('whatsappPhone')}
+                            <Controller
+                                name="whatsappPhone"
+                                control={control}
+                                render={({ field }) => (
+                                    <Input
+                                        label="Número do WhatsApp"
+                                        icon={Phone}
+                                        placeholder="(11) 99999-9999"
+                                        autoComplete="tel"
+                                        inputMode="numeric"
+                                        maxLength={15}
+                                        error={errors.whatsappPhone?.message}
+                                        {...field}
+                                        value={field.value ?? ''}
+                                        onChange={(event) => {
+                                            field.onChange(formatSignupPhone(event.target.value));
+                                        }}
+                                    />
+                                )}
                             />
                             <p className="mt-1 text-xs text-gray-500">
-                                Código do país + DDD + número (sem espaços ou traços)
+                                Digite apenas DDD + número. O 55 é adicionado automaticamente.
                             </p>
                         </div>
 

@@ -23,7 +23,7 @@ export async function registerUser(email: string, password: string, displayName:
         body: JSON.stringify({
             email,
             displayName,
-            ...(phone ? { phone } : {})
+            phone
         })
     });
 

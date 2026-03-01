@@ -250,7 +250,7 @@ export interface UserProfileBackend {
 export interface BootstrapUserInput {
   email: string;
   displayName: string;
-  phone?: string;
+  phone: string;
 }
 
 export interface BootstrapUserResult {
@@ -407,7 +407,7 @@ export async function bootstrapUserData(uid: string, input: BootstrapUserInput):
     assertNoError(error, 'bootstrapUserData.userInsert');
   }
 
-  const normalizedPhone = input.phone ? normalizePhoneNumber(input.phone) : '';
+  const normalizedPhone = normalizePhoneNumber(input.phone);
   const { data: settingsData, error: settingsReadError } = await db
     .from('app_user_settings')
     .select('uid, whatsapp_allowed_numbers')

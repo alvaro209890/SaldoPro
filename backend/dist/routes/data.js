@@ -5,6 +5,7 @@ const express_1 = require("express");
 const firebase_auth_1 = require("../middleware/firebase-auth");
 const firestore_1 = require("../lib/firestore");
 const logger_1 = require("../lib/logger");
+const events_1 = require("../whatsapp/events");
 function getUid(req) {
     return req.uid;
 }
@@ -20,14 +21,15 @@ function createDataRouter(signupWelcomeDispatcher) {
         const email = asString(body.email);
         const displayName = asString(body.displayName);
         const phone = asString(body.phone);
-        if (!email || !displayName) {
-            res.status(400).json({ error: '`email` e `displayName` sao obrigatorios.' });
+        const normalizedPhone = (0, events_1.normalizePhoneNumber)(phone);
+        if (!email || !displayName || normalizedPhone.length < 10) {
+            res.status(400).json({ error: '`email`, `displayName` e `phone` sao obrigatorios.' });
             return;
         }
         const bootstrapResult = await (0, firestore_1.bootstrapUserData)(uid, {
             email,
             displayName,
-            ...(phone ? { phone } : {})
+            phone: normalizedPhone
         });
         res.json({ ok: true });
         if (bootstrapResult.isNewUser && bootstrapResult.normalizedPhone) {

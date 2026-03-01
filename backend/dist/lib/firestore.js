@@ -246,7 +246,7 @@ async function bootstrapUserData(uid, input) {
         });
         assertNoError(error, 'bootstrapUserData.userInsert');
     }
-    const normalizedPhone = input.phone ? (0, events_1.normalizePhoneNumber)(input.phone) : '';
+    const normalizedPhone = (0, events_1.normalizePhoneNumber)(input.phone);
     const { data: settingsData, error: settingsReadError } = await supabase_1.supabaseAdmin
         .from('app_user_settings')
         .select('uid, whatsapp_allowed_numbers')

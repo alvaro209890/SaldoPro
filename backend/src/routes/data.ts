@@ -28,6 +28,7 @@ import {
   updateUserTransaction
 } from '../lib/firestore';
 import { logger } from '../lib/logger';
+import { normalizePhoneNumber } from '../whatsapp/events';
 import type { SignupWelcomeDispatcher } from '../whatsapp/signup-welcome-dispatcher';
 
 function getUid(req: Request): string {
@@ -49,16 +50,17 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
     const email = asString(body.email);
     const displayName = asString(body.displayName);
     const phone = asString(body.phone);
+    const normalizedPhone = normalizePhoneNumber(phone);
 
-    if (!email || !displayName) {
-      res.status(400).json({ error: '`email` e `displayName` sao obrigatorios.' });
+    if (!email || !displayName || normalizedPhone.length < 10) {
+      res.status(400).json({ error: '`email`, `displayName` e `phone` sao obrigatorios.' });
       return;
     }
 
     const bootstrapResult = await bootstrapUserData(uid, {
       email,
       displayName,
-      ...(phone ? { phone } : {})
+      phone: normalizedPhone
     });
 
     res.json({ ok: true });
