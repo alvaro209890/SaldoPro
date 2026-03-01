@@ -234,7 +234,32 @@ class WhatsAppClient {
         if (!this.socket || !this.connected) {
             throw new Error('WhatsApp is not connected');
         }
-        const jid = (0, events_1.normalizePhoneToJid)(to);
+        let jid = (0, events_1.normalizePhoneToJid)(to);
+        // CRITICAL FIX FOR BRAZILIAN 9TH DIGIT:
+        // Before sending a proactive message (like welcome/signup), we MUST ask
+        // WhatsApp what the actual registered JID is for this phone number.
+        // In Brazil, +55 66 98439-6232 (with 9) might actually be registered
+        // internally as +55 66 8439-6232 (without 9). If we send to the 9-digit
+        // version blindly, the message goes to an inactive/ghost account.
+        try {
+            const waResults = await this.socket.onWhatsApp(to);
+            if (waResults && waResults.length > 0) {
+                // Use the actual JID that WhatsApp says is registered
+                jid = waResults[0].jid;
+                logger_1.logger.info('MSG_OUTBOUND_RESOLVE: resolved phone to registered JID', {
+                    slotId: this.slotId,
+                    requestedPhone: to,
+                    resolvedJid: jid
+                });
+            }
+        }
+        catch (err) {
+            logger_1.logger.warn('MSG_OUTBOUND_RESOLVE_FAIL: failed to verify number on WhatsApp, falling back to raw JID', {
+                slotId: this.slotId,
+                requestedPhone: to,
+                error: err instanceof Error ? err.message : 'unknown'
+            });
+        }
         const result = await this.sendWithRetry(jid, normalizedText, 'outbound', ownerUid);
         if (ownerUid) {
             await this.appendConversationMessage(ownerUid, (0, events_1.jidToPhone)(jid), {
