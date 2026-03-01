@@ -1,12 +1,29 @@
 import {
+    confirmPasswordReset,
     createUserWithEmailAndPassword,
+    type ActionCodeSettings,
     signInWithEmailAndPassword,
     sendPasswordResetEmail,
     signOut,
     updateProfile,
+    verifyPasswordResetCode,
 } from 'firebase/auth';
 import { auth } from './config';
 import { BACKEND_URL } from '@/config/backend';
+
+const configuredAppUrl = (import.meta.env.VITE_APP_URL ?? '').trim();
+
+function getPasswordResetUrl(): string {
+    if (configuredAppUrl) {
+        return new URL('/reset-password', configuredAppUrl).toString();
+    }
+
+    if (typeof window !== 'undefined') {
+        return new URL('/reset-password', window.location.origin).toString();
+    }
+
+    return `https://${import.meta.env.VITE_FIREBASE_AUTH_DOMAIN}/reset-password`;
+}
 
 export async function registerUser(email: string, password: string, displayName: string, phone: string) {
     const cred = await createUserWithEmailAndPassword(auth, email, password);
@@ -42,7 +59,20 @@ export async function loginUser(email: string, password: string) {
 }
 
 export async function resetPassword(email: string) {
-    await sendPasswordResetEmail(auth, email);
+    const actionCodeSettings: ActionCodeSettings = {
+        url: getPasswordResetUrl(),
+        handleCodeInApp: false,
+    };
+
+    await sendPasswordResetEmail(auth, email, actionCodeSettings);
+}
+
+export async function validatePasswordResetCode(oobCode: string) {
+    return verifyPasswordResetCode(auth, oobCode);
+}
+
+export async function confirmUserPasswordReset(oobCode: string, newPassword: string) {
+    await confirmPasswordReset(auth, oobCode, newPassword);
 }
 
 export async function logoutUser() {
