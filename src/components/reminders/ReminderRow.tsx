@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { formatBRL } from '@/utils/formatBRL';
 import { formatDateBR } from '@/utils/date';
 import { Reminder } from '@/types';
@@ -12,7 +13,7 @@ interface ReminderRowProps {
 function reminderKindMeta(kind: Reminder['reminderKind']): {
   label: string;
   tone: string;
-  icon: JSX.Element;
+  icon: ReactNode;
 } {
   if (kind === 'payable') {
     return {

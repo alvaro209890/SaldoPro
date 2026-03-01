@@ -98,10 +98,10 @@ export interface Reminder {
 export interface ReminderFormData {
     reminderKind: 'general' | 'payable' | 'receivable';
     title: string;
-    amount?: number | null;
+    amount: number | null;
     dueDate: string;
-    dueTime?: string | null;
-    type?: 'payable' | 'receivable' | null;
+    dueTime: string | null;
+    type: 'payable' | 'receivable' | null;
     status: 'pending' | 'paid';
 }
 

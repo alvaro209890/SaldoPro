@@ -10,12 +10,12 @@ import type { Reminder, ReminderFormData } from '@/types';
 
 const reminderSchema = z.object({
   reminderKind: z.enum(['general', 'payable', 'receivable']),
-  amount: z.number().nullable().optional(),
+  amount: z.number().nullable(),
   dueDate: z.string().min(1, 'A data e obrigatoria'),
-  dueTime: z.string().nullable().optional(),
+  dueTime: z.string().nullable(),
   title: z.string().min(1, 'O texto do lembrete e obrigatorio'),
   status: z.enum(['pending', 'paid']),
-  type: z.enum(['payable', 'receivable']).nullable().optional(),
+  type: z.enum(['payable', 'receivable']).nullable(),
 }).superRefine((data, ctx) => {
   if (data.reminderKind === 'payable' || data.reminderKind === 'receivable') {
     if (data.amount == null || data.amount <= 0) {

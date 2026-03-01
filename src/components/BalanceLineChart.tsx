@@ -110,12 +110,10 @@ export function BalanceLineChart({ transactions, monthKey }: BalanceLineChartPro
                                 width={60}
                             />
                             <Tooltip
-                                labelFormatter={(label, payload) => {
-                                    if (payload && payload[0]) {
-                                        const [y, m, d] = payload[0].payload.fullDate.split('-');
-                                        return `${d}/${m}/${y}`;
-                                    }
-                                    return label;
+                                labelFormatter={(label) => {
+                                    const [year, month] = monthKey.split('-');
+                                    const day = String(label).padStart(2, '0');
+                                    return `${day}/${month}/${year}`;
                                 }}
                                 formatter={(value: number, name) => {
                                     const label =
