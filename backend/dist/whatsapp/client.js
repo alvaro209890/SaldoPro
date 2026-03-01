@@ -678,8 +678,12 @@ class WhatsAppClient {
             await this.registerBadMac(message, 'empty_payload_with_lid');
             // Try to extract any phone number info from the message metadata for LID mapping
             this.tryExtractPhoneFromMessageMeta(message);
-            this.rememberInbound(messageId);
-            logger_1.logger.warn('MSG_SKIP: missing payload with LID identity (Bad MAC decrypt failure)', {
+            // IMPORTANT: Do NOT call rememberInbound here! When Baileys gets a Bad MAC,
+            // it sends retry receipts to the sender, who will re-send the message with
+            // a prekey bundle. That re-send arrives as a NEW messages.upsert event with
+            // the SAME message ID but now with actual decrypted content. If we mark the
+            // ID as processed here, the successfully decrypted retry will be silently dropped.
+            logger_1.logger.warn('MSG_DECRYPT_FAIL: missing payload with LID identity (Bad MAC), awaiting retry', {
                 slotId: this.slotId,
                 messageId,
                 remoteJid,
@@ -690,13 +694,13 @@ class WhatsAppClient {
             return;
         }
         // Handle messages with empty payload — likely Bad MAC or PreKeyError decryption failure.
-        // Do NOT clear Signal sessions here — Baileys' built-in retry mechanism will
-        // send retry receipts with pre-keys, allowing the sender to re-establish the session
-        // and re-send the message. Clearing sessions aggressively was counter-productive
-        // (caused "No session record" errors on all retries).
+        // Baileys' built-in retry mechanism will send retry receipts with pre-keys,
+        // allowing the sender to re-establish the session and re-send the message.
+        // CRITICAL: Do NOT call rememberInbound here — the retry will arrive as a
+        // new messages.upsert with the SAME message ID but with actual content.
+        // Marking it as processed here would cause the retry to be silently dropped.
         if (!message.message) {
-            this.rememberInbound(messageId);
-            logger_1.logger.warn('MSG_SKIP: empty message payload (decrypt failure, awaiting Baileys retry)', {
+            logger_1.logger.warn('MSG_DECRYPT_FAIL: empty payload (decrypt failure), awaiting Baileys retry', {
                 slotId: this.slotId,
                 messageId,
                 remoteJid,
