@@ -8,7 +8,7 @@ function formatCurrency(value, currency) {
         return `R$ ${value.toFixed(2).replace('.', ',')}`;
     return `${currency} ${value.toFixed(2)}`;
 }
-function buildFinancialSummary(transactions, settings) {
+function buildFinancialSummary(transactions, settings, categories) {
     if (transactions.length === 0)
         return 'O usuario ainda nao possui transacoes registradas.';
     const now = new Date();
@@ -17,10 +17,28 @@ function buildFinancialSummary(transactions, settings) {
     const totalIncome = monthTx.filter((t) => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
     const totalExpense = monthTx.filter((t) => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
     const balance = totalIncome - totalExpense;
+    const categoryMap = new Map(categories.map(c => [c.id, c.name]));
+    const incomeByCategory = new Map();
+    const expenseByCategory = new Map();
+    for (const t of monthTx) {
+        const catName = categoryMap.get(t.category) || 'Outros';
+        if (t.type === 'income') {
+            incomeByCategory.set(catName, (incomeByCategory.get(catName) || 0) + t.amount);
+        }
+        else {
+            expenseByCategory.set(catName, (expenseByCategory.get(catName) || 0) + t.amount);
+        }
+    }
     const lines = [
         `Mes atual (${currentMonth}):`,
-        `  Receitas: ${formatCurrency(totalIncome, settings.currency)}`,
-        `  Despesas: ${formatCurrency(totalExpense, settings.currency)}`,
+        `  Receitas Totais: ${formatCurrency(totalIncome, settings.currency)}`,
+        ...Array.from(incomeByCategory.entries())
+            .sort((a, b) => b[1] - a[1])
+            .map(([cat, amt]) => `    - ${cat}: ${formatCurrency(amt, settings.currency)}`),
+        `  Despesas Totais: ${formatCurrency(totalExpense, settings.currency)}`,
+        ...Array.from(expenseByCategory.entries())
+            .sort((a, b) => b[1] - a[1])
+            .map(([cat, amt]) => `    - ${cat}: ${formatCurrency(amt, settings.currency)}`),
         `  Saldo: ${formatCurrency(balance, settings.currency)}`
     ];
     if (settings.budget > 0) {
@@ -101,7 +119,7 @@ function buildCompactSystemPrompt(context) {
     const userName = profile.displayName?.split(' ')[0] || '';
     const userInfo = userName ? `Nome do usuario: ${userName}.` : '';
     const today = new Date().toISOString().split('T')[0];
-    const financialSummary = buildFinancialSummary(recentTransactions, settings);
+    const financialSummary = buildFinancialSummary(recentTransactions, settings, categories);
     const categoryNames = categories.map((c) => c.name).join(', ');
     return `Voce e o SaldoPro, assistente financeiro pessoal via WhatsApp.
 ${userInfo}
@@ -140,7 +158,7 @@ function buildSystemPrompt(context) {
     let financialContextBlock;
     if (lightweight) {
         // For greetings / capability questions: only include a brief summary, no tx list
-        const financialSummary = buildFinancialSummary(recentTransactions, settings);
+        const financialSummary = buildFinancialSummary(recentTransactions, settings, categories);
         const categoryNames = categories.map((c) => c.name).join(', ');
         financialContextBlock = `CONTEXTO FINANCEIRO (resumido)
 ${financialSummary}
@@ -153,7 +171,7 @@ ${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.bu
     }
     else {
         // Full context: categories with IDs + recent transactions for edit/delete operations
-        const financialSummary = buildFinancialSummary(recentTransactions, settings);
+        const financialSummary = buildFinancialSummary(recentTransactions, settings, categories);
         const categoriesList = categories
             .map((c) => `- ID: "${c.id}", Nome: "${c.name}", Tipo: ${c.type}`)
             .join('\n');
