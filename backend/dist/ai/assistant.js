@@ -1052,6 +1052,46 @@ function buildMultiActionMessage(results, aiReply, currency) {
     }
     return lines.join('\n');
 }
+function isMutatingAiAction(action) {
+    return action.action !== 'none' && action.action !== 'send_media';
+}
+function buildMutationFailureMessage(actions, detail) {
+    const firstMutatingAction = actions.find(isMutatingAiAction);
+    let baseMessage = 'Nao consegui concluir a acao solicitada.';
+    switch (firstMutatingAction?.action) {
+        case 'add_transaction':
+            baseMessage = 'Nao consegui registrar a transacao solicitada.';
+            break;
+        case 'add_recurring_transaction':
+            baseMessage = 'Nao consegui criar a transacao recorrente solicitada.';
+            break;
+        case 'add_reminder':
+            baseMessage = 'Nao consegui criar o lembrete solicitado.';
+            break;
+        case 'update_transaction':
+            baseMessage = 'Nao consegui atualizar a transacao solicitada.';
+            break;
+        case 'delete_transaction':
+            baseMessage = 'Nao consegui excluir a transacao solicitada.';
+            break;
+        case 'update_reminder':
+            baseMessage = 'Nao consegui atualizar o lembrete solicitado.';
+            break;
+        case 'complete_reminder':
+            baseMessage = 'Nao consegui concluir o lembrete solicitado.';
+            break;
+        case 'delete_reminder':
+            baseMessage = 'Nao consegui excluir o lembrete solicitado.';
+            break;
+        default:
+            break;
+    }
+    const normalizedDetail = detail?.trim();
+    if (!normalizedDetail) {
+        return baseMessage;
+    }
+    return `${baseMessage}\n\n${normalizedDetail}`;
+}
 async function processWhatsAppAIMessage(uid, messages, options = {}) {
     if (!uid || uid.trim().length === 0) {
         return { text: 'Nao foi possivel identificar a conta vinculada para processar a mensagem.' };
@@ -1115,6 +1155,7 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
         shouldSendCapabilitiesSummary: Boolean(options.shouldSendCapabilitiesSummary)
     };
     const ai = await (0, groq_1.queryGroqAssistant)(sanitizedMessages, context);
+    const requestedMutation = ai.actionObjects.some(isMutatingAiAction);
     const actionResults = await executeActions(uid, ai.actionObjects, categories, {
         ...options,
         latestUserMessageText
@@ -1130,42 +1171,49 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
             actionableResults.splice(index, 1);
     }
     if (actionableResults.length === 0) {
+        if (requestedMutation) {
+            return {
+                text: buildMutationFailureMessage(ai.actionObjects).slice(0, env_1.env.maxMessageLength),
+                mediaUrl
+            };
+        }
         return { text: `${ai.reply}`.slice(0, env_1.env.maxMessageLength), mediaUrl };
     }
     if (actionableResults.length === 1) {
         const [actionResult] = actionableResults;
         if (actionResult.kind === 'error') {
-            const baseReply = ai.reply.trim() || 'Nao consegui concluir a acao solicitada.';
             return {
-                text: `${baseReply}\n\nAviso: ${actionResult.message}`.slice(0, env_1.env.maxMessageLength),
+                text: (requestedMutation
+                    ? buildMutationFailureMessage(ai.actionObjects, actionResult.message)
+                    : `${(ai.reply.trim() || 'Nao consegui concluir a acao solicitada.')}\n\nAviso: ${actionResult.message}`).slice(0, env_1.env.maxMessageLength),
                 mediaUrl
             };
         }
         // Default formatting branch (e.g. added)
         let formattedText = '';
         if (actionResult.kind === 'added')
-            formattedText = buildAddedTransactionMessage(actionResult.receipt, ai.reply, settings.currency);
+            formattedText = buildAddedTransactionMessage(actionResult.receipt, '', settings.currency);
         else if (actionResult.kind === 'added_recurring')
-            formattedText = buildAddedRecurringTransactionMessage(actionResult.receipt, ai.reply, settings.currency);
+            formattedText = buildAddedRecurringTransactionMessage(actionResult.receipt, '', settings.currency);
         else if (actionResult.kind === 'added_reminder')
-            formattedText = buildAddedReminderMessage(actionResult.receipt, ai.reply, settings.currency);
+            formattedText = buildAddedReminderMessage(actionResult.receipt, '', settings.currency);
         else if (actionResult.kind === 'updated_reminder')
-            formattedText = buildUpdatedReminderMessage(actionResult.receipt, ai.reply, settings.currency);
+            formattedText = buildUpdatedReminderMessage(actionResult.receipt, '', settings.currency);
         else if (actionResult.kind === 'completed_reminder')
-            formattedText = buildCompletedReminderMessage(actionResult.receipt, ai.reply);
+            formattedText = buildCompletedReminderMessage(actionResult.receipt, '');
         else if (actionResult.kind === 'deleted_reminder')
-            formattedText = buildDeletedReminderMessage(actionResult.receipt, ai.reply);
+            formattedText = buildDeletedReminderMessage(actionResult.receipt, '');
         else if (actionResult.kind === 'updated')
-            formattedText = buildUpdatedTransactionMessage(actionResult.receipt, ai.reply);
+            formattedText = buildUpdatedTransactionMessage(actionResult.receipt, '');
         else if (actionResult.kind === 'deleted')
-            formattedText = buildDeletedTransactionMessage(actionResult.receipt, ai.reply);
+            formattedText = buildDeletedTransactionMessage(actionResult.receipt, '');
         return {
             text: formattedText.slice(0, env_1.env.maxMessageLength),
             mediaUrl
         };
     }
     return {
-        text: buildMultiActionMessage(actionableResults, ai.reply, settings.currency).slice(0, env_1.env.maxMessageLength),
+        text: buildMultiActionMessage(actionableResults, '', settings.currency).slice(0, env_1.env.maxMessageLength),
         mediaUrl
     };
 }
