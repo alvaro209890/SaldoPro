@@ -30,6 +30,7 @@ import { logger } from '../lib/logger';
 import {
   queryGroqAssistant,
   type AIAction,
+  type AIActionAddReminder,
   type GroqChatMessage,
   type PaymentMethod,
   type UserFinancialContext
@@ -253,6 +254,85 @@ function normalizeDueTime(value: unknown): string | null {
   return trimmed;
 }
 
+function parseYmd(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
+}
+
+function formatYmd(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function formatHm(date: Date): string {
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+function parseRelativeReminderDateTime(text: string | undefined): { dueDate: string; dueTime: string } | null {
+  if (!text) return null;
+
+  const normalized = text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
+  const minuteMatch = normalized.match(/\b(?:da\s*qui(?:\s+a)?|daqui(?:\s+a)?|em)\s+(\d+)\s*(min|mins|minuto|minutos)\b/);
+  if (minuteMatch) {
+    const minutes = Number(minuteMatch[1]);
+    if (Number.isFinite(minutes) && minutes > 0) {
+      const target = new Date(Date.now() + minutes * 60 * 1000);
+      return { dueDate: formatYmd(target), dueTime: formatHm(target) };
+    }
+  }
+
+  const hourMatch = normalized.match(/\b(?:da\s*qui(?:\s+a)?|daqui(?:\s+a)?|em)\s+(\d+)\s*(h|hr|hrs|hora|horas)\b/);
+  if (hourMatch) {
+    const hours = Number(hourMatch[1]);
+    if (Number.isFinite(hours) && hours > 0) {
+      const target = new Date(Date.now() + hours * 60 * 60 * 1000);
+      return { dueDate: formatYmd(target), dueTime: formatHm(target) };
+    }
+  }
+
+  return null;
+}
+
+function extractFallbackReminderTitle(text: string): string {
+  const cleaned = text
+    .replace(/\b(?:da\s*qui(?:\s+a)?|daqui(?:\s+a)?|em)\s+\d+\s*(?:min|mins|minuto|minutos|h|hr|hrs|hora|horas)\b/gi, ' ')
+    .replace(/\b(?:me\s+)?(?:lembra(?:r)?|lembrete)(?:\s+de)?\b/gi, ' ')
+    .replace(/[.,;!?]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return cleaned.slice(0, 120) || 'Lembrete via WhatsApp';
+}
+
+function buildFallbackRelativeReminderAction(text: string | undefined): AIActionAddReminder | null {
+  if (!text) return null;
+
+  const normalized = text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
+  const mentionsReminderIntent =
+    /\b(lembra|lembrar|lembrete|lembre)\b/.test(normalized);
+
+  if (!mentionsReminderIntent) return null;
+
+  const schedule = parseRelativeReminderDateTime(text);
+  if (!schedule) return null;
+
+  return {
+    action: 'add_reminder',
+    title: extractFallbackReminderTitle(text),
+    reminderKind: 'general',
+    dueDate: schedule.dueDate,
+    dueTime: schedule.dueTime
+  };
+}
+
 function formatCurrency(value: number, currency: string): string {
   if (currency === 'BRL') {
     return `R$ ${value.toFixed(2).replace('.', ',')}`;
@@ -443,16 +523,19 @@ function buildAddedReminderMessage(
   const dueLabel = receipt.dueTime
     ? `${formatDateBRFromYmd(receipt.dueDate)} ${receipt.dueTime}`
     : formatDateBRFromYmd(receipt.dueDate);
-  const financialType: 'payable' | 'receivable' = receipt.reminderKind === 'payable' ? 'payable' : 'receivable';
-  const financialDetails = receipt.reminderKind === 'general'
-    ? dueLabel
-    : `${reminderTypeLabel(receipt.reminderType ?? financialType)} | ${formatCurrency(receipt.amount ?? 0, currency)} | ${dueLabel}`;
   const lines = [
     `⏰ *Lembrete criado*`,
     '',
     `*${receipt.title}*`,
-    financialDetails
+    `Tipo: ${reminderKindLabel(receipt.reminderKind)}`,
+    `Vencimento: ${dueLabel}`
   ];
+
+  if (receipt.reminderKind !== 'general') {
+    lines.push(`Valor: ${formatCurrency(receipt.amount ?? 0, currency)}`);
+  }
+
+  lines.push(`Criado em: ${formatDateTimeBR(receipt.recordedAt)}`);
 
   const cleanAiReply = aiReply.trim();
   if (cleanAiReply.length > 0) {
@@ -463,11 +546,11 @@ function buildAddedReminderMessage(
     '',
     receipt.dueTime
       ? (receipt.reminderKind === 'general'
-        ? 'Vou te lembrar no WhatsApp nesse horario. Se quiser ajustar texto, data ou horario, e so me pedir.'
-        : 'Vou te lembrar no WhatsApp nesse horario. Se quiser ajustar valor, data ou horario, e so me pedir.')
+        ? 'Vou te lembrar no WhatsApp exatamente nesse horario. Se quiser, tambem posso ajustar texto, data ou horario.'
+        : 'Vou te lembrar no WhatsApp exatamente nesse horario com esse valor. Se quiser, posso ajustar valor, data, horario ou descricao.')
       : (receipt.reminderKind === 'general'
-        ? 'Se quiser ajustar texto ou data do lembrete, e so me pedir.'
-        : 'Se quiser ajustar valor, data ou descricao do lembrete, e so me pedir.')
+        ? 'Como nao foi definido um horario, o lembrete fica registrado para essa data. Se quiser, posso adicionar horario, alterar o texto ou mudar a data.'
+        : 'Como nao foi definido um horario, o lembrete financeiro fica registrado para essa data. Se quiser, posso adicionar horario, ajustar o valor ou alterar a descricao.')
   );
   return lines.join('\n');
 }
@@ -641,6 +724,7 @@ export interface ProcessWhatsAppAIOptions {
   isConversationRestart?: boolean;
   shouldSendCapabilitiesSummary?: boolean;
   sourcePhone?: string;
+  latestUserMessageText?: string;
 }
 
 export async function processWhatsAppAIMessage(
@@ -661,6 +745,8 @@ export async function processWhatsAppAIMessage(
       ...(message.audioDataUrl ? { audioDataUrl: message.audioDataUrl } : {})
     }))
     .filter((message) => message.content.trim() || message.imageDataUrl || message.audioDataUrl);
+  const latestUserMessageText =
+    [...sanitizedMessages].reverse().find((message) => message.role === 'user')?.content ?? '';
 
   if (sanitizedMessages.length === 0) {
     return 'Nao consegui interpretar a mensagem recebida.';
@@ -714,7 +800,10 @@ export async function processWhatsAppAIMessage(
   };
 
   const ai = await queryGroqAssistant(sanitizedMessages, context);
-  const actionResults = await executeActions(uid, ai.actionObjects, categories, options);
+  const actionResults = await executeActions(uid, ai.actionObjects, categories, {
+    ...options,
+    latestUserMessageText
+  });
   const actionableResults = actionResults.filter((result) => result.kind !== 'none');
 
   if (actionableResults.length === 0) {
@@ -780,9 +869,16 @@ async function executeActions(
   categories: UserCategory[],
   options: ProcessWhatsAppAIOptions
 ): Promise<ActionExecutionResult[]> {
-  const safeActions = Array.isArray(actions) && actions.length > 0
+  const baseActions = Array.isArray(actions) && actions.length > 0
     ? actions.slice(0, MAX_ACTIONS_PER_MESSAGE)
     : [{ action: 'none' as const }];
+  const fallbackReminderAction =
+    baseActions.every((action) => action.action === 'none')
+      ? buildFallbackRelativeReminderAction(options.latestUserMessageText)
+      : null;
+  const safeActions = fallbackReminderAction
+    ? [fallbackReminderAction]
+    : baseActions;
 
   const results: ActionExecutionResult[] = [];
   for (const action of safeActions) {
@@ -980,13 +1076,16 @@ async function executeAction(
       if (isFinancial && (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0)) {
         return { kind: 'none' };
       }
+      const relativeSchedule = parseRelativeReminderDateTime(options.latestUserMessageText);
+      const explicitDueDate = parseYmd(action.dueDate);
+      const explicitDueTime = normalizeDueTime(action.dueTime);
 
       const payload: CreateReminderInput = {
         reminderKind,
         title: (action.title || 'Lembrete via WhatsApp').toString().slice(0, 120),
         amount: isFinancial ? normalizedAmount : null,
-        dueDate: normalizeDate(action.dueDate),
-        dueTime: normalizeDueTime(action.dueTime),
+        dueDate: explicitDueDate ?? relativeSchedule?.dueDate ?? todayISO(),
+        dueTime: explicitDueTime ?? relativeSchedule?.dueTime ?? null,
         type: isFinancial ? reminderKind : null,
         status: 'pending',
         notifyPhone: options.sourcePhone ?? null

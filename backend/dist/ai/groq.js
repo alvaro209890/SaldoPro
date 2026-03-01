@@ -238,6 +238,7 @@ COMPREENSAO DE LINGUAGEM NATURAL
   - Lembrete comum: use reminderKind "general" (sem amount e sem reminderType).
   - Lembrete financeiro: use reminderKind "payable" ou "receivable" com amount > 0.
   - Exemplos: "me lembra de beber agua amanha" (general), "me lembre de pagar aluguel dia 10" (payable), "cria um lembrete de receber 500 dia 20" (receivable)
+  - Para pedidos relativos como "daqui a 10 minutos", "em 2 horas" ou "daqui a 1 hora", converta para data e horario absolutos com base no momento atual.
   - Campos: title (descricao curta), dueDate (YYYY-MM-DD), dueTime opcional (HH:mm), reminderKind
   - Se reminderKind for payable/receivable, inclua amount e reminderType correspondente.
   - Se o usuario informar horario, inclua dueTime no formato HH:mm (24h). Ex.: "16:40" -> "dueTime":"16:40"
@@ -407,15 +408,13 @@ function validateAction(raw) {
     if (action === 'add_reminder') {
         const title = typeof obj.title === 'string' ? obj.title.trim() : '';
         const amount = obj.amount == null ? null : Number(obj.amount);
-        const dueDate = typeof obj.dueDate === 'string' ? obj.dueDate : '';
+        const dueDate = typeof obj.dueDate === 'string' ? obj.dueDate.trim() : '';
         const dueTime = typeof obj.dueTime === 'string' ? obj.dueTime.trim() : null;
         const reminderKind = obj.reminderKind;
         const reminderType = obj.reminderType === 'payable' || obj.reminderType === 'receivable'
             ? obj.reminderType
             : null;
         if (!title)
-            return { action: 'none' };
-        if (!dueDate)
             return { action: 'none' };
         if (dueTime && !/^([01]\d|2[0-3]):([0-5]\d)$/.test(dueTime))
             return { action: 'none' };
@@ -434,7 +433,7 @@ function validateAction(raw) {
             title,
             reminderKind: finalKind,
             ...(isFinancial ? { amount } : {}),
-            dueDate,
+            ...(dueDate ? { dueDate } : {}),
             ...(dueTime ? { dueTime } : {}),
             ...(isFinancial ? { reminderType: finalKind } : {})
         };
