@@ -92,9 +92,15 @@ function isUndoMessage(text) {
 }
 const IMAGE_ONLY_FALLBACK_TEXT = 'Analise a imagem enviada e registre o lancamento corretamente.';
 /** Max number of messages processed concurrently by the AI pipeline. */
-const MESSAGE_QUEUE_CONCURRENCY = 3;
+const MESSAGE_QUEUE_CONCURRENCY = 5;
 /** Refresh typing presence periodically while AI processing is running. */
 const COMPOSING_REFRESH_MS = 4000;
+/**
+ * Debounce window for rapid messages from the same user.
+ * When a user sends multiple messages quickly, we wait this long after the
+ * LAST message before processing, so all messages get batched into one AI call.
+ */
+const USER_DEBOUNCE_MS = 1800;
 /** If the same JID hits repeated Bad MAC in a short window, perform a soft reconnect. */
 const BAD_MAC_WINDOW_MS = 2 * 60 * 1000;
 const BAD_MAC_RECONNECT_THRESHOLD = 3;
@@ -141,6 +147,10 @@ class WhatsAppClient {
     // --- Message processing queue ---
     messageQueue = [];
     messageQueueActive = 0;
+    drainInProgress = false;
+    // --- Per-user debounce for rapid messages ---
+    userDebounceTimers = new Map();
+    userDebouncedMessages = new Map();
     constructor(options) {
         this.slotId = options.slotId;
         this.authDir = options.authDir;
@@ -502,10 +512,68 @@ class WhatsAppClient {
     }
     /**
      * Enqueue a message for processing with bounded concurrency.
-     * Up to MESSAGE_QUEUE_CONCURRENCY messages are processed in parallel;
-     * the rest wait in the queue until a slot opens.
+     * Rapid messages from the SAME user/phone are debounced: we wait
+     * USER_DEBOUNCE_MS after the last message before processing, so
+     * multiple rapid messages get handled sequentially with fresh context
+     * instead of spawning parallel AI calls that overwrite each other.
      */
     enqueueMessage(message) {
+        const key = message.key;
+        const remoteJid = key?.remoteJid ?? '';
+        // Use the raw remoteJid as debounce key — same sender = same key
+        const debounceKey = remoteJid || `unknown_${Date.now()}`;
+        // If this is a LID, status, group, fromMe, or has no remoteJid, skip debounce
+        const shouldDebounce = remoteJid &&
+            !(0, events_1.isStatusJid)(remoteJid) &&
+            !(0, events_1.isGroupJid)(remoteJid) &&
+            !key?.fromMe &&
+            !remoteJid.endsWith('@lid');
+        if (!shouldDebounce) {
+            // Process immediately without debounce (LIDs, non-chat messages, etc.)
+            this.enqueueTask(message);
+            return;
+        }
+        // --- Per-user debounce logic ---
+        // Clear any existing timer for this user
+        const existingTimer = this.userDebounceTimers.get(debounceKey);
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+        }
+        // Accumulate messages for this user
+        const pending = this.userDebouncedMessages.get(debounceKey) ?? [];
+        pending.push(message);
+        this.userDebouncedMessages.set(debounceKey, pending);
+        logger_1.logger.info('MSG_DEBOUNCE: buffering rapid message', {
+            slotId: this.slotId,
+            debounceKey,
+            bufferedCount: pending.length,
+            messageId: key?.id ?? 'unknown',
+            debounceMs: USER_DEBOUNCE_MS
+        });
+        // Set a new timer — fires USER_DEBOUNCE_MS after the LAST message
+        const timer = setTimeout(() => {
+            this.userDebounceTimers.delete(debounceKey);
+            const messages = this.userDebouncedMessages.get(debounceKey) ?? [];
+            this.userDebouncedMessages.delete(debounceKey);
+            if (messages.length === 0)
+                return;
+            logger_1.logger.info('MSG_DEBOUNCE_FLUSH: processing batched messages', {
+                slotId: this.slotId,
+                debounceKey,
+                messageCount: messages.length
+            });
+            // Process each message sequentially by enqueueing them in order
+            for (const msg of messages) {
+                this.enqueueTask(msg);
+            }
+        }, USER_DEBOUNCE_MS);
+        this.userDebounceTimers.set(debounceKey, timer);
+    }
+    /**
+     * Low-level task enqueue: wraps a message handler in error handling
+     * and pushes it onto the processing queue.
+     */
+    enqueueTask(message) {
         const task = async () => {
             try {
                 await this.handleSingleIncomingMessage(message);
@@ -513,7 +581,6 @@ class WhatsAppClient {
             catch (error) {
                 const errorMsg = error instanceof Error ? error.message : '';
                 if (errorMsg.includes('Bad MAC')) {
-                    // Bad MAC is often transient/noisy (e.g. status updates), do not nuke auth session.
                     const remoteJid = message.key?.remoteJid ?? 'unknown';
                     const messageId = message.key?.id ?? 'unknown';
                     await this.registerBadMac(message, errorMsg);
@@ -532,15 +599,24 @@ class WhatsAppClient {
         void this.drainMessageQueue();
     }
     async drainMessageQueue() {
-        while (this.messageQueue.length > 0 && this.messageQueueActive < MESSAGE_QUEUE_CONCURRENCY) {
-            const task = this.messageQueue.shift();
-            if (!task)
-                break;
-            this.messageQueueActive += 1;
-            task().finally(() => {
-                this.messageQueueActive -= 1;
-                void this.drainMessageQueue();
-            });
+        // Prevent concurrent drain loops from competing for the same slots
+        if (this.drainInProgress)
+            return;
+        this.drainInProgress = true;
+        try {
+            while (this.messageQueue.length > 0 && this.messageQueueActive < MESSAGE_QUEUE_CONCURRENCY) {
+                const task = this.messageQueue.shift();
+                if (!task)
+                    break;
+                this.messageQueueActive += 1;
+                task().finally(() => {
+                    this.messageQueueActive -= 1;
+                    void this.drainMessageQueue();
+                });
+            }
+        }
+        finally {
+            this.drainInProgress = false;
         }
     }
     async handleSingleIncomingMessage(message) {
@@ -855,6 +931,12 @@ class WhatsAppClient {
      */
     async runAiPipeline(ownerUid, remotePhone, inboundText, imageDataUrl, audioDataUrl) {
         logger_1.logger.info('MSG_PIPELINE_START: loading conversation history', { uid: ownerUid, phone: remotePhone });
+        // Invalidate cached conversation so we get fresh state from DB.
+        // This is critical when multiple messages from the same user are
+        // processed sequentially (after debounce) — each must see the
+        // previous AI reply in the history.
+        const cacheKey = this.conversationKey(ownerUid, (0, events_1.normalizePhoneNumber)(remotePhone));
+        this.conversationByPhone.delete(cacheKey);
         const conversation = await this.getConversationHistory(ownerUid, remotePhone);
         const isFirstMessage = conversation.length === 0;
         const isGreeting = isGreetingMessage(inboundText);
@@ -989,18 +1071,20 @@ class WhatsAppClient {
                     ownerUid,
                     textLength: text.length
                 });
-                // Force fresh Signal sessions with all recipient devices before sending.
-                // This prevents "Aguardando mensagem" errors caused by stale/corrupted
-                // Signal session keys that the recipient's mobile device can't decrypt.
-                try {
-                    await this.socket.assertSessions([jid], true);
-                }
-                catch (sessionError) {
-                    logger_1.logger.warn('MSG_SEND: assertSessions failed (continuing anyway)', {
-                        slotId: this.slotId,
-                        jid,
-                        error: sessionError instanceof Error ? sessionError.message : 'unknown'
-                    });
+                // Only assert sessions on RETRY to fix stale Signal keys.
+                // On first attempt, skip to reduce latency — the session is
+                // usually fine and Baileys handles re-keying automatically.
+                if (attempt > 1) {
+                    try {
+                        await this.socket.assertSessions([jid], true);
+                    }
+                    catch (sessionError) {
+                        logger_1.logger.warn('MSG_SEND: assertSessions failed (continuing anyway)', {
+                            slotId: this.slotId,
+                            jid,
+                            error: sessionError instanceof Error ? sessionError.message : 'unknown'
+                        });
+                    }
                 }
                 const response = await this.socket.sendMessage(jid, { text });
                 const messageId = response?.key?.id ?? `generated_${Date.now()}`;
