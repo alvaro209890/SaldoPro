@@ -14,14 +14,14 @@ function buildSignupWelcomeMessage(displayName) {
         `Oi${greetingName}! Eu sou a IA do SaldoPro. 🚀`,
         '',
         '*Como posso te ajudar aqui no WhatsApp:*',
-        '✅ Registrar seus ganhos e gastos diários (basta me mandar texto ou áudio)',
-        '✅ Tirar dúvidas rápidas sobre o seu saldo',
-        '✅ Te lembrar de contas a pagar e receber',
+        '✅ *Registrar ganhos e gastos*: É só me mandar um áudio ou texto (Ex: "Gastei 50 no mercado hoje" ou "Recebi 200 de um freela")',
+        '✅ *Lembretes de contas*: Me avise sobre os vencimentos e eu te lembro! (Ex: "Me lembre de pagar a luz dia 10")',
+        '✅ *Dúvidas sobre o saldo*: Pergunte como está o seu caixa ou o quanto já gastou no mês.',
         '',
-        '*Acesse seu painel completo no site para ver gráficos e relatórios detallhados:*',
+        '*📱 Acesse seu painel completo no site para ver gráficos e relatórios detalhados:*',
         '🌐 https://saldopro-98049.web.app',
         '',
-        'Quando quiser registrar algo, é só me mandar uma mensagem!'
+        'Estou pronto para começar! O que vamos registrar hoje?'
     ].join('\n');
 }
 function startSignupWelcomeDispatcher(manager) {
