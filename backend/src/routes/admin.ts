@@ -37,6 +37,13 @@ interface AdminApiUser {
   };
 }
 
+interface AdminUserDetailsResponse {
+  user: AdminApiUser | null;
+  recentTransactions: ReturnType<typeof getRecentTransactions> extends Promise<infer T> ? T : never;
+  recentReminders: Awaited<ReturnType<typeof getUserReminders>>;
+  missing?: boolean;
+}
+
 function isWhatsAppLog(entry: OperationalLogEntry): boolean {
   if (entry.message.includes('WhatsApp')) return true;
   if (entry.message.startsWith('MSG_')) return true;
@@ -208,16 +215,23 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
       ]);
 
       if (!snapshot && !firebase.exists) {
-        res.status(404).json({ error: 'User not found.' });
+        const payload: AdminUserDetailsResponse = {
+          user: null,
+          recentTransactions: [],
+          recentReminders: [],
+          missing: true
+        };
+        res.json(payload);
         return;
       }
 
       const merged = mergeAdminUsers(snapshot ? [snapshot] : [], new Map([[uid, firebase]]))[0];
-      res.json({
+      const payload: AdminUserDetailsResponse = {
         user: merged,
         recentTransactions,
         recentReminders: reminders.slice(0, 5)
-      });
+      };
+      res.json(payload);
     } catch (error) {
       next(error);
     }

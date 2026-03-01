@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, type FormEvent } from 'react';
+import { useEffect, useState, useMemo, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import { BACKEND_URL } from './config';
 import { LineChart, Line, XAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { format, parseISO, startOfMonth, subMonths, isAfter } from 'date-fns';
@@ -110,6 +110,13 @@ interface AdminReminderItem {
 interface AdminChatMessage {
   role: 'user' | 'assistant';
   content: string;
+}
+
+interface AdminUserDetailsResponse {
+  user: AdminUser | null;
+  recentTransactions: AdminTransactionItem[];
+  recentReminders: AdminReminderItem[];
+  missing?: boolean;
 }
 
 type QuickFilter = 'all' | 'blocked' | 'no_whatsapp' | 'no_firebase' | 'inactive';
@@ -238,6 +245,24 @@ async function adminFetch<T>(path: string, token: string, init?: RequestInit): P
   return response.json() as Promise<T>;
 }
 
+function clearSelectedUserState(
+  setSelectedUid: Dispatch<SetStateAction<string>>,
+  setSelectedUser: Dispatch<SetStateAction<AdminUser | null>>,
+  setDetailedUid: Dispatch<SetStateAction<string | null>>,
+  setRecentTransactions: Dispatch<SetStateAction<AdminTransactionItem[]>>,
+  setRecentReminders: Dispatch<SetStateAction<AdminReminderItem[]>>,
+  setUserMessages: Dispatch<SetStateAction<AdminChatMessage[]>>,
+  setDashboardError?: Dispatch<SetStateAction<string>>
+): void {
+  setSelectedUid('');
+  setSelectedUser(null);
+  setDetailedUid(null);
+  setRecentTransactions([]);
+  setRecentReminders([]);
+  setUserMessages([]);
+  setDashboardError?.('');
+}
+
 export function App() {
   const [token, setToken] = useState<string>(() => readStoredToken());
   const [checkingSession, setCheckingSession] = useState<boolean>(true);
@@ -325,10 +350,25 @@ export function App() {
 
         setOverview(overviewPayload);
         setUsers(usersPayload.users);
-        setSelectedUser((current) => {
-          if (!current) return current;
-          return usersPayload.users.find((user) => user.uid === current.uid) ?? current;
-        });
+        const stillSelected = selectedUid
+          ? usersPayload.users.find((user) => user.uid === selectedUid) ?? null
+          : null;
+
+        if (selectedUid && !stillSelected) {
+          clearSelectedUserState(
+            setSelectedUid,
+            setSelectedUser,
+            setDetailedUid,
+            setRecentTransactions,
+            setRecentReminders,
+            setUserMessages
+          );
+        } else {
+          setSelectedUser((current) => {
+            if (!current) return current;
+            return usersPayload.users.find((user) => user.uid === current.uid) ?? current;
+          });
+        }
       } catch (error) {
         if (cancelled) return;
         const message = error instanceof Error ? error.message : 'Falha ao carregar o painel.';
@@ -367,12 +407,21 @@ export function App() {
 
     async function loadUser(): Promise<void> {
       try {
-        const payload = await adminFetch<{
-          user: AdminUser;
-          recentTransactions: AdminTransactionItem[];
-          recentReminders: AdminReminderItem[];
-        }>(`/api/admin/users/${selectedUid}`, token);
+        const payload = await adminFetch<AdminUserDetailsResponse>(`/api/admin/users/${selectedUid}`, token);
         if (!cancelled) {
+          if (!payload.user) {
+            clearSelectedUserState(
+              setSelectedUid,
+              setSelectedUser,
+              setDetailedUid,
+              setRecentTransactions,
+              setRecentReminders,
+              setUserMessages,
+              setDashboardError
+            );
+            return;
+          }
+
           setSelectedUser(payload.user);
           setRecentTransactions(payload.recentTransactions);
           setRecentReminders(payload.recentReminders);
@@ -494,14 +543,26 @@ export function App() {
       setOverview(overviewPayload);
       setUsers(usersPayload.users);
       if (selectedUid) {
-        const details = await adminFetch<{
-          user: AdminUser;
-          recentTransactions: AdminTransactionItem[];
-          recentReminders: AdminReminderItem[];
-        }>(`/api/admin/users/${selectedUid}`, token);
-        setSelectedUser(details.user);
-        setRecentTransactions(details.recentTransactions);
-        setRecentReminders(details.recentReminders);
+        try {
+          const details = await adminFetch<AdminUserDetailsResponse>(`/api/admin/users/${selectedUid}`, token);
+          if (!details.user) {
+            clearSelectedUserState(
+              setSelectedUid,
+              setSelectedUser,
+              setDetailedUid,
+              setRecentTransactions,
+              setRecentReminders,
+              setUserMessages
+            );
+            return;
+          }
+
+          setSelectedUser(details.user);
+          setRecentTransactions(details.recentTransactions);
+          setRecentReminders(details.recentReminders);
+        } catch (error) {
+          throw error;
+        }
       }
     } catch (error) {
       setDashboardError(error instanceof Error ? error.message : 'Falha ao atualizar.');
