@@ -625,6 +625,7 @@ function mapReminder(row) {
         dueTime: row.due_time,
         dueAt: row.due_at,
         notifiedAt: row.notified_at,
+        notifyPhone: row.notify_phone,
         type: row.type,
         status: row.status,
         createdAt: row.created_at,

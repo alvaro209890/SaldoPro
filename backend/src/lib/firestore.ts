@@ -283,6 +283,7 @@ export interface UserReminder {
   dueTime?: string | null;
   dueAt?: string | null;
   notifiedAt?: string | null;
+  notifyPhone?: string | null;
   type?: 'payable' | 'receivable' | null;
   status: 'pending' | 'paid';
   createdAt: string;
@@ -834,6 +835,7 @@ function mapReminder(row: DbReminderRow): UserReminder {
     dueTime: row.due_time,
     dueAt: row.due_at,
     notifiedAt: row.notified_at,
+    notifyPhone: row.notify_phone,
     type: row.type,
     status: row.status,
     createdAt: row.created_at,

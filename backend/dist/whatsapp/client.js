@@ -906,6 +906,21 @@ class WhatsAppClient {
                     logger_1.logger.error('Failed to process undo action', undoError);
                 }
             }
+            try {
+                const reminderShortcutReply = await (0, assistant_1.handleReminderShortcut)(ownerUid, inboundText);
+                if (reminderShortcutReply) {
+                    await this.sendWithRetry(remoteJid, reminderShortcutReply, 'auto_reply', ownerUid);
+                    await this.appendConversationMessage(ownerUid, remotePhone, { role: 'user', content: inboundText.trim() });
+                    await this.appendConversationMessage(ownerUid, remotePhone, {
+                        role: 'assistant',
+                        content: reminderShortcutReply
+                    });
+                    return;
+                }
+            }
+            catch (shortcutError) {
+                logger_1.logger.error('Failed to process reminder shortcut', shortcutError);
+            }
             const stopTypingPresence = this.startTypingPresence(remoteJid);
             try {
                 // Wrap the entire AI pipeline in a global timeout to prevent infinite "typing..."

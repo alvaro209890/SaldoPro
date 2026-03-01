@@ -11,7 +11,7 @@ import { basename, join } from 'node:path';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import QRCode from 'qrcode';
 import qrcodeTerminal from 'qrcode-terminal';
-import { processWhatsAppAIMessage, undoLastAction } from '../ai/assistant';
+import { handleReminderShortcut, processWhatsAppAIMessage, undoLastAction } from '../ai/assistant';
 import type { GroqChatMessage } from '../ai/groq';
 import { env } from '../config/env';
 import {
@@ -998,6 +998,21 @@ export class WhatsAppClient {
         } catch (undoError) {
           logger.error('Failed to process undo action', undoError);
         }
+      }
+
+      try {
+        const reminderShortcutReply = await handleReminderShortcut(ownerUid, inboundText);
+        if (reminderShortcutReply) {
+          await this.sendWithRetry(remoteJid, reminderShortcutReply, 'auto_reply', ownerUid);
+          await this.appendConversationMessage(ownerUid, remotePhone, { role: 'user', content: inboundText.trim() });
+          await this.appendConversationMessage(ownerUid, remotePhone, {
+            role: 'assistant',
+            content: reminderShortcutReply
+          });
+          return;
+        }
+      } catch (shortcutError) {
+        logger.error('Failed to process reminder shortcut', shortcutError);
       }
 
       const stopTypingPresence = this.startTypingPresence(remoteJid);

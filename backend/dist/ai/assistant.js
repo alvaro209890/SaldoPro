@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.undoLastAction = undoLastAction;
+exports.handleReminderShortcut = handleReminderShortcut;
 exports.processWhatsAppAIMessage = processWhatsAppAIMessage;
 const env_1 = require("../config/env");
 const firestore_1 = require("../lib/firestore");
@@ -48,7 +49,7 @@ function trackUndoableAction(uid, action) {
 }
 /**
  * Undo the last action for a user. Returns a human-friendly message.
- * Supports quick undo for add/add_recurring/delete.
+ * Supports quick undo for transactions and reminders.
  */
 async function undoLastAction(uid) {
     const entry = lastActionByUid.get(uid);
@@ -81,6 +82,49 @@ async function undoLastAction(uid) {
             invalidateContextCache(uid);
             lastActionByUid.delete(uid);
             return '↩️ *Acao desfeita!*\n\nA transacao excluida foi restaurada com sucesso.';
+        }
+        if (entry.actionKind === 'added_reminder') {
+            await (0, firestore_1.deleteUserReminder)(uid, entry.resourceId);
+            invalidateContextCache(uid);
+            lastActionByUid.delete(uid);
+            return '↩️ *Acao desfeita!*\n\nO ultimo lembrete criado foi excluido com sucesso.';
+        }
+        if (entry.actionKind === 'updated_reminder' || entry.actionKind === 'completed_reminder') {
+            if (!entry.previousReminder) {
+                lastActionByUid.delete(uid);
+                return 'Nao consegui restaurar o estado anterior do lembrete.';
+            }
+            await (0, firestore_1.updateUserReminder)(uid, entry.resourceId, {
+                title: entry.previousReminder.title,
+                reminderKind: entry.previousReminder.reminderKind,
+                amount: entry.previousReminder.amount,
+                dueDate: entry.previousReminder.dueDate,
+                dueTime: entry.previousReminder.dueTime ?? null,
+                type: entry.previousReminder.type ?? null,
+                status: entry.previousReminder.status
+            });
+            invalidateContextCache(uid);
+            lastActionByUid.delete(uid);
+            return '↩️ *Acao desfeita!*\n\nO ultimo lembrete voltou ao estado anterior.';
+        }
+        if (entry.actionKind === 'deleted_reminder') {
+            if (!entry.previousReminder) {
+                lastActionByUid.delete(uid);
+                return 'Nao consegui restaurar o lembrete excluido porque os dados originais nao estavam disponiveis.';
+            }
+            await (0, firestore_1.addUserReminder)(uid, {
+                reminderKind: entry.previousReminder.reminderKind,
+                title: entry.previousReminder.title,
+                amount: entry.previousReminder.amount,
+                dueDate: entry.previousReminder.dueDate,
+                dueTime: entry.previousReminder.dueTime ?? null,
+                type: entry.previousReminder.type ?? null,
+                status: entry.previousReminder.status,
+                notifyPhone: entry.previousReminder.notifyPhone ?? null
+            });
+            invalidateContextCache(uid);
+            lastActionByUid.delete(uid);
+            return '↩️ *Acao desfeita!*\n\nO lembrete excluido foi restaurado com sucesso.';
         }
         lastActionByUid.delete(uid);
         return 'Desculpe, essa acao ainda nao pode ser desfeita automaticamente.';
@@ -134,7 +178,9 @@ function normalizeHumanText(text) {
         .toLowerCase();
 }
 function extractExplicitTime(normalized) {
-    const match = normalized.match(/\b(?:as|a)\s+(\d{1,2})(?::(\d{2}))?\s*h?\b/);
+    const match = normalized.match(/\b(?:as|a)\s+(\d{1,2})(?::(\d{2}))?\s*h?\b/) ??
+        normalized.match(/\b(\d{1,2}):(\d{2})\b/) ??
+        normalized.match(/\b(\d{1,2})\s*h\b/);
     if (!match)
         return null;
     const hour = Number(match[1]);
@@ -145,6 +191,10 @@ function extractExplicitTime(normalized) {
     return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 function extractPeriodTime(normalized) {
+    if (/\b(?:no|ao)\s+almoco\b/.test(normalized))
+        return '12:00';
+    if (/\bfim\s+da\s+tarde\b/.test(normalized))
+        return '18:00';
     if (/\b(?:a|de)\s+manha\b/.test(normalized))
         return '09:00';
     if (/\b(?:a|de)\s+tarde\b/.test(normalized))
@@ -187,16 +237,64 @@ function parseTodayTomorrowReminderSchedule(text) {
     const normalized = normalizeHumanText(text);
     if (!normalized)
         return null;
+    const isDayAfterTomorrow = /\bdepois\s+de\s+amanha\b/.test(normalized);
     const isTomorrow = /\bamanha\b/.test(normalized);
     const isToday = /\bhoje\b/.test(normalized);
-    if (!isToday && !isTomorrow)
+    if (!isToday && !isTomorrow && !isDayAfterTomorrow)
         return null;
     const baseDate = new Date();
-    if (isTomorrow) {
+    if (isDayAfterTomorrow) {
+        baseDate.setDate(baseDate.getDate() + 2);
+    }
+    else if (isTomorrow) {
         baseDate.setDate(baseDate.getDate() + 1);
     }
     baseDate.setHours(0, 0, 0, 0);
     return buildScheduleFromDate(baseDate, extractExplicitTime(normalized) ?? extractPeriodTime(normalized));
+}
+function lastDayOfMonth(date) {
+    return new Date(date.getFullYear(), date.getMonth() + 1, 0);
+}
+function parseEndOfMonthReminderSchedule(text) {
+    const normalized = normalizeHumanText(text);
+    if (!normalized)
+        return null;
+    if (!/\b(?:fim|final)\s+do\s+mes\b/.test(normalized))
+        return null;
+    const now = new Date();
+    let target = lastDayOfMonth(now);
+    const dueTime = extractExplicitTime(normalized) ?? extractPeriodTime(normalized);
+    if (formatYmd(target) === formatYmd(now)) {
+        if (!dueTime) {
+            target = lastDayOfMonth(new Date(now.getFullYear(), now.getMonth() + 1, 1));
+        }
+        else {
+            const [hour, minute] = dueTime.split(':').map(Number);
+            const nowMinutes = now.getHours() * 60 + now.getMinutes();
+            const targetMinutes = hour * 60 + minute;
+            if (targetMinutes <= nowMinutes) {
+                target = lastDayOfMonth(new Date(now.getFullYear(), now.getMonth() + 1, 1));
+            }
+        }
+    }
+    target.setHours(0, 0, 0, 0);
+    return buildScheduleFromDate(target, dueTime);
+}
+function parseDailyReminderSchedule(text) {
+    const normalized = normalizeHumanText(text);
+    if (!normalized)
+        return null;
+    if (!/\btodo\s+dia\b/.test(normalized))
+        return null;
+    const dueTime = extractExplicitTime(normalized) ?? extractPeriodTime(normalized) ?? '09:00';
+    const [hour, minute] = dueTime.split(':').map(Number);
+    const now = new Date();
+    const target = new Date(now);
+    target.setHours(hour, minute, 0, 0);
+    if (target.getTime() <= now.getTime()) {
+        target.setDate(target.getDate() + 1);
+    }
+    return buildScheduleFromDate(target, dueTime);
 }
 function parseWeekdayReminderSchedule(text) {
     const normalized = normalizeHumanText(text);
@@ -236,13 +334,20 @@ function parseWeekdayReminderSchedule(text) {
 function inferReminderScheduleFromText(text) {
     return (parseRelativeReminderSchedule(text) ??
         parseTodayTomorrowReminderSchedule(text) ??
+        parseEndOfMonthReminderSchedule(text) ??
+        parseDailyReminderSchedule(text) ??
         parseWeekdayReminderSchedule(text));
 }
 function extractFallbackReminderTitle(text) {
     const cleaned = text
         .replace(/\b(?:da\s*qui(?:\s+a)?|daqui(?:\s+a)?|em)\s+\d+\s*(?:min|mins|minuto|minutos|h|hr|hrs|hora|horas)\b/gi, ' ')
-        .replace(/\b(?:amanh[ãa]|hoje)\b(?:\s+(?:às|as|a)\s+\d{1,2}(?::\d{2})?\s*h?)?(?:\s+(?:de|a)\s+(?:manh[ãa]|tarde|noite))?/gi, ' ')
-        .replace(/\b(?:segunda(?:-feira)?|ter[cç]a(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|s[áa]bado|domingo)\b(?:\s+(?:às|as|a)\s+\d{1,2}(?::\d{2})?\s*h?)?(?:\s+(?:de|a)\s+(?:manh[ãa]|tarde|noite))?/gi, ' ')
+        .replace(/\bdepois\s+de\s+amanh[ãa]\b/gi, ' ')
+        .replace(/\b(?:amanh[ãa]|hoje)\b(?:\s+(?:(?:às|as|a)\s+)?\d{1,2}(?::\d{2})?\s*h?)?(?:\s+(?:de|a)\s+(?:manh[ãa]|tarde|noite))?/gi, ' ')
+        .replace(/\b(?:segunda(?:-feira)?|ter[cç]a(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|s[áa]bado|domingo)\b(?:\s+(?:(?:às|as|a)\s+)?\d{1,2}(?::\d{2})?\s*h?)?(?:\s+(?:de|a)\s+(?:manh[ãa]|tarde|noite))?/gi, ' ')
+        .replace(/\b(?:fim|final)\s+do\s+m[eê]s\b/gi, ' ')
+        .replace(/\btodo\s+dia\b(?:\s+(?:(?:às|as|a)\s+)?\d{1,2}(?::\d{2})?\s*h?)?/gi, ' ')
+        .replace(/\b(?:no|ao)\s+alm[oó]co\b/gi, ' ')
+        .replace(/\bfim\s+da\s+tarde\b/gi, ' ')
         .replace(/\b(?:me\s+)?(?:lembra(?:r)?|lembrete)(?:\s+de)?\b/gi, ' ')
         .replace(/[.,;!?]+/g, ' ')
         .replace(/\s+/g, ' ')
@@ -266,6 +371,89 @@ function buildFallbackScheduledReminderAction(text) {
         dueDate: schedule.dueDate,
         ...(schedule.dueTime ? { dueTime: schedule.dueTime } : {})
     };
+}
+function isReminderSnoozeIntent(text) {
+    const normalized = normalizeHumanText(text);
+    return /\b(adiar|adia|adie|soneca|snooze)\b/.test(normalized) || /\bme\s+lembra\s+disso\s+de\s+novo\b/.test(normalized);
+}
+function buildReminderUndoSnapshot(reminder) {
+    return {
+        reminderKind: reminder.reminderKind,
+        title: reminder.title,
+        amount: reminder.amount,
+        dueDate: reminder.dueDate,
+        dueTime: reminder.dueTime ?? null,
+        dueAt: reminder.dueAt ?? null,
+        notifiedAt: reminder.notifiedAt ?? null,
+        notifyPhone: reminder.notifyPhone ?? null,
+        type: reminder.type ?? null,
+        status: reminder.status
+    };
+}
+async function resolveReminderForShortcut(uid) {
+    const tracked = lastActionByUid.get(uid);
+    if (tracked &&
+        (tracked.actionKind === 'added_reminder' ||
+            tracked.actionKind === 'updated_reminder' ||
+            tracked.actionKind === 'completed_reminder')) {
+        const recentReminder = await (0, firestore_1.getUserReminderById)(uid, tracked.resourceId);
+        if (recentReminder)
+            return recentReminder;
+    }
+    const reminders = await (0, firestore_1.getUserReminders)(uid);
+    const pending = reminders.filter((reminder) => reminder.status === 'pending');
+    if (pending.length === 0)
+        return null;
+    pending.sort((a, b) => {
+        const aTime = Date.parse(`${a.dueDate}T${a.dueTime ?? '23:59'}:00`);
+        const bTime = Date.parse(`${b.dueDate}T${b.dueTime ?? '23:59'}:00`);
+        return aTime - bTime;
+    });
+    return pending[0] ?? null;
+}
+async function handleReminderShortcut(uid, text) {
+    if (!isReminderSnoozeIntent(text))
+        return null;
+    const schedule = inferReminderScheduleFromText(text);
+    if (!schedule) {
+        return 'Nao consegui identificar o novo horario. Tente algo como "adiar 10 min", "adiar para amanha 9h" ou "me lembra disso de novo em 1 hora".';
+    }
+    const reminder = await resolveReminderForShortcut(uid);
+    if (!reminder) {
+        return 'Nao encontrei um lembrete pendente para adiar agora.';
+    }
+    const previousReminder = buildReminderUndoSnapshot(reminder);
+    await (0, firestore_1.updateUserReminder)(uid, reminder.id, {
+        dueDate: schedule.dueDate,
+        dueTime: schedule.dueTime,
+        status: 'pending'
+    });
+    invalidateContextCache(uid);
+    trackUndoableAction(uid, {
+        actionKind: 'updated_reminder',
+        resourceId: reminder.id,
+        previousReminder
+    });
+    const updated = await (0, firestore_1.getUserReminderById)(uid, reminder.id);
+    const current = updated ?? {
+        ...reminder,
+        dueDate: schedule.dueDate,
+        dueTime: schedule.dueTime,
+        status: 'pending'
+    };
+    const scheduledLabel = formatReminderScheduleLabel(current.dueDate, current.dueTime ?? null);
+    const settings = await (0, firestore_1.getUserSettings)(uid);
+    return [
+        '⏰ *Lembrete adiado*',
+        '',
+        `*${current.title}*`,
+        `Agendado para: ${scheduledLabel}`,
+        current.reminderKind === 'general'
+            ? null
+            : `Valor: ${formatCurrency(current.amount ?? 0, settings.currency)}`,
+        '',
+        'Se quiser desfazer esse adiamento, e so escrever "desfazer".'
+    ].filter((line) => Boolean(line)).join('\n');
 }
 function formatCurrency(value, currency) {
     if (currency === 'BRL') {
@@ -863,6 +1051,10 @@ async function executeAction(uid, action, categories, options) {
             };
             const reminderId = await (0, firestore_1.addUserReminder)(uid, payload);
             invalidateContextCache(uid);
+            trackUndoableAction(uid, {
+                actionKind: 'added_reminder',
+                resourceId: reminderId
+            });
             return {
                 kind: 'added_reminder',
                 receipt: {
@@ -879,6 +1071,10 @@ async function executeAction(uid, action, categories, options) {
         }
         if (action.action === 'update_reminder') {
             if (!action.id || typeof action.id !== 'string') {
+                return { kind: 'none' };
+            }
+            const existing = await (0, firestore_1.getUserReminderById)(uid, action.id);
+            if (!existing) {
                 return { kind: 'none' };
             }
             const rawChanges = action.changes ?? {};
@@ -922,6 +1118,11 @@ async function executeAction(uid, action, categories, options) {
             }
             await (0, firestore_1.updateUserReminder)(uid, action.id, updates);
             invalidateContextCache(uid);
+            trackUndoableAction(uid, {
+                actionKind: 'updated_reminder',
+                resourceId: action.id,
+                previousReminder: buildReminderUndoSnapshot(existing)
+            });
             const updated = await (0, firestore_1.getUserReminderById)(uid, action.id);
             if (!updated) {
                 return { kind: 'none' };
@@ -944,8 +1145,17 @@ async function executeAction(uid, action, categories, options) {
             if (!action.id || typeof action.id !== 'string') {
                 return { kind: 'none' };
             }
+            const existing = await (0, firestore_1.getUserReminderById)(uid, action.id);
+            if (!existing) {
+                return { kind: 'none' };
+            }
             await (0, firestore_1.updateUserReminder)(uid, action.id, { status: 'paid' });
             invalidateContextCache(uid);
+            trackUndoableAction(uid, {
+                actionKind: 'completed_reminder',
+                resourceId: action.id,
+                previousReminder: buildReminderUndoSnapshot(existing)
+            });
             const updated = await (0, firestore_1.getUserReminderById)(uid, action.id);
             if (!updated) {
                 return { kind: 'none' };
@@ -974,6 +1184,11 @@ async function executeAction(uid, action, categories, options) {
             }
             await (0, firestore_1.deleteUserReminder)(uid, action.id);
             invalidateContextCache(uid);
+            trackUndoableAction(uid, {
+                actionKind: 'deleted_reminder',
+                resourceId: existing.id,
+                previousReminder: buildReminderUndoSnapshot(existing)
+            });
             return {
                 kind: 'deleted_reminder',
                 receipt: {
