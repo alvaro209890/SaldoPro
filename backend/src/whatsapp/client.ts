@@ -1767,7 +1767,20 @@ export class WhatsAppClient {
     }
 
     if (remoteJid.endsWith('@lid')) {
-      return this.lidToPhoneJid.get(remoteJid) ?? remoteJid;
+      // Try exact match first, then try base LID (without device suffix)
+      const exact = this.lidToPhoneJid.get(remoteJid);
+      if (exact) return exact;
+      const baseLid = remoteJid.replace(/:\d+@lid$/, '@lid');
+      if (baseLid !== remoteJid) {
+        const baseMatch = this.lidToPhoneJid.get(baseLid);
+        if (baseMatch) return baseMatch;
+      }
+      // Search for any key that shares the same base LID number
+      const lidNumber = remoteJid.split('@')[0].split(':')[0];
+      for (const [key, value] of this.lidToPhoneJid.entries()) {
+        if (key.startsWith(lidNumber)) return value;
+      }
+      return remoteJid;
     }
 
     return remoteJid;
@@ -1798,20 +1811,32 @@ export class WhatsAppClient {
     const normalizedPhoneJid = this.normalizePhoneJidCandidate(phoneJid);
     if (!normalizedPhoneJid) return;
 
-    const previous = this.lidToPhoneJid.get(lidJid);
-    this.lidToPhoneJid.set(lidJid, normalizedPhoneJid);
+    // Normalize LID: strip device suffix (e.g. "71756035416162:47@lid" → "71756035416162@lid")
+    // WhatsApp sends LID with device suffix in CB:message but without suffix in message.key.remoteJid
+    const baseLidJid = lidJid.replace(/:\d+@lid$/, '@lid');
+
+    // Store under BOTH the original key and the base key so lookups always succeed
+    const previous = this.lidToPhoneJid.get(baseLidJid);
+    this.lidToPhoneJid.set(baseLidJid, normalizedPhoneJid);
+    if (baseLidJid !== lidJid) {
+      this.lidToPhoneJid.set(lidJid, normalizedPhoneJid);
+    }
 
     if (previous !== normalizedPhoneJid) {
       logger.info('LID mapping updated', {
         slotId: this.slotId,
         source,
         lidJid,
+        baseLidJid,
         phoneJid: normalizedPhoneJid
       });
     }
 
     // Replay buffered messages that were waiting for this LID mapping
-    this.replayBufferedLidMessages(lidJid);
+    this.replayBufferedLidMessages(baseLidJid);
+    if (baseLidJid !== lidJid) {
+      this.replayBufferedLidMessages(lidJid);
+    }
   }
 
   private absorbContactLidMappings(
@@ -1984,11 +2009,35 @@ export class WhatsAppClient {
           logger.info('LID_RESOLVE_DELAYED_2: mapping resolved on second check', { slotId, lidJid });
           this.replayBufferedLidMessages(lidJid);
         } else {
-          logger.warn('LID_RESOLVE_FAILED: could not resolve LID after all strategies', {
-            slotId,
-            lidJid,
-            pendingCount: this.pendingLidMessages.get(lidJid)?.length ?? 0
-          });
+          // FALLBACK: Search for any existing mapping that shares the same base LID number.
+          // CB_MESSAGE_SENDER_PN stores with device suffix (e.g. "123:47@lid")
+          // but handleSingleIncomingMessage looks up base form ("123@lid").
+          const lidNumber = lidJid.split('@')[0].split(':')[0];
+          let fallbackPhone: string | undefined;
+          for (const [key, value] of this.lidToPhoneJid.entries()) {
+            if (key.startsWith(lidNumber)) {
+              fallbackPhone = value;
+              break;
+            }
+          }
+          if (fallbackPhone) {
+            logger.info('LID_RESOLVE_FALLBACK: found phone via prefix scan of stored mappings', {
+              slotId,
+              lidJid,
+              lidNumber,
+              resolvedPhone: fallbackPhone
+            });
+            // Store the mapping under the base LID so future lookups succeed
+            this.lidToPhoneJid.set(lidJid, fallbackPhone);
+            this.replayBufferedLidMessages(lidJid);
+          } else {
+            logger.warn('LID_RESOLVE_FAILED: could not resolve LID after all strategies', {
+              slotId,
+              lidJid,
+              pendingCount: this.pendingLidMessages.get(lidJid)?.length ?? 0,
+              knownMappings: this.lidToPhoneJid.size
+            });
+          }
         }
       }
     })();
