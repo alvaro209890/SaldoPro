@@ -228,7 +228,7 @@ function isQueryOnlyIntent(messages: GroqChatMessage[], context: UserFinancialCo
   if (!text) return false;
 
   // Action verbs → needs full prompt
-  if (/\b(gastei|paguei|comprei|recebi|ganhei|registr|lanca|adiciona|coloca|bota|paga|gasta|receb|todo mes|toda semana|mensal|semanal|anual|edita|altera|muda|exclui|delet|apaga|remove|lembrete|lembrar|lembra|vencimento)\b/.test(text)) {
+  if (/\b(gastei|paguei|comprei|recebi|ganhei|registr|lanca|adiciona|coloca|bota|paga|gasta|receb|todo mes|toda semana|mensal|semanal|anual|edita|altera|muda|exclui|delet|apaga|remove|lembrete|lembrar|lembra|lembre|vencimento)\b/.test(text)) {
     return false;
   }
 

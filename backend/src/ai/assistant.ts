@@ -1576,14 +1576,14 @@ export async function processWhatsAppAIMessage(
 
     // Default formatting branch (e.g. added)
     let formattedText = '';
-    if (actionResult.kind === 'added') formattedText = buildAddedTransactionMessage(actionResult.receipt, '', settings.currency);
-    else if (actionResult.kind === 'added_recurring') formattedText = buildAddedRecurringTransactionMessage(actionResult.receipt, '', settings.currency);
-    else if (actionResult.kind === 'added_reminder') formattedText = buildAddedReminderMessage(actionResult.receipt, '', settings.currency);
-    else if (actionResult.kind === 'updated_reminder') formattedText = buildUpdatedReminderMessage(actionResult.receipt, '', settings.currency);
-    else if (actionResult.kind === 'completed_reminder') formattedText = buildCompletedReminderMessage(actionResult.receipt, '');
-    else if (actionResult.kind === 'deleted_reminder') formattedText = buildDeletedReminderMessage(actionResult.receipt, '');
-    else if (actionResult.kind === 'updated') formattedText = buildUpdatedTransactionMessage(actionResult.receipt, '');
-    else if (actionResult.kind === 'deleted') formattedText = buildDeletedTransactionMessage(actionResult.receipt, '');
+    if (actionResult.kind === 'added') formattedText = buildAddedTransactionMessage(actionResult.receipt, ai.reply, settings.currency);
+    else if (actionResult.kind === 'added_recurring') formattedText = buildAddedRecurringTransactionMessage(actionResult.receipt, ai.reply, settings.currency);
+    else if (actionResult.kind === 'added_reminder') formattedText = buildAddedReminderMessage(actionResult.receipt, ai.reply, settings.currency);
+    else if (actionResult.kind === 'updated_reminder') formattedText = buildUpdatedReminderMessage(actionResult.receipt, ai.reply, settings.currency);
+    else if (actionResult.kind === 'completed_reminder') formattedText = buildCompletedReminderMessage(actionResult.receipt, ai.reply);
+    else if (actionResult.kind === 'deleted_reminder') formattedText = buildDeletedReminderMessage(actionResult.receipt, ai.reply);
+    else if (actionResult.kind === 'updated') formattedText = buildUpdatedTransactionMessage(actionResult.receipt, ai.reply);
+    else if (actionResult.kind === 'deleted') formattedText = buildDeletedTransactionMessage(actionResult.receipt, ai.reply);
 
     return {
       text: formattedText.slice(0, env.maxMessageLength),
@@ -1592,7 +1592,7 @@ export async function processWhatsAppAIMessage(
   }
 
   return {
-    text: buildMultiActionMessage(actionableResults, '', settings.currency).slice(0, env.maxMessageLength),
+    text: buildMultiActionMessage(actionableResults, ai.reply, settings.currency).slice(0, env.maxMessageLength),
     mediaUrl
   };
 }
