@@ -1090,8 +1090,9 @@ export class WhatsAppClient {
     imageDataUrl: string | null,
     audioDataUrl: string | null = null
   ): Promise<void> {
-    const hasAiInput = inboundText.trim().length > 0 || Boolean(imageDataUrl) || Boolean(audioDataUrl);
-    if (env.whatsappAiEnabled && hasAiInput) {
+    const hasInboundInput = inboundText.trim().length > 0 || Boolean(imageDataUrl) || Boolean(audioDataUrl);
+
+    if (hasInboundInput) {
       try {
         const handledByDocumentFlow = await this.handleDocumentRouting(
           ownerUid,
@@ -1102,6 +1103,13 @@ export class WhatsAppClient {
           audioDataUrl
         );
         if (handledByDocumentFlow) {
+          logger.info('MSG_DOCUMENT_FLOW_HANDLED', {
+            uid: ownerUid,
+            phone: remotePhone,
+            hasImage: Boolean(imageDataUrl),
+            hasAudio: Boolean(audioDataUrl),
+            textLength: inboundText.trim().length
+          });
           return;
         }
       } catch (documentFlowError) {
@@ -1113,7 +1121,9 @@ export class WhatsAppClient {
         await this.sendWithRetry(remoteJid, DOCUMENT_SAVE_ERROR_REPLY, 'auto_reply', ownerUid);
         return;
       }
+    }
 
+    if (env.whatsappAiEnabled && hasInboundInput) {
       if (isPanelLinkIntentMessage(inboundText)) {
         const panelLinkReply = buildPanelLinkReply();
         await this.sendWithRetry(remoteJid, panelLinkReply, 'auto_reply', ownerUid);

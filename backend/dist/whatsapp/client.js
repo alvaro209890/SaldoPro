@@ -958,11 +958,18 @@ class WhatsAppClient {
         await this.sendSmartReply(binding.uid, replyJid, remotePhone, inboundText, imageDataUrl, audioDataUrl);
     }
     async sendSmartReply(ownerUid, remoteJid, remotePhone, inboundText, imageDataUrl, audioDataUrl = null) {
-        const hasAiInput = inboundText.trim().length > 0 || Boolean(imageDataUrl) || Boolean(audioDataUrl);
-        if (env_1.env.whatsappAiEnabled && hasAiInput) {
+        const hasInboundInput = inboundText.trim().length > 0 || Boolean(imageDataUrl) || Boolean(audioDataUrl);
+        if (hasInboundInput) {
             try {
                 const handledByDocumentFlow = await this.handleDocumentRouting(ownerUid, remoteJid, remotePhone, inboundText, imageDataUrl, audioDataUrl);
                 if (handledByDocumentFlow) {
+                    logger_1.logger.info('MSG_DOCUMENT_FLOW_HANDLED', {
+                        uid: ownerUid,
+                        phone: remotePhone,
+                        hasImage: Boolean(imageDataUrl),
+                        hasAudio: Boolean(audioDataUrl),
+                        textLength: inboundText.trim().length
+                    });
                     return;
                 }
             }
@@ -975,6 +982,8 @@ class WhatsAppClient {
                 await this.sendWithRetry(remoteJid, DOCUMENT_SAVE_ERROR_REPLY, 'auto_reply', ownerUid);
                 return;
             }
+        }
+        if (env_1.env.whatsappAiEnabled && hasInboundInput) {
             if (isPanelLinkIntentMessage(inboundText)) {
                 const panelLinkReply = buildPanelLinkReply();
                 await this.sendWithRetry(remoteJid, panelLinkReply, 'auto_reply', ownerUid);
