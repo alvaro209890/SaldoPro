@@ -39,6 +39,7 @@ import {
   type PaymentMethod,
   type UserFinancialContext
 } from './groq';
+import { generateChartUrl, generateChartCaption, isValidChartType, inferChartTypeFromText, CHART_TYPE_LABELS } from './charts';
 
 const VALID_PAYMENT_METHODS: PaymentMethod[] = [
   'pix',
@@ -290,6 +291,7 @@ type ActionExecutionResult =
   | { kind: 'updated'; receipt: UpdatedTransactionReceipt }
   | { kind: 'deleted'; receipt: DeletedTransactionReceipt }
   | { kind: 'send_media'; url: string }
+  | { kind: 'generated_chart'; url: string; caption: string }
   | { kind: 'error'; message: string };
 
 function todayISO(): string {
@@ -1396,7 +1398,7 @@ function buildMultiActionMessage(
 }
 
 function isMutatingAiAction(action: AIAction): boolean {
-  return action.action !== 'none' && action.action !== 'send_media';
+  return action.action !== 'none' && action.action !== 'send_media' && action.action !== 'generate_chart';
 }
 
 function buildMutationFailureMessage(
@@ -1541,6 +1543,18 @@ export async function processWhatsAppAIMessage(
   const actionableResults = actionResults.filter((result) => result.kind !== 'none');
 
   let mediaUrl: string | undefined;
+  let chartCaption: string | undefined;
+
+  // Handle generated_chart results (chart image + descriptive caption)
+  const chartAction = actionableResults.find((r) => r.kind === 'generated_chart') as Extract<ActionExecutionResult, { kind: 'generated_chart' }> | undefined;
+  if (chartAction) {
+    mediaUrl = chartAction.url;
+    chartCaption = chartAction.caption;
+    const chartIdx = actionableResults.indexOf(chartAction);
+    if (chartIdx > -1) actionableResults.splice(chartIdx, 1);
+  }
+
+  // Handle plain send_media results (non-chart images)
   const sendMediaAction = actionableResults.find((r) => r.kind === 'send_media') as Extract<ActionExecutionResult, { kind: 'send_media' }> | undefined;
   if (sendMediaAction) {
     mediaUrl = sendMediaAction.url;
@@ -1557,7 +1571,7 @@ export async function processWhatsAppAIMessage(
       };
     }
 
-    return { text: `${ai.reply}`.slice(0, env.maxMessageLength), mediaUrl };
+    return { text: `${chartCaption || ai.reply}`.slice(0, env.maxMessageLength), mediaUrl };
   }
 
   if (actionableResults.length === 1) {
@@ -2026,6 +2040,28 @@ async function executeAction(
           deletedAt: new Date().toISOString()
         }
       };
+    }
+
+    if (action.action === 'generate_chart') {
+      const chartType = isValidChartType(action.chartType)
+        ? action.chartType
+        : inferChartTypeFromText(options.latestUserMessageText ?? '');
+
+      const cached = getCachedContext(uid);
+      const txData = cached?.recentTransactions ?? await getRecentTransactions(uid, 200);
+      const catData = cached?.categories ?? await getUserCategories(uid);
+      const settingsData = cached?.settings ?? await getUserSettings(uid);
+
+      const chartUrl = generateChartUrl(chartType, txData, catData, settingsData);
+      if (!chartUrl) {
+        return {
+          kind: 'error',
+          message: `Nao ha transacoes suficientes neste mes para gerar o grafico de ${CHART_TYPE_LABELS[chartType] ?? 'financas'}.`
+        };
+      }
+
+      const caption = generateChartCaption(chartType, txData, catData, settingsData);
+      return { kind: 'generated_chart', url: chartUrl, caption };
     }
 
     if (action.action === 'send_media') {

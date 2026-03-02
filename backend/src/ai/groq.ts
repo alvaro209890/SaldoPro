@@ -85,6 +85,11 @@ export interface AIActionSendMedia {
   url: string;
 }
 
+export interface AIActionGenerateChart {
+  action: 'generate_chart';
+  chartType: string;
+}
+
 export interface AIActionNone {
   action: 'none';
 }
@@ -99,6 +104,7 @@ export type AIAction =
   | AIActionCompleteReminder
   | AIActionDeleteReminder
   | AIActionSendMedia
+  | AIActionGenerateChart
   | AIActionNone;
 
 export interface GroqAssistantResult {
@@ -228,7 +234,7 @@ function isQueryOnlyIntent(messages: GroqChatMessage[], context: UserFinancialCo
   if (!text) return false;
 
   // Action verbs → needs full prompt
-  if (/\b(gastei|paguei|comprei|recebi|ganhei|registr|lanca|adiciona|coloca|bota|paga|gasta|receb|todo mes|toda semana|mensal|semanal|anual|edita|altera|muda|exclui|delet|apaga|remove|lembrete|lembrar|lembra|lembre|vencimento)\b/.test(text)) {
+  if (/\b(gastei|paguei|comprei|recebi|ganhei|registr|lanca|adiciona|coloca|bota|paga|gasta|receb|todo mes|toda semana|mensal|semanal|anual|edita|altera|muda|exclui|delet|apaga|remove|lembrete|lembrar|lembra|lembre|vencimento|grafico|gráfico|chart|pizza|torta|barra|evolucao|evolução|resumo)\b/.test(text)) {
     return false;
   }
 
@@ -468,6 +474,13 @@ COMPREENSAO DE LINGUAGEM NATURAL
   - Campos: title (descricao curta), dueDate (YYYY-MM-DD), dueTime opcional (HH:mm), reminderKind
   - Se reminderKind for payable/receivable, inclua amount e reminderType correspondente.
   - Se o usuario informar horario, inclua dueTime no formato HH:mm (24h). Ex.: "16:40" -> "dueTime":"16:40"
+- GRAFICOS: quando o usuario pedir grafico, chart, pizza de gastos, barras, evolucao do saldo, resumo mensal, resumo visual ou visualizacao dos dados, use "generate_chart":
+  - chartType "expense_pie": pizza/rosca de despesas por categoria do mes atual (padrao se nao especificar)
+  - chartType "income_expense_bar": barras comparando receitas vs despesas do mes atual. USE TAMBEM para "resumo mensal", "resumo do mes", "como estao minhas financas"
+  - chartType "balance_line": linha da evolucao do saldo diario do mes atual
+  - Exemplos: "me manda um grafico" (expense_pie), "quero ver receitas vs despesas" (income_expense_bar), "mostra a evolucao do meu saldo" (balance_line), "resumo mensal" (income_expense_bar), "como estou esse mes" (income_expense_bar)
+  - Se o usuario pedir "grafico" sem especificar tipo, use "expense_pie" como padrao.
+  - IMPORTANTE: o grafico sera enviado como IMAGEM no WhatsApp, acompanhado de uma legenda descritiva automatica. No "reply", escreva uma frase curta e natural como "Aqui esta o seu resumo" ou "Confira o grafico abaixo". NAO repita os dados numericos no reply pois eles ja estarao na legenda.
 - EDICAO DE LEMBRETES EXISTENTES:
   - Para editar texto/data/hora/valor/tipo/status: use "update_reminder" com "id" do lembrete.
   - Para marcar como concluido: use "complete_reminder" com "id".
@@ -506,6 +519,7 @@ REGRAS TECNICAS (OBRIGATORIO)
 10) Se faltar o VALOR (nao a categoria ou data), pergunte no "reply" e use action none. Se faltar categoria, escolha a mais adequada. Se faltar data, use hoje.
 11) NUNCA registre transacao quando o usuario usa frases descritivas/informativas ('minhas despesas sao', 'meu gasto mensal e', 'tenho de conta').
 12) Se o usuario citar MULTIPLAS acoes na mesma mensagem, adicione MULTIPLOS objetos em "actionObjects", na mesma ordem em que aparecem.
+13) Para gerar grafico visual: use "generate_chart" com "chartType". O grafico sera enviado como imagem no WhatsApp.
 
 FORMATOS DE ACTIONOBJECT
 - {"action":"none"}
@@ -518,6 +532,7 @@ FORMATOS DE ACTIONOBJECT
 - {"action":"delete_reminder","id":"reminder_id"}
 - {"action":"update_transaction","id":"transaction_id","changes":{"amount":20}}
 - {"action":"delete_transaction","id":"transaction_id"}
+- {"action":"generate_chart","chartType":"expense_pie|income_expense_bar|balance_line"}
 
 EXEMPLO DE RESPOSTA (formato exato):
 {"reply":"Lancamentos registrados!","actionObjects":[{"action":"add_transaction","type":"expense","amount":50,"description":"Mercado","categoryId":"alimentacao","date":"${today}","paymentMethod":"pix"},{"action":"add_transaction","type":"expense","amount":15,"description":"Uber","categoryId":"transporte","date":"${today}","paymentMethod":"pix"}]}
@@ -741,6 +756,11 @@ function validateAction(raw: unknown): AIAction {
     const url = typeof obj.url === 'string' ? obj.url.trim() : '';
     if (!url) return { action: 'none' };
     return { action: 'send_media', url };
+  }
+
+  if (action === 'generate_chart') {
+    const chartType = typeof obj.chartType === 'string' ? obj.chartType.trim() : 'expense_pie';
+    return { action: 'generate_chart', chartType };
   }
 
   return { action: 'none' };
