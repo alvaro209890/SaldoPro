@@ -11,10 +11,12 @@ function formatCurrency(value, currency) {
 }
 function buildFinancialSummary(transactions, settings, categories) {
     if (transactions.length === 0)
-        return 'O usuario ainda nao possui transacoes registradas.';
+        return 'O usuario ainda nao possui transacoes registradas neste mes.';
     const now = new Date();
     const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     const monthTx = transactions.filter((t) => t.monthKey === currentMonth);
+    if (monthTx.length === 0)
+        return 'O usuario nao possui transacoes registradas no mes atual.';
     const totalIncome = monthTx.filter((t) => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
     const totalExpense = monthTx.filter((t) => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
     const balance = totalIncome - totalExpense;
@@ -31,23 +33,35 @@ function buildFinancialSummary(transactions, settings, categories) {
         }
     }
     const lines = [
-        `Mes atual (${currentMonth}):`,
-        `  Receitas Totais: ${formatCurrency(totalIncome, settings.currency)}`,
-        ...Array.from(incomeByCategory.entries())
-            .sort((a, b) => b[1] - a[1])
-            .map(([cat, amt]) => `    - ${cat}: ${formatCurrency(amt, settings.currency)}`),
-        `  Despesas Totais: ${formatCurrency(totalExpense, settings.currency)}`,
-        ...Array.from(expenseByCategory.entries())
-            .sort((a, b) => b[1] - a[1])
-            .map(([cat, amt]) => `    - ${cat}: ${formatCurrency(amt, settings.currency)}`),
-        `  Saldo: ${formatCurrency(balance, settings.currency)}`
+        `📊 *Resumo Mensal de Gastos — ${currentMonth}*`,
+        '',
+        `📤 *Despesas Totais:* ${formatCurrency(totalExpense, settings.currency)}`
     ];
+    const sortedExpenses = Array.from(expenseByCategory.entries()).sort((a, b) => b[1] - a[1]);
+    if (sortedExpenses.length > 0) {
+        sortedExpenses.forEach(([cat, amt]) => {
+            lines.push(`  • ${cat}: ${formatCurrency(amt, settings.currency)}`);
+        });
+    }
+    lines.push('', `📥 *Receitas Totais:* ${formatCurrency(totalIncome, settings.currency)}`);
+    const sortedIncomes = Array.from(incomeByCategory.entries()).sort((a, b) => b[1] - a[1]);
+    if (sortedIncomes.length > 0) {
+        sortedIncomes.forEach(([cat, amt]) => {
+            lines.push(`  • ${cat}: ${formatCurrency(amt, settings.currency)}`);
+        });
+    }
+    lines.push('', `💰 *Saldo Atual:* ${formatCurrency(balance, settings.currency)}`);
     if (settings.budget > 0) {
         const budgetUsed = totalExpense;
         const budgetRemaining = settings.budget - budgetUsed;
         const budgetPct = ((budgetUsed / settings.budget) * 100).toFixed(1);
-        lines.push(`  Orcamento mensal: ${formatCurrency(settings.budget, settings.currency)}`);
-        lines.push(`  Uso do orcamento: ${budgetPct}% (${budgetRemaining >= 0 ? `restam ${formatCurrency(budgetRemaining, settings.currency)}` : `excedido em ${formatCurrency(Math.abs(budgetRemaining), settings.currency)}`})`);
+        lines.push('', `🎯 *Orçamento:* ${formatCurrency(settings.budget, settings.currency)} (${budgetPct}% usado)`);
+        if (budgetRemaining >= 0) {
+            lines.push(`✅ Restam ${formatCurrency(budgetRemaining, settings.currency)} livre neste mês.`);
+        }
+        else {
+            lines.push(`⚠️ Atenção: Orçamento estourado em ${formatCurrency(Math.abs(budgetRemaining), settings.currency)}!`);
+        }
     }
     return lines.join('\n');
 }
@@ -87,7 +101,7 @@ function isQueryOnlyIntent(messages, context) {
     if (!text)
         return false;
     // Action verbs → needs full prompt
-    if (/\b(gastei|paguei|comprei|recebi|ganhei|registr|lanca|adiciona|coloca|bota|paga|gasta|receb|todo mes|toda semana|mensal|semanal|anual|edita|altera|muda|exclui|delet|apaga|remove|lembrete|lembrar|lembra|vencimento)\b/.test(text)) {
+    if (/\b(gastei|paguei|comprei|recebi|ganhei|registr|lanca|adiciona|coloca|bota|paga|gasta|receb|todo mes|toda semana|mensal|semanal|anual|edita|altera|muda|exclui|delet|apaga|remove|lembrete|lembrar|lembra|lembre|vencimento)\b/.test(text)) {
         return false;
     }
     // Explicit query patterns → compact prompt
@@ -194,10 +208,7 @@ ${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.bu
             .join('\n');
         const txList = recentTransactions
             .slice(0, PROMPT_TX_LIMIT)
-            .map((t) => {
-            const receiptInfo = t.receiptUrl ? `, Comprovante: ${t.receiptUrl}` : '';
-            return `- ID: "${t.id}", Data: ${t.date}, Desc: "${t.description}", Valor: ${t.amount}, Tipo: ${t.type}, CatID: ${t.category}${receiptInfo}`;
-        })
+            .map((t) => `- ID: "${t.id}", Data: ${t.date}, Desc: "${t.description}", Valor: ${t.amount}, Tipo: ${t.type}, CatID: ${t.category}`)
             .join('\n');
         const txNote = recentTransactions.length > PROMPT_TX_LIMIT
             ? `\n(mostrando ${PROMPT_TX_LIMIT} de ${recentTransactions.length} transacoes recentes)`
@@ -207,8 +218,7 @@ ${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.bu
             .map((r) => {
             const dueLabel = r.dueTime ? `${r.dueDate} ${r.dueTime}` : r.dueDate;
             const amountPart = r.amount != null ? `, Valor: ${r.amount}` : '';
-            const receiptInfo = r.receiptUrl ? `, Comprovante: ${r.receiptUrl}` : '';
-            return `- ID: "${r.id}", Titulo: "${r.title}", Tipo: ${r.reminderKind}, Status: ${r.status}, Vencimento: ${dueLabel}${amountPart}${receiptInfo}`;
+            return `- ID: "${r.id}", Titulo: "${r.title}", Tipo: ${r.reminderKind}, Status: ${r.status}, Vencimento: ${dueLabel}${amountPart}`;
         })
             .join('\n');
         const reminderNote = recentReminders.length > PROMPT_TX_LIMIT
@@ -259,9 +269,9 @@ ESTILO DE RESPOSTA
 
 COMPREENSAO DE LINGUAGEM NATURAL
 - O usuario pode escrever de forma informal, com erros de digitacao ou abreviacoes. Interprete com boa vontade.
-- SE A MENSAGEM TIVER IMAGEM/COMPROVANTE: analise a imagem e extraia valor, data, forma de pagamento e descricao.
+- SE A MENSAGEM TIVER IMAGEM: analise a imagem e extraia valor, data, forma de pagamento e descricao.
 - NUNCA diga "nao consigo ver/visualizar imagem" ou assuma que e um modelo de texto apenas. Você tem visão habilitada.
-- Se houver valor identificado no comprovante, registre automaticamente a transacao (add_transaction), mesmo sem categoria explicita.
+- Se houver valor identificado na imagem, registre automaticamente a transacao (add_transaction), mesmo sem categoria explicita.
 - VERBOS DE ACAO = REGISTRAR AUTOMATICAMENTE (use add_transaction, NAO pergunte se quer registrar):
   - "gastei 50 no mercado" = registrar despesa de R$50 em supermercado
   - "recebi 1500" = registrar receita de R$1500
@@ -309,7 +319,8 @@ QUANDO RESUMIR CAPACIDADES, PRIORIZE ESTES ITENS
 - Registrar despesas e receitas por texto.
 - Criar transacoes recorrentes (mensal, semanal, anual) para gastos fixos.
 - Criar lembretes de contas a pagar e a receber com vencimento.
-- Ler comprovante/recibo em imagem e sugerir ou registrar lancamento.
+- Ler imagem e sugerir ou registrar lancamento quando houver contexto financeiro.
+- Guardar e reenviar imagens pelo WhatsApp quando o usuario pedir explicitamente para salvar um arquivo.
 - Mostrar resumo do mes (receitas, despesas e saldo).
 - Ajudar no controle de orcamento e alertar excesso de gastos.
 - Editar e excluir lancamentos.
@@ -335,7 +346,7 @@ REGRAS TECNICAS (OBRIGATORIO)
 
 FORMATOS DE ACTIONOBJECT
 - {"action":"none"}
-- {"action":"add_transaction","type":"expense|income","amount":15.5,"description":"Lanche","categoryId":"id","date":"YYYY-MM-DD",          "receiptUrl": "string | null (se houver foto do comprovante, esta sera a URL)",}
+- {"action":"add_transaction","type":"expense|income","amount":15.5,"description":"Lanche","categoryId":"id","date":"YYYY-MM-DD"}
 - {"action":"add_recurring_transaction","type":"expense|income","amount":500,"description":"Aluguel","categoryId":"id","date":"YYYY-MM-DD","paymentMethod":"pix","frequency":"weekly|monthly|yearly","endDate":null}
 - {"action":"add_reminder","title":"Beber agua","reminderKind":"general","dueDate":"YYYY-MM-DD","dueTime":"HH:mm|null"}
 - {"action":"add_reminder","title":"Pagar aluguel","reminderKind":"payable","amount":1200,"dueDate":"YYYY-MM-DD","dueTime":"HH:mm|null","reminderType":"payable"}
@@ -671,14 +682,14 @@ function extractDescriptionFromText(text) {
         if (value.length > 0)
             return value;
     }
-    return 'Lancamento via comprovante';
+    return 'Lancamento via imagem';
 }
 function stripVisionContradictions(reply) {
     const normalized = normalizeTextForMatch(reply);
     if (normalized.includes('nao consigo visualizar imagens') ||
         normalized.includes('nao consigo ver imagens') ||
         normalized.includes('nao consigo analisar imagem')) {
-        return 'Comprovante analisado. Extrai os dados e vou registrar para voce.';
+        return 'Imagem analisada. Extrai os dados e vou registrar para voce.';
     }
     return reply;
 }
@@ -779,7 +790,7 @@ function buildVisionFallbackResult(content) {
     const description = extractDescriptionFromText(content);
     if (amount && amount > 0) {
         return {
-            reply: 'Comprovante analisado. Vou registrar a transacao agora.',
+            reply: 'Imagem analisada. Vou registrar a transacao agora.',
             actionObjects: [{
                     action: 'add_transaction',
                     type,

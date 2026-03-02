@@ -36,6 +36,11 @@ export function isImageMessage(message: proto.IWebMessageInfo): boolean {
   return Boolean(payload?.imageMessage);
 }
 
+export function isDocumentMessage(message: proto.IWebMessageInfo): boolean {
+  const payload = getMessageContent(message);
+  return Boolean(payload?.documentMessage);
+}
+
 export function getImageMimeType(message: proto.IWebMessageInfo): string | null {
   const payload = getMessageContent(message);
   const mimeType = payload?.imageMessage?.mimetype;

@@ -4,9 +4,8 @@ import { useCategories } from '@/hooks/useCategories';
 import { useChats } from '@/hooks/useChats';
 import { useChatSessions } from '@/hooks/useChatSessions';
 import { chatWithAI, type ChatMessage } from '@/services/ai';
-import { uploadImageToCloudinary } from '@/services/cloudinary';
 import { Button } from '@/components/ui/Button';
-import { Sparkles, Send, Bot, ImagePlus, X, User, MessageSquarePlus, MessageSquare, Trash2, Menu } from 'lucide-react';
+import { Sparkles, Send, Bot, X, User, MessageSquarePlus, MessageSquare, Trash2, Menu } from 'lucide-react';
 import { toast } from 'sonner';
 import { getCurrentMonthKey } from '@/utils/date';
 import ReactMarkdown from 'react-markdown';
@@ -105,27 +104,19 @@ export function AIAssistant() {
         setIsProcessing(true);
 
         try {
-            let uploadedImageUrl: string | undefined = undefined;
-
             // Update session title if it's the very first message
             if (chatHistory.length === 0 && userText) {
                 const newTitle = userText.length > 25 ? userText.substring(0, 25) + '...' : userText;
                 await editSession(activeSessionId, newTitle);
             }
 
-            // 1. Upload image to Cloudinary if it exists
-            if (base64Image) {
-                toast.info('Enviando o comprovante...', { id: 'uploading' });
-                uploadedImageUrl = await uploadImageToCloudinary(base64Image);
-                toast.success('Comprovante enviado!', { id: 'uploading' });
-            }
+            const persistedUserContent = userText || (base64Image ? '[Imagem enviada para analise]' : '');
 
-            // 2. Save user message to Firebase
+            // 1. Save user message to the backend history without persisting the image file
             await saveChatMessage({
                 sessionId: activeSessionId,
                 role: 'user',
-                content: userText,
-                ...(uploadedImageUrl ? { imageUrl: uploadedImageUrl } : {})
+                content: persistedUserContent
             });
 
             // 3. Prepare full dialog history for the prompt
@@ -137,8 +128,8 @@ export function AIAssistant() {
 
             mappedHistory.push({
                 role: 'user',
-                content: userText,
-                imageBase64: uploadedImageUrl
+                content: persistedUserContent,
+                imageBase64: base64Image ?? undefined
             });
 
             // Keep history limited to last 10 interactions mapped to limit payload size
@@ -196,7 +187,7 @@ export function AIAssistant() {
                     : `${deletedCount} transacoes excluidas pela IA!`);
             }
 
-            // 4. Save assistant reply to Firebase
+            // 3. Save assistant reply to the backend history
             await saveChatMessage({
                 sessionId: activeSessionId,
                 role: 'assistant',
@@ -208,7 +199,7 @@ export function AIAssistant() {
             await saveChatMessage({
                 sessionId: activeSessionId,
                 role: 'assistant',
-                content: 'Ops, tive um problema de conexão. Possíveis causas: limite excedido na Groq, falha no upload do Cloudinary ou erro de rede. Tente novamente!'
+                content: 'Ops, tive um problema de conexão. Possíveis causas: limite excedido na Groq ou erro de rede. Tente novamente!'
             });
         } finally {
             setIsProcessing(false);
@@ -408,9 +399,9 @@ export function AIAssistant() {
                                     <div className="px-2 py-2 flex items-end">
                                         <button
                                             onClick={handleSend}
-                                            disabled={!input.trim() || isProcessing}
+                                            disabled={(!input.trim() && !imagePreview) || isProcessing}
                                             className={`h-9 w-9 flex items-center justify-center rounded-lg transition-all
-                                                ${input.trim() && !isProcessing
+                                                ${(input.trim() || imagePreview) && !isProcessing
                                                     ? 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-sm'
                                                     : 'bg-surface-800 text-gray-500 cursor-not-allowed'}`}
                                         >

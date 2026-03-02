@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.extractRawType = extractRawType;
 exports.extractMessageText = extractMessageText;
 exports.isImageMessage = isImageMessage;
+exports.isDocumentMessage = isDocumentMessage;
 exports.getImageMimeType = getImageMimeType;
 exports.isAudioMessage = isAudioMessage;
 exports.getAudioMimeType = getAudioMimeType;
@@ -50,6 +51,10 @@ function extractMessageText(message) {
 function isImageMessage(message) {
     const payload = getMessageContent(message);
     return Boolean(payload?.imageMessage);
+}
+function isDocumentMessage(message) {
+    const payload = getMessageContent(message);
+    return Boolean(payload?.documentMessage);
 }
 function getImageMimeType(message) {
     const payload = getMessageContent(message);

@@ -27,7 +27,6 @@ import {
   type UserTransaction
 } from '../lib/firestore';
 import { getBrasiliaDate, getBrasiliaISOString } from '../lib/date-utils';
-import { uploadReceipt } from '../lib/storage';
 import { logger } from '../lib/logger';
 import {
   queryGroqAssistant,
@@ -50,6 +49,8 @@ const VALID_PAYMENT_METHODS: PaymentMethod[] = [
 ];
 const DISPLAY_TIMEZONE = 'America/Sao_Paulo';
 const MAX_ACTIONS_PER_MESSAGE = 10;
+const IMAGE_DOCUMENT_SAVE_FALLBACK =
+  'Nao consegui lancar essa imagem como transacao. Se quiser guardar, envie novamente com "guardar", "salvar" ou "arquivar" junto com um nome.';
 
 // ---------------------------------------------------------------------------
 // Financial context cache — avoids repeated Firestore reads for active users.
@@ -1453,6 +1454,7 @@ export interface ProcessWhatsAppAIOptions {
   sourcePhone?: string;
   latestUserMessageText?: string;
   latestImageDataUrl?: string; // Passed from whatsapp client
+  imageOnlyWithoutDocumentIntent?: boolean;
 }
 
 export interface ProcessedWhatsAppMessageResult {
@@ -1480,6 +1482,7 @@ export async function processWhatsAppAIMessage(
     .filter((message) => message.content.trim() || message.imageDataUrl || message.audioDataUrl);
   const latestUserMessageText =
     [...sanitizedMessages].reverse().find((message) => message.role === 'user')?.content ?? '';
+  const rawLatestUserMessageText = (options.latestUserMessageText ?? '').trim();
 
   if (sanitizedMessages.length === 0) {
     return { text: 'Nao consegui interpretar a mensagem recebida.' };
@@ -1556,6 +1559,12 @@ export async function processWhatsAppAIMessage(
       return {
         text: buildMutationFailureMessage(ai.actionObjects).slice(0, env.maxMessageLength),
         mediaUrl
+      };
+    }
+
+    if (options.imageOnlyWithoutDocumentIntent && !rawLatestUserMessageText && !mediaUrl) {
+      return {
+        text: IMAGE_DOCUMENT_SAVE_FALLBACK.slice(0, env.maxMessageLength)
       };
     }
 
@@ -1646,23 +1655,13 @@ async function executeAction(
         return { kind: 'none' };
       }
 
-      let receiptUrl: string | undefined;
-      if (options.latestImageDataUrl) {
-        // Parse the mime type from the data url
-        const mimeMatch = options.latestImageDataUrl.match(/^data:([^;]+);/);
-        const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
-        const url = await uploadReceipt(uid, options.latestImageDataUrl, mimeType);
-        if (url) receiptUrl = url;
-      }
-
       const payload: CreateTransactionInput = {
         type: action.type,
         amount: Number(action.amount),
         description: (action.description || 'Lancamento via WhatsApp').toString().slice(0, 120),
         category,
         date: normalizeDate(action.date),
-        paymentMethod: normalizePaymentMethod(action.paymentMethod),
-        receiptUrl
+        paymentMethod: normalizePaymentMethod(action.paymentMethod)
       };
 
       const transactionId = await addUserTransaction(uid, payload);
@@ -1825,14 +1824,6 @@ async function executeAction(
       const explicitDueDate = parseYmd(action.dueDate);
       const explicitDueTime = normalizeDueTime(action.dueTime);
 
-      let receiptUrl: string | undefined;
-      if (options.latestImageDataUrl) {
-        const mimeMatch = options.latestImageDataUrl.match(/^data:([^;]+);/);
-        const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
-        const url = await uploadReceipt(uid, options.latestImageDataUrl, mimeType);
-        if (url) receiptUrl = url;
-      }
-
       const payload: CreateReminderInput = {
         reminderKind,
         title: (action.title || 'Lembrete via WhatsApp').toString().slice(0, 120),
@@ -1841,8 +1832,7 @@ async function executeAction(
         dueTime: explicitDueTime ?? inferredSchedule?.dueTime ?? null,
         type: isFinancial ? reminderKind : null,
         status: 'pending',
-        notifyPhone: options.sourcePhone ?? null,
-        receiptUrl
+        notifyPhone: options.sourcePhone ?? null
       };
 
       const now = getBrasiliaDate();
@@ -1920,18 +1910,6 @@ async function executeAction(
       }
       if (rawChanges.status === 'pending' || rawChanges.status === 'paid') {
         updates.status = rawChanges.status;
-      }
-
-      let receiptUrl: string | undefined;
-      if (options.latestImageDataUrl) {
-        const mimeMatch = options.latestImageDataUrl.match(/^data:([^;]+);/);
-        const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
-        const url = await uploadReceipt(uid, options.latestImageDataUrl, mimeType);
-        if (url) receiptUrl = url;
-      }
-
-      if (receiptUrl) {
-        updates.receiptUrl = receiptUrl;
       }
 
       if (Object.keys(updates).length === 0) {

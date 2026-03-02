@@ -93,7 +93,6 @@ interface DbTransactionRow {
   category: string;
   description: string;
   payment_method: 'pix' | 'credit' | 'debit' | 'cash' | 'transfer' | 'boleto';
-  receipt_url?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -126,7 +125,6 @@ interface DbReminderRow {
   reminder_kind: 'general' | 'payable' | 'receivable';
   type: 'payable' | 'receivable' | null;
   status: 'pending' | 'paid';
-  receipt_url?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -144,6 +142,36 @@ interface DbChatMessageRow {
   role: 'user' | 'assistant' | 'system';
   content: string;
   image_url: string | null;
+  created_at: string;
+}
+
+interface DbUserDocumentRow {
+  id: string;
+  uid: string;
+  source: string;
+  title: string;
+  description: string | null;
+  normalized_title: string;
+  normalized_description: string | null;
+  search_tokens: string[] | null;
+  storage_path: string;
+  mime_type: string;
+  size_bytes: number;
+  status: 'ready' | 'deleted';
+  created_at: string;
+  updated_at: string;
+  last_accessed_at: string | null;
+}
+
+interface DbPendingDocumentRow {
+  id: string;
+  uid: string;
+  source_phone: string;
+  storage_path: string;
+  mime_type: string;
+  size_bytes: number;
+  pending_reason: string;
+  expires_at: string;
   created_at: string;
 }
 
@@ -202,7 +230,6 @@ export interface UserTransaction {
   category: string;
   description: string;
   paymentMethod: 'pix' | 'credit' | 'debit' | 'cash' | 'transfer' | 'boleto';
-  receiptUrl?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -226,7 +253,6 @@ export interface CreateTransactionInput {
   category: string;
   description: string;
   paymentMethod: 'pix' | 'credit' | 'debit' | 'cash' | 'transfer' | 'boleto';
-  receiptUrl?: string | null;
 }
 
 export interface CreateReminderInput {
@@ -238,7 +264,6 @@ export interface CreateReminderInput {
   type?: 'payable' | 'receivable' | null;
   status?: 'pending' | 'paid';
   notifyPhone?: string | null;
-  receiptUrl?: string | null;
 }
 
 export interface UserSettingsBackend {
@@ -317,9 +342,61 @@ export interface UserReminder {
   notifyPhone?: string | null;
   type?: 'payable' | 'receivable' | null;
   status: 'pending' | 'paid';
-  receiptUrl?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface UserDocument {
+  id: string;
+  uid: string;
+  source: string;
+  title: string;
+  description?: string | null;
+  normalizedTitle: string;
+  normalizedDescription?: string | null;
+  searchTokens: string[];
+  storagePath: string;
+  mimeType: string;
+  sizeBytes: number;
+  status: 'ready' | 'deleted';
+  createdAt: string;
+  updatedAt: string;
+  lastAccessedAt?: string | null;
+}
+
+export interface PendingWhatsAppDocumentDraft {
+  id: string;
+  uid: string;
+  sourcePhone: string;
+  storagePath: string;
+  mimeType: string;
+  sizeBytes: number;
+  pendingReason: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
+export interface CreateUserDocumentInput {
+  id?: string;
+  source?: string;
+  title: string;
+  description?: string | null;
+  normalizedTitle: string;
+  normalizedDescription?: string | null;
+  searchTokens?: string[];
+  storagePath: string;
+  mimeType: string;
+  sizeBytes: number;
+  status?: 'ready' | 'deleted';
+}
+
+export interface CreatePendingWhatsAppDocumentDraftInput {
+  id: string;
+  storagePath: string;
+  mimeType: string;
+  sizeBytes: number;
+  expiresAt: string;
+  pendingReason?: string;
 }
 
 function normalizeStoredPhoneList(value: unknown): string[] {
@@ -853,7 +930,6 @@ function mapTransaction(row: DbTransactionRow): UserTransaction {
     category: row.category,
     description: row.description,
     paymentMethod: row.payment_method,
-    receiptUrl: row.receipt_url ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -1004,7 +1080,6 @@ function mapReminder(row: DbReminderRow): UserReminder {
     notifyPhone: row.notify_phone,
     type: row.type,
     status: row.status,
-    receiptUrl: row.receipt_url ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -1159,7 +1234,6 @@ export interface DueWhatsAppReminder {
   dueTime: string;
   type: 'payable' | 'receivable' | null;
   notifyPhone: string;
-  receiptUrl?: string | null;
 }
 
 interface DbDueWhatsAppReminderRow {
@@ -1172,7 +1246,6 @@ interface DbDueWhatsAppReminderRow {
   due_time: string | null;
   type: 'payable' | 'receivable' | null;
   notify_phone: string | null;
-  receipt_url?: string | null;
 }
 
 export async function getDueWhatsAppReminders(
@@ -1207,8 +1280,7 @@ export async function getDueWhatsAppReminders(
         dueDate: row.due_date,
         dueTime,
         type: row.type,
-        notifyPhone,
-        receiptUrl: null
+        notifyPhone
       } as DueWhatsAppReminder;
     })
     .filter((entry): entry is DueWhatsAppReminder => Boolean(entry));
@@ -2083,4 +2155,156 @@ export async function addUserChatMessage(
 
   if (!data?.id) throw new Error('addUserChatMessage: response sem id');
   return data.id;
+}
+
+function mapUserDocument(row: DbUserDocumentRow): UserDocument {
+  return {
+    id: row.id,
+    uid: row.uid,
+    source: row.source,
+    title: row.title,
+    description: row.description,
+    normalizedTitle: row.normalized_title,
+    normalizedDescription: row.normalized_description,
+    searchTokens: Array.isArray(row.search_tokens) ? row.search_tokens.filter((token): token is string => typeof token === 'string') : [],
+    storagePath: row.storage_path,
+    mimeType: row.mime_type,
+    sizeBytes: row.size_bytes,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastAccessedAt: row.last_accessed_at
+  };
+}
+
+function mapPendingDocument(row: DbPendingDocumentRow): PendingWhatsAppDocumentDraft {
+  return {
+    id: row.id,
+    uid: row.uid,
+    sourcePhone: row.source_phone,
+    storagePath: row.storage_path,
+    mimeType: row.mime_type,
+    sizeBytes: row.size_bytes,
+    pendingReason: row.pending_reason,
+    expiresAt: row.expires_at,
+    createdAt: row.created_at
+  };
+}
+
+export async function createPendingWhatsAppDocumentDraft(
+  uid: string,
+  sourcePhone: string,
+  input: CreatePendingWhatsAppDocumentDraftInput
+): Promise<string> {
+  const now = new Date().toISOString();
+  const normalizedPhone = normalizePhoneNumber(sourcePhone);
+  const { data, error } = await db
+    .from('app_whatsapp_pending_documents')
+    .insert({
+      id: input.id,
+      uid,
+      source_phone: normalizedPhone,
+      storage_path: input.storagePath,
+      mime_type: input.mimeType,
+      size_bytes: input.sizeBytes,
+      pending_reason: input.pendingReason ?? 'missing_title',
+      expires_at: input.expiresAt,
+      created_at: now
+    })
+    .select('id')
+    .single<{ id: string }>();
+  assertNoError(error, 'createPendingWhatsAppDocumentDraft');
+  if (!data?.id) throw new Error('createPendingWhatsAppDocumentDraft: response sem id');
+  return data.id;
+}
+
+export async function getActivePendingWhatsAppDocumentDraft(
+  uid: string,
+  sourcePhone: string
+): Promise<PendingWhatsAppDocumentDraft | null> {
+  const normalizedPhone = normalizePhoneNumber(sourcePhone);
+  const { data, error } = await db
+    .from('app_whatsapp_pending_documents')
+    .select('id, uid, source_phone, storage_path, mime_type, size_bytes, pending_reason, expires_at, created_at')
+    .eq('uid', uid)
+    .eq('source_phone', normalizedPhone)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle<DbPendingDocumentRow>();
+  assertNoError(error, 'getActivePendingWhatsAppDocumentDraft');
+  return data ? mapPendingDocument(data) : null;
+}
+
+export async function deletePendingWhatsAppDocumentDraft(id: string): Promise<void> {
+  const { error } = await db
+    .from('app_whatsapp_pending_documents')
+    .delete()
+    .eq('id', id);
+  assertNoError(error, 'deletePendingWhatsAppDocumentDraft');
+}
+
+export async function deleteExpiredPendingWhatsAppDocumentDrafts(uid: string, sourcePhone: string): Promise<void> {
+  const normalizedPhone = normalizePhoneNumber(sourcePhone);
+  const nowIso = new Date().toISOString();
+  const { error } = await db
+    .from('app_whatsapp_pending_documents')
+    .delete()
+    .eq('uid', uid)
+    .eq('source_phone', normalizedPhone)
+    .lt('expires_at', nowIso);
+  assertNoError(error, 'deleteExpiredPendingWhatsAppDocumentDrafts');
+}
+
+export async function createUserDocument(uid: string, input: CreateUserDocumentInput): Promise<string> {
+  const now = new Date().toISOString();
+  const { data, error } = await db
+    .from('app_user_documents')
+    .insert({
+      ...(input.id ? { id: input.id } : {}),
+      uid,
+      source: input.source ?? 'whatsapp',
+      title: input.title,
+      description: input.description ?? null,
+      normalized_title: input.normalizedTitle,
+      normalized_description: input.normalizedDescription ?? null,
+      search_tokens: Array.isArray(input.searchTokens) ? input.searchTokens : [],
+      storage_path: input.storagePath,
+      mime_type: input.mimeType,
+      size_bytes: input.sizeBytes,
+      status: input.status ?? 'ready',
+      created_at: now,
+      updated_at: now,
+      last_accessed_at: null
+    })
+    .select('id')
+    .single<{ id: string }>();
+  assertNoError(error, 'createUserDocument');
+  if (!data?.id) throw new Error('createUserDocument: response sem id');
+  return data.id;
+}
+
+export async function touchUserDocumentAccess(uid: string, documentId: string): Promise<void> {
+  const now = new Date().toISOString();
+  const { error } = await db
+    .from('app_user_documents')
+    .update({
+      last_accessed_at: now,
+      updated_at: now
+    })
+    .eq('uid', uid)
+    .eq('id', documentId);
+  assertNoError(error, 'touchUserDocumentAccess');
+}
+
+export async function listRecentUserDocuments(uid: string, limitCount: number): Promise<UserDocument[]> {
+  const safeLimit = Math.max(1, Math.min(limitCount, 50));
+  const { data, error } = await db
+    .from('app_user_documents')
+    .select('id, uid, source, title, description, normalized_title, normalized_description, search_tokens, storage_path, mime_type, size_bytes, status, created_at, updated_at, last_accessed_at')
+    .eq('uid', uid)
+    .eq('status', 'ready')
+    .order('created_at', { ascending: false })
+    .limit(safeLimit);
+  assertNoError(error, 'listRecentUserDocuments');
+  return ((data ?? []) as DbUserDocumentRow[]).map(mapUserDocument);
 }

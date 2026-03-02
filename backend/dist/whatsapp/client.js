@@ -44,11 +44,13 @@ const promises_1 = require("node:fs/promises");
 const qrcode_1 = __importDefault(require("qrcode"));
 const qrcode_terminal_1 = __importDefault(require("qrcode-terminal"));
 const assistant_1 = require("../ai/assistant");
+const document_storage_1 = require("../lib/document-storage");
 const firebase_user_access_1 = require("../lib/firebase-user-access");
 const env_1 = require("../config/env");
 const firestore_1 = require("../lib/firestore");
 const logger_1 = require("../lib/logger");
 const events_1 = require("./events");
+const document_intents_1 = require("./document-intents");
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -114,6 +116,16 @@ function isUndoMessage(text) {
     return UNDO_KEYWORDS.some((kw) => normalized.includes(kw));
 }
 const IMAGE_ONLY_FALLBACK_TEXT = 'Analise a imagem enviada e registre o lancamento corretamente.';
+const DOCUMENT_PENDING_TTL_MS = 10 * 60 * 1000;
+const DOCUMENT_RECENT_LIMIT = 30;
+const DOCUMENT_STRONG_MATCH_MIN_SCORE = 60;
+const DOCUMENT_AMBIGUOUS_MIN_SCORE = 25;
+const DOCUMENT_RESULT_GAP_MIN = 15;
+const DOCUMENT_RECENCY_BONUS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const DOCUMENT_UNSUPPORTED_MEDIA_REPLY = 'Por enquanto so consigo guardar imagens. PDF e outros tipos ainda nao estao disponiveis.';
+const DOCUMENT_PENDING_PROMPT_REPLY = 'Recebi a imagem. Qual nome ou descricao voce quer usar para salvar?';
+const DOCUMENT_PENDING_CANCELLED_REPLY = 'Salvamento cancelado.';
+const DOCUMENT_SAVE_ERROR_REPLY = 'Nao consegui concluir essa operacao com arquivos agora. Tente novamente em instantes.';
 /** Max number of messages processed concurrently by the AI pipeline. */
 const MESSAGE_QUEUE_CONCURRENCY = 5;
 /** Refresh typing presence periodically while AI processing is running. */
@@ -797,11 +809,12 @@ class WhatsAppClient {
         const timestamp = waTimestamp ? new Date(waTimestamp * 1000).toISOString() : new Date().toISOString();
         const text = (0, events_1.extractMessageText)(message);
         const rawType = (0, events_1.extractRawType)(message);
+        const isDocumentUpload = (0, events_1.isDocumentMessage)(message);
         const imageDataUrl = await this.extractInboundImageDataUrl(message);
         const audioDataUrl = await this.extractInboundAudioDataUrl(message);
-        const conversationText = text.trim() || (imageDataUrl ? IMAGE_ONLY_FALLBACK_TEXT : '') || (audioDataUrl ? 'Audio enviado no WhatsApp.' : '');
+        const inboundText = text.trim();
         // Skip messages with no usable content (e.g. decryption failures)
-        if (!conversationText && !imageDataUrl && !audioDataUrl) {
+        if (!inboundText && !imageDataUrl && !audioDataUrl && !isDocumentUpload) {
             this.rememberInbound(messageId);
             logger_1.logger.info('MSG_SKIP: empty message (likely decryption failure or unsupported media), ignoring', {
                 messageId,
@@ -916,18 +929,45 @@ class WhatsAppClient {
         };
         await (0, firestore_1.saveMessageSafe)(inboundRecord);
         this.rememberInbound(messageId);
+        if (isDocumentUpload) {
+            await this.sendWithRetry(replyJid, DOCUMENT_UNSUPPORTED_MEDIA_REPLY, 'auto_reply', binding.uid);
+            await this.appendConversationMessage(binding.uid, remotePhone, {
+                role: 'user',
+                content: inboundText || 'Documento enviado no WhatsApp.'
+            });
+            await this.appendConversationMessage(binding.uid, remotePhone, {
+                role: 'assistant',
+                content: DOCUMENT_UNSUPPORTED_MEDIA_REPLY
+            });
+            return;
+        }
         logger_1.logger.info('MSG_AI: sending to AI for reply', {
             uid: binding.uid,
             phone: remotePhone,
-            textLength: conversationText.length,
+            textLength: inboundText.length,
             hasImage: Boolean(imageDataUrl),
             hasAudio: Boolean(audioDataUrl)
         });
-        await this.sendSmartReply(binding.uid, replyJid, remotePhone, conversationText, imageDataUrl, audioDataUrl);
+        await this.sendSmartReply(binding.uid, replyJid, remotePhone, inboundText, imageDataUrl, audioDataUrl);
     }
     async sendSmartReply(ownerUid, remoteJid, remotePhone, inboundText, imageDataUrl, audioDataUrl = null) {
         const hasAiInput = inboundText.trim().length > 0 || Boolean(imageDataUrl) || Boolean(audioDataUrl);
         if (env_1.env.whatsappAiEnabled && hasAiInput) {
+            try {
+                const handledByDocumentFlow = await this.handleDocumentRouting(ownerUid, remoteJid, remotePhone, inboundText, imageDataUrl, audioDataUrl);
+                if (handledByDocumentFlow) {
+                    return;
+                }
+            }
+            catch (documentFlowError) {
+                logger_1.logger.error('MSG_DOCUMENT_FLOW_ERROR: Failed to process document flow', {
+                    uid: ownerUid,
+                    phone: remotePhone,
+                    error: documentFlowError instanceof Error ? documentFlowError.message : 'unknown'
+                });
+                await this.sendWithRetry(remoteJid, DOCUMENT_SAVE_ERROR_REPLY, 'auto_reply', ownerUid);
+                return;
+            }
             if (isPanelLinkIntentMessage(inboundText)) {
                 const panelLinkReply = buildPanelLinkReply();
                 await this.sendWithRetry(remoteJid, panelLinkReply, 'auto_reply', ownerUid);
@@ -993,7 +1033,7 @@ class WhatsAppClient {
                     })
                 ]);
                 if (aiPipelineResult.mediaUrl) {
-                    const payload = aiPipelineResult.aiReply.trim() || 'Aqui está o recibo solicitado:';
+                    const payload = aiPipelineResult.aiReply.trim() || 'Aqui está a imagem solicitada:';
                     await this.sendWithRetry(remoteJid, payload, 'auto_reply', ownerUid, { image: { url: aiPipelineResult.mediaUrl } });
                     await this.appendConversationMessage(ownerUid, remotePhone, {
                         role: 'assistant',
@@ -1041,6 +1081,334 @@ class WhatsAppClient {
             });
         }
     }
+    async handleDocumentRouting(ownerUid, remoteJid, remotePhone, inboundText, imageDataUrl, audioDataUrl) {
+        const activeDraft = await this.getUsablePendingDocumentDraft(ownerUid, remotePhone);
+        if (imageDataUrl) {
+            const saveIntent = (0, document_intents_1.detectDocumentSaveIntent)(inboundText);
+            if (saveIntent.matched) {
+                await this.handleExplicitDocumentSave(ownerUid, remoteJid, remotePhone, imageDataUrl, saveIntent.labelCandidate, activeDraft);
+                return true;
+            }
+        }
+        if (activeDraft && inboundText.trim() && !imageDataUrl && !audioDataUrl) {
+            await this.handlePendingDocumentFollowUp(ownerUid, remoteJid, remotePhone, inboundText, activeDraft);
+            return true;
+        }
+        if (!imageDataUrl && !audioDataUrl && inboundText.trim()) {
+            const fetchIntent = (0, document_intents_1.detectDocumentFetchIntent)(inboundText);
+            if (fetchIntent.matched) {
+                await this.handleDocumentFetchRequest(ownerUid, remoteJid, remotePhone, fetchIntent.query);
+                return true;
+            }
+        }
+        return false;
+    }
+    async getUsablePendingDocumentDraft(ownerUid, remotePhone) {
+        const draft = await (0, firestore_1.getActivePendingWhatsAppDocumentDraft)(ownerUid, remotePhone);
+        if (!draft)
+            return null;
+        const expiresAt = Date.parse(draft.expiresAt);
+        if (Number.isFinite(expiresAt) && expiresAt > Date.now()) {
+            return draft;
+        }
+        logger_1.logger.info('DOC_PENDING_EXPIRED: cleaning expired document draft', {
+            uid: ownerUid,
+            phone: remotePhone,
+            draftId: draft.id
+        });
+        await this.clearPendingDocumentDraft(draft);
+        return null;
+    }
+    async clearPendingDocumentDraft(draft) {
+        try {
+            await (0, document_storage_1.deleteStoredDocument)(draft.storagePath);
+        }
+        catch (error) {
+            logger_1.logger.warn('DOC_PENDING_DELETE_FILE_FAIL: failed to delete pending document file', {
+                draftId: draft.id,
+                storagePath: draft.storagePath,
+                error: error instanceof Error ? error.message : 'unknown'
+            });
+        }
+        try {
+            await (0, firestore_1.deletePendingWhatsAppDocumentDraft)(draft.id);
+        }
+        catch (error) {
+            logger_1.logger.warn('DOC_PENDING_DELETE_ROW_FAIL: failed to delete pending document row', {
+                draftId: draft.id,
+                error: error instanceof Error ? error.message : 'unknown'
+            });
+        }
+    }
+    buildDocumentMetadata(labelSource) {
+        const cleaned = labelSource.trim().replace(/\s+/g, ' ');
+        const title = cleaned.slice(0, 80);
+        const description = cleaned.slice(0, 300);
+        const normalizedTitle = (0, document_intents_1.normalizeDocumentText)(title);
+        const normalizedDescription = (0, document_intents_1.normalizeDocumentText)(description);
+        const searchTokens = [...new Set([
+                ...(0, document_intents_1.tokenizeDocumentSearch)(title),
+                ...(0, document_intents_1.tokenizeDocumentSearch)(description)
+            ])];
+        return {
+            title,
+            description,
+            normalizedTitle,
+            normalizedDescription,
+            searchTokens
+        };
+    }
+    async saveReadyDocumentFromImage(ownerUid, imageDataUrl, labelSource) {
+        const metadata = this.buildDocumentMetadata(labelSource);
+        const upload = await (0, document_storage_1.uploadPendingDocument)(ownerUid, imageDataUrl);
+        const documentId = (0, node_crypto_1.randomUUID)();
+        let currentStoragePath = upload.storagePath;
+        try {
+            currentStoragePath = await (0, document_storage_1.finalizePendingDocumentMove)(ownerUid, upload.storagePath, documentId, upload.mimeType);
+            await (0, firestore_1.createUserDocument)(ownerUid, {
+                id: documentId,
+                source: 'whatsapp',
+                title: metadata.title,
+                description: metadata.description,
+                normalizedTitle: metadata.normalizedTitle,
+                normalizedDescription: metadata.normalizedDescription,
+                searchTokens: metadata.searchTokens,
+                storagePath: currentStoragePath,
+                mimeType: upload.mimeType,
+                sizeBytes: upload.sizeBytes,
+                status: 'ready'
+            });
+            return metadata.title;
+        }
+        catch (error) {
+            try {
+                await (0, document_storage_1.deleteStoredDocument)(currentStoragePath);
+            }
+            catch (cleanupError) {
+                logger_1.logger.warn('DOC_SAVE_CLEANUP_FAIL: failed to cleanup storage after save error', {
+                    storagePath: currentStoragePath,
+                    error: cleanupError instanceof Error ? cleanupError.message : 'unknown'
+                });
+            }
+            throw error;
+        }
+    }
+    async finalizePendingDocumentDraft(ownerUid, draft, labelSource) {
+        const metadata = this.buildDocumentMetadata(labelSource);
+        const documentId = (0, node_crypto_1.randomUUID)();
+        let movedToFinal = false;
+        let finalStoragePath = draft.storagePath;
+        try {
+            finalStoragePath = await (0, document_storage_1.finalizePendingDocumentMove)(ownerUid, draft.storagePath, documentId, draft.mimeType);
+            movedToFinal = true;
+            await (0, firestore_1.createUserDocument)(ownerUid, {
+                id: documentId,
+                source: 'whatsapp',
+                title: metadata.title,
+                description: metadata.description,
+                normalizedTitle: metadata.normalizedTitle,
+                normalizedDescription: metadata.normalizedDescription,
+                searchTokens: metadata.searchTokens,
+                storagePath: finalStoragePath,
+                mimeType: draft.mimeType,
+                sizeBytes: draft.sizeBytes,
+                status: 'ready'
+            });
+            await (0, firestore_1.deletePendingWhatsAppDocumentDraft)(draft.id);
+            return metadata.title;
+        }
+        catch (error) {
+            if (movedToFinal) {
+                try {
+                    await (0, document_storage_1.deleteStoredDocument)(finalStoragePath);
+                }
+                catch (cleanupError) {
+                    logger_1.logger.warn('DOC_PENDING_FINALIZE_CLEANUP_FAIL: failed to cleanup moved file after error', {
+                        storagePath: finalStoragePath,
+                        error: cleanupError instanceof Error ? cleanupError.message : 'unknown'
+                    });
+                }
+                try {
+                    await (0, firestore_1.deletePendingWhatsAppDocumentDraft)(draft.id);
+                }
+                catch (cleanupError) {
+                    logger_1.logger.warn('DOC_PENDING_FINALIZE_ROW_FAIL: failed to cleanup pending draft after finalize error', {
+                        draftId: draft.id,
+                        error: cleanupError instanceof Error ? cleanupError.message : 'unknown'
+                    });
+                }
+            }
+            throw error;
+        }
+    }
+    async sendDocumentTextReply(ownerUid, remoteJid, remotePhone, reply, syntheticUserContent) {
+        await this.sendWithRetry(remoteJid, reply, 'auto_reply', ownerUid);
+        if (syntheticUserContent) {
+            await this.appendConversationMessage(ownerUid, remotePhone, {
+                role: 'user',
+                content: syntheticUserContent
+            });
+        }
+        await this.appendConversationMessage(ownerUid, remotePhone, {
+            role: 'assistant',
+            content: reply
+        });
+    }
+    async handleExplicitDocumentSave(ownerUid, remoteJid, remotePhone, imageDataUrl, labelCandidate, existingDraft) {
+        if (existingDraft) {
+            await this.clearPendingDocumentDraft(existingDraft);
+        }
+        if (!(0, document_intents_1.isMeaningfulDocumentLabel)(labelCandidate)) {
+            const upload = await (0, document_storage_1.uploadPendingDocument)(ownerUid, imageDataUrl);
+            try {
+                await (0, firestore_1.createPendingWhatsAppDocumentDraft)(ownerUid, remotePhone, {
+                    id: upload.draftId,
+                    storagePath: upload.storagePath,
+                    mimeType: upload.mimeType,
+                    sizeBytes: upload.sizeBytes,
+                    expiresAt: new Date(Date.now() + DOCUMENT_PENDING_TTL_MS).toISOString(),
+                    pendingReason: 'missing_title'
+                });
+            }
+            catch (error) {
+                try {
+                    await (0, document_storage_1.deleteStoredDocument)(upload.storagePath);
+                }
+                catch (cleanupError) {
+                    logger_1.logger.warn('DOC_PENDING_CREATE_CLEANUP_FAIL: failed to cleanup pending upload after DB error', {
+                        storagePath: upload.storagePath,
+                        error: cleanupError instanceof Error ? cleanupError.message : 'unknown'
+                    });
+                }
+                throw error;
+            }
+            await this.sendDocumentTextReply(ownerUid, remoteJid, remotePhone, DOCUMENT_PENDING_PROMPT_REPLY, '[Arquivo pendente] aguardando nome');
+            return;
+        }
+        const title = await this.saveReadyDocumentFromImage(ownerUid, imageDataUrl, labelCandidate);
+        await this.sendDocumentTextReply(ownerUid, remoteJid, remotePhone, `Arquivo salvo como "${title}".`, `[Arquivo salvo] ${title}`);
+    }
+    async handlePendingDocumentFollowUp(ownerUid, remoteJid, remotePhone, inboundText, draft) {
+        const normalized = (0, document_intents_1.normalizeDocumentText)(inboundText);
+        if (normalized === 'cancelar' || normalized === 'cancela') {
+            await this.clearPendingDocumentDraft(draft);
+            await this.sendDocumentTextReply(ownerUid, remoteJid, remotePhone, DOCUMENT_PENDING_CANCELLED_REPLY, '[Arquivo pendente] cancelado');
+            return;
+        }
+        if (!(0, document_intents_1.isMeaningfulDocumentLabel)(inboundText)) {
+            await this.sendDocumentTextReply(ownerUid, remoteJid, remotePhone, DOCUMENT_PENDING_PROMPT_REPLY, '[Arquivo pendente] aguardando nome');
+            return;
+        }
+        const title = await this.finalizePendingDocumentDraft(ownerUid, draft, inboundText);
+        await this.sendDocumentTextReply(ownerUid, remoteJid, remotePhone, `Arquivo salvo como "${title}".`, `[Arquivo salvo] ${title}`);
+    }
+    scoreRecentDocuments(documents, query) {
+        const normalizedQuery = (0, document_intents_1.normalizeDocumentText)(query);
+        const queryTokens = [...new Set((0, document_intents_1.tokenizeDocumentSearch)(query))];
+        const now = Date.now();
+        return documents
+            .map((document) => {
+            let score = 0;
+            const normalizedTitle = document.normalizedTitle;
+            const normalizedDescription = document.normalizedDescription ?? '';
+            const tokenSet = new Set(document.searchTokens);
+            if (normalizedQuery) {
+                if (normalizedTitle === normalizedQuery) {
+                    score += 100;
+                }
+                else if (normalizedTitle.includes(normalizedQuery)) {
+                    score += 60;
+                }
+            }
+            for (const token of queryTokens) {
+                if (normalizedTitle.includes(token))
+                    score += 25;
+                if (normalizedDescription.includes(token))
+                    score += 15;
+                if (tokenSet.has(token))
+                    score += 10;
+            }
+            const createdAt = Date.parse(document.createdAt);
+            if (Number.isFinite(createdAt) && now - createdAt <= DOCUMENT_RECENCY_BONUS_WINDOW_MS) {
+                score += 10;
+            }
+            return { document, score };
+        })
+            .sort((a, b) => {
+            if (b.score !== a.score)
+                return b.score - a.score;
+            return b.document.createdAt.localeCompare(a.document.createdAt);
+        });
+    }
+    async handleDocumentFetchRequest(ownerUid, remoteJid, remotePhone, query) {
+        const documents = await (0, firestore_1.listRecentUserDocuments)(ownerUid, DOCUMENT_RECENT_LIMIT);
+        if (documents.length === 0) {
+            await this.sendDocumentTextReply(ownerUid, remoteJid, remotePhone, 'Nao encontrei nenhum arquivo com esse nome ou descricao.', `[Arquivo solicitado] ${query || '(sem filtro)'}`);
+            return;
+        }
+        const normalizedQuery = (0, document_intents_1.normalizeDocumentText)(query);
+        let shouldSendDirect = false;
+        let candidates = [];
+        if (!normalizedQuery) {
+            candidates = documents.map((document) => ({ document, score: 0 }));
+            shouldSendDirect = documents.length === 1;
+        }
+        else {
+            const ranked = this.scoreRecentDocuments(documents, query);
+            const top = ranked[0];
+            const second = ranked[1];
+            const diffToSecond = top ? top.score - (second?.score ?? 0) : 0;
+            if (!top || top.score < DOCUMENT_AMBIGUOUS_MIN_SCORE) {
+                await this.sendDocumentTextReply(ownerUid, remoteJid, remotePhone, 'Nao encontrei nenhum arquivo com esse nome ou descricao.', `[Arquivo solicitado] ${query}`);
+                return;
+            }
+            if (top.score >= DOCUMENT_STRONG_MATCH_MIN_SCORE && diffToSecond >= DOCUMENT_RESULT_GAP_MIN) {
+                shouldSendDirect = true;
+                candidates = [top];
+            }
+            else {
+                candidates = ranked.filter((entry) => entry.score >= DOCUMENT_AMBIGUOUS_MIN_SCORE).slice(0, 3);
+            }
+        }
+        if (!shouldSendDirect && candidates.length === 0) {
+            await this.sendDocumentTextReply(ownerUid, remoteJid, remotePhone, 'Nao encontrei nenhum arquivo com esse nome ou descricao.', `[Arquivo solicitado] ${query || '(sem filtro)'}`);
+            return;
+        }
+        if (!shouldSendDirect) {
+            const summary = candidates
+                .slice(0, 3)
+                .map((entry, index) => `${index + 1}) "${entry.document.title}"`)
+                .join(' ');
+            await this.sendDocumentTextReply(ownerUid, remoteJid, remotePhone, `Encontrei mais de um arquivo parecido: ${summary}. Me diga qual nome voce quer.`, `[Arquivo solicitado] ${query || '(sem filtro)'}`);
+            return;
+        }
+        const selected = candidates[0]?.document;
+        if (!selected) {
+            await this.sendDocumentTextReply(ownerUid, remoteJid, remotePhone, 'Nao encontrei nenhum arquivo com esse nome ou descricao.', `[Arquivo solicitado] ${query || '(sem filtro)'}`);
+            return;
+        }
+        const signedUrl = await (0, document_storage_1.createSignedDocumentUrl)(selected.storagePath);
+        try {
+            await (0, firestore_1.touchUserDocumentAccess)(ownerUid, selected.id);
+        }
+        catch (error) {
+            logger_1.logger.warn('DOC_FETCH_TOUCH_FAIL: failed to update last accessed timestamp', {
+                uid: ownerUid,
+                documentId: selected.id,
+                error: error instanceof Error ? error.message : 'unknown'
+            });
+        }
+        const reply = `Aqui está: "${selected.title}".`;
+        await this.sendWithRetry(remoteJid, reply, 'auto_reply', ownerUid, { image: { url: signedUrl } });
+        await this.appendConversationMessage(ownerUid, remotePhone, {
+            role: 'user',
+            content: `[Arquivo solicitado] ${query || selected.title}`
+        });
+        await this.appendConversationMessage(ownerUid, remotePhone, {
+            role: 'assistant',
+            content: `[Imagem Enviada] ${reply}`
+        });
+    }
     /**
      * Runs the full AI processing pipeline with logging at each step.
      * Extracted so the caller can wrap it in a global timeout.
@@ -1075,7 +1443,7 @@ class WhatsAppClient {
         let finalContent = inboundText.trim();
         if (!finalContent) {
             if (imageDataUrl)
-                finalContent = 'Analise a imagem enviada e registre o lançamento corretamente.';
+                finalContent = IMAGE_ONLY_FALLBACK_TEXT;
             else if (audioDataUrl)
                 finalContent = 'Transcreva e interprete o audio enviado, e execute a acao de registrar ou responder.';
         }
@@ -1103,7 +1471,9 @@ class WhatsAppClient {
             isCapabilitiesQuestion,
             isConversationRestart,
             shouldSendCapabilitiesSummary,
-            sourcePhone: remotePhone
+            sourcePhone: remotePhone,
+            latestUserMessageText: inboundText,
+            imageOnlyWithoutDocumentIntent: Boolean(imageDataUrl) && !inboundText.trim()
         });
         logger_1.logger.info('MSG_PIPELINE_AI_DONE: AI response received', {
             uid: ownerUid,
@@ -1230,7 +1600,8 @@ class WhatsAppClient {
                     createdAt: now,
                     metadata: {
                         fromMe: true,
-                        isGroup: (0, events_1.isGroupJid)(jid)
+                        isGroup: (0, events_1.isGroupJid)(jid),
+                        hasImage: Boolean(customOptions?.image)
                     }
                 };
                 if (ownerUid) {
@@ -1268,7 +1639,8 @@ class WhatsAppClient {
             createdAt: new Date().toISOString(),
             metadata: {
                 fromMe: true,
-                isGroup: (0, events_1.isGroupJid)(jid)
+                isGroup: (0, events_1.isGroupJid)(jid),
+                hasImage: Boolean(customOptions?.image)
             }
         };
         if (ownerUid) {
@@ -1604,7 +1976,23 @@ class WhatsAppClient {
             }
         }
         if (remoteJid.endsWith('@lid')) {
-            return this.lidToPhoneJid.get(remoteJid) ?? remoteJid;
+            // Try exact match first, then try base LID (without device suffix)
+            const exact = this.lidToPhoneJid.get(remoteJid);
+            if (exact)
+                return exact;
+            const baseLid = remoteJid.replace(/:\d+@lid$/, '@lid');
+            if (baseLid !== remoteJid) {
+                const baseMatch = this.lidToPhoneJid.get(baseLid);
+                if (baseMatch)
+                    return baseMatch;
+            }
+            // Search for any key that shares the same base LID number
+            const lidNumber = remoteJid.split('@')[0].split(':')[0];
+            for (const [key, value] of this.lidToPhoneJid.entries()) {
+                if (key.startsWith(lidNumber))
+                    return value;
+            }
+            return remoteJid;
         }
         return remoteJid;
     }
@@ -1630,18 +2018,29 @@ class WhatsAppClient {
         const normalizedPhoneJid = this.normalizePhoneJidCandidate(phoneJid);
         if (!normalizedPhoneJid)
             return;
-        const previous = this.lidToPhoneJid.get(lidJid);
-        this.lidToPhoneJid.set(lidJid, normalizedPhoneJid);
+        // Normalize LID: strip device suffix (e.g. "71756035416162:47@lid" → "71756035416162@lid")
+        // WhatsApp sends LID with device suffix in CB:message but without suffix in message.key.remoteJid
+        const baseLidJid = lidJid.replace(/:\d+@lid$/, '@lid');
+        // Store under BOTH the original key and the base key so lookups always succeed
+        const previous = this.lidToPhoneJid.get(baseLidJid);
+        this.lidToPhoneJid.set(baseLidJid, normalizedPhoneJid);
+        if (baseLidJid !== lidJid) {
+            this.lidToPhoneJid.set(lidJid, normalizedPhoneJid);
+        }
         if (previous !== normalizedPhoneJid) {
             logger_1.logger.info('LID mapping updated', {
                 slotId: this.slotId,
                 source,
                 lidJid,
+                baseLidJid,
                 phoneJid: normalizedPhoneJid
             });
         }
         // Replay buffered messages that were waiting for this LID mapping
-        this.replayBufferedLidMessages(lidJid);
+        this.replayBufferedLidMessages(baseLidJid);
+        if (baseLidJid !== lidJid) {
+            this.replayBufferedLidMessages(lidJid);
+        }
     }
     absorbContactLidMappings(contacts, source) {
         let mappedCount = 0;
@@ -1802,11 +2201,36 @@ class WhatsAppClient {
                     this.replayBufferedLidMessages(lidJid);
                 }
                 else {
-                    logger_1.logger.warn('LID_RESOLVE_FAILED: could not resolve LID after all strategies', {
-                        slotId,
-                        lidJid,
-                        pendingCount: this.pendingLidMessages.get(lidJid)?.length ?? 0
-                    });
+                    // FALLBACK: Search for any existing mapping that shares the same base LID number.
+                    // CB_MESSAGE_SENDER_PN stores with device suffix (e.g. "123:47@lid")
+                    // but handleSingleIncomingMessage looks up base form ("123@lid").
+                    const lidNumber = lidJid.split('@')[0].split(':')[0];
+                    let fallbackPhone;
+                    for (const [key, value] of this.lidToPhoneJid.entries()) {
+                        if (key.startsWith(lidNumber)) {
+                            fallbackPhone = value;
+                            break;
+                        }
+                    }
+                    if (fallbackPhone) {
+                        logger_1.logger.info('LID_RESOLVE_FALLBACK: found phone via prefix scan of stored mappings', {
+                            slotId,
+                            lidJid,
+                            lidNumber,
+                            resolvedPhone: fallbackPhone
+                        });
+                        // Store the mapping under the base LID so future lookups succeed
+                        this.lidToPhoneJid.set(lidJid, fallbackPhone);
+                        this.replayBufferedLidMessages(lidJid);
+                    }
+                    else {
+                        logger_1.logger.warn('LID_RESOLVE_FAILED: could not resolve LID after all strategies', {
+                            slotId,
+                            lidJid,
+                            pendingCount: this.pendingLidMessages.get(lidJid)?.length ?? 0,
+                            knownMappings: this.lidToPhoneJid.size
+                        });
+                    }
                 }
             }
         })();

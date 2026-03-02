@@ -57,8 +57,7 @@ function startWhatsAppReminderNotifier(manager) {
                     await manager.sendTextWithRouting({
                         to: reminder.notifyPhone,
                         text: buildReminderMessage(reminder),
-                        ownerUid: reminder.uid,
-                        mediaUrl: reminder.receiptUrl ?? undefined
+                        ownerUid: reminder.uid
                     });
                     const marked = await (0, firestore_1.markReminderAsNotified)(reminder.uid, reminder.id, new Date().toISOString());
                     if (marked) {

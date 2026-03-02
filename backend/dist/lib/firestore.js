@@ -53,6 +53,13 @@ exports.updateUserChatSessionTitle = updateUserChatSessionTitle;
 exports.deleteUserChatSession = deleteUserChatSession;
 exports.getUserChatMessages = getUserChatMessages;
 exports.addUserChatMessage = addUserChatMessage;
+exports.createPendingWhatsAppDocumentDraft = createPendingWhatsAppDocumentDraft;
+exports.getActivePendingWhatsAppDocumentDraft = getActivePendingWhatsAppDocumentDraft;
+exports.deletePendingWhatsAppDocumentDraft = deletePendingWhatsAppDocumentDraft;
+exports.deleteExpiredPendingWhatsAppDocumentDrafts = deleteExpiredPendingWhatsAppDocumentDrafts;
+exports.createUserDocument = createUserDocument;
+exports.touchUserDocumentAccess = touchUserDocumentAccess;
+exports.listRecentUserDocuments = listRecentUserDocuments;
 const supabase_1 = require("./supabase");
 const logger_1 = require("./logger");
 const events_1 = require("../whatsapp/events");
@@ -621,7 +628,6 @@ function mapTransaction(row) {
         category: row.category,
         description: row.description,
         paymentMethod: row.payment_method,
-        receiptUrl: row.receipt_url ?? null,
         createdAt: row.created_at,
         updatedAt: row.updated_at
     };
@@ -747,7 +753,6 @@ function mapReminder(row) {
         notifyPhone: row.notify_phone,
         type: row.type,
         status: row.status,
-        receiptUrl: row.receipt_url ?? null,
         createdAt: row.created_at,
         updatedAt: row.updated_at
     };
@@ -903,8 +908,7 @@ async function getDueWhatsAppReminders(nowIso, limitCount) {
             dueDate: row.due_date,
             dueTime,
             type: row.type,
-            notifyPhone,
-            receiptUrl: null
+            notifyPhone
         };
     })
         .filter((entry) => Boolean(entry));
@@ -1651,4 +1655,142 @@ async function addUserChatMessage(uid, sessionId, input) {
     if (!data?.id)
         throw new Error('addUserChatMessage: response sem id');
     return data.id;
+}
+function mapUserDocument(row) {
+    return {
+        id: row.id,
+        uid: row.uid,
+        source: row.source,
+        title: row.title,
+        description: row.description,
+        normalizedTitle: row.normalized_title,
+        normalizedDescription: row.normalized_description,
+        searchTokens: Array.isArray(row.search_tokens) ? row.search_tokens.filter((token) => typeof token === 'string') : [],
+        storagePath: row.storage_path,
+        mimeType: row.mime_type,
+        sizeBytes: row.size_bytes,
+        status: row.status,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        lastAccessedAt: row.last_accessed_at
+    };
+}
+function mapPendingDocument(row) {
+    return {
+        id: row.id,
+        uid: row.uid,
+        sourcePhone: row.source_phone,
+        storagePath: row.storage_path,
+        mimeType: row.mime_type,
+        sizeBytes: row.size_bytes,
+        pendingReason: row.pending_reason,
+        expiresAt: row.expires_at,
+        createdAt: row.created_at
+    };
+}
+async function createPendingWhatsAppDocumentDraft(uid, sourcePhone, input) {
+    const now = new Date().toISOString();
+    const normalizedPhone = (0, events_1.normalizePhoneNumber)(sourcePhone);
+    const { data, error } = await supabase_1.supabaseAdmin
+        .from('app_whatsapp_pending_documents')
+        .insert({
+        id: input.id,
+        uid,
+        source_phone: normalizedPhone,
+        storage_path: input.storagePath,
+        mime_type: input.mimeType,
+        size_bytes: input.sizeBytes,
+        pending_reason: input.pendingReason ?? 'missing_title',
+        expires_at: input.expiresAt,
+        created_at: now
+    })
+        .select('id')
+        .single();
+    assertNoError(error, 'createPendingWhatsAppDocumentDraft');
+    if (!data?.id)
+        throw new Error('createPendingWhatsAppDocumentDraft: response sem id');
+    return data.id;
+}
+async function getActivePendingWhatsAppDocumentDraft(uid, sourcePhone) {
+    const normalizedPhone = (0, events_1.normalizePhoneNumber)(sourcePhone);
+    const { data, error } = await supabase_1.supabaseAdmin
+        .from('app_whatsapp_pending_documents')
+        .select('id, uid, source_phone, storage_path, mime_type, size_bytes, pending_reason, expires_at, created_at')
+        .eq('uid', uid)
+        .eq('source_phone', normalizedPhone)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+    assertNoError(error, 'getActivePendingWhatsAppDocumentDraft');
+    return data ? mapPendingDocument(data) : null;
+}
+async function deletePendingWhatsAppDocumentDraft(id) {
+    const { error } = await supabase_1.supabaseAdmin
+        .from('app_whatsapp_pending_documents')
+        .delete()
+        .eq('id', id);
+    assertNoError(error, 'deletePendingWhatsAppDocumentDraft');
+}
+async function deleteExpiredPendingWhatsAppDocumentDrafts(uid, sourcePhone) {
+    const normalizedPhone = (0, events_1.normalizePhoneNumber)(sourcePhone);
+    const nowIso = new Date().toISOString();
+    const { error } = await supabase_1.supabaseAdmin
+        .from('app_whatsapp_pending_documents')
+        .delete()
+        .eq('uid', uid)
+        .eq('source_phone', normalizedPhone)
+        .lt('expires_at', nowIso);
+    assertNoError(error, 'deleteExpiredPendingWhatsAppDocumentDrafts');
+}
+async function createUserDocument(uid, input) {
+    const now = new Date().toISOString();
+    const { data, error } = await supabase_1.supabaseAdmin
+        .from('app_user_documents')
+        .insert({
+        ...(input.id ? { id: input.id } : {}),
+        uid,
+        source: input.source ?? 'whatsapp',
+        title: input.title,
+        description: input.description ?? null,
+        normalized_title: input.normalizedTitle,
+        normalized_description: input.normalizedDescription ?? null,
+        search_tokens: Array.isArray(input.searchTokens) ? input.searchTokens : [],
+        storage_path: input.storagePath,
+        mime_type: input.mimeType,
+        size_bytes: input.sizeBytes,
+        status: input.status ?? 'ready',
+        created_at: now,
+        updated_at: now,
+        last_accessed_at: null
+    })
+        .select('id')
+        .single();
+    assertNoError(error, 'createUserDocument');
+    if (!data?.id)
+        throw new Error('createUserDocument: response sem id');
+    return data.id;
+}
+async function touchUserDocumentAccess(uid, documentId) {
+    const now = new Date().toISOString();
+    const { error } = await supabase_1.supabaseAdmin
+        .from('app_user_documents')
+        .update({
+        last_accessed_at: now,
+        updated_at: now
+    })
+        .eq('uid', uid)
+        .eq('id', documentId);
+    assertNoError(error, 'touchUserDocumentAccess');
+}
+async function listRecentUserDocuments(uid, limitCount) {
+    const safeLimit = Math.max(1, Math.min(limitCount, 50));
+    const { data, error } = await supabase_1.supabaseAdmin
+        .from('app_user_documents')
+        .select('id, uid, source, title, description, normalized_title, normalized_description, search_tokens, storage_path, mime_type, size_bytes, status, created_at, updated_at, last_accessed_at')
+        .eq('uid', uid)
+        .eq('status', 'ready')
+        .order('created_at', { ascending: false })
+        .limit(safeLimit);
+    assertNoError(error, 'listRecentUserDocuments');
+    return (data ?? []).map(mapUserDocument);
 }
