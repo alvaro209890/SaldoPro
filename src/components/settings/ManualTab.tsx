@@ -103,7 +103,7 @@ export function ManualTab() {
                             <h3 className="font-semibold text-gray-100">Leitura de Imagens e Recibos</h3>
                         </div>
                         <p className="text-sm text-gray-400 mb-4 h-14">
-                            Evite trabalho. Printe notas fiscais, faturas ou envio fotos. A inteligência artificial pode analisar pixels.
+                            Evite digitar. Tire foto de cupons fiscais, boletos ou recibos. A inteligência visual lê os dados da imagem (OCR).
                         </p>
                         <div className="bg-[#0c1216] flex flex-col justify-between rounded-xl p-4 border border-surface-800 text-sm h-36">
                             <div>
@@ -112,8 +112,41 @@ export function ManualTab() {
                             </div>
                             <div>
                                 <p className="text-indigo-400 font-medium mb-1">A IA faz:</p>
-                                <p className="text-gray-300">Reconhece os números na imagem, solicita apenas um título e conclui o registro do total.</p>
+                                <p className="text-gray-300">Reconhece os números na imagem, processa o valor total e categoriza automaticamente.</p>
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Destaque para envio de Imagens/Documentos */}
+                <div className="mt-8 bg-gradient-to-r from-pink-500/10 to-purple-500/5 rounded-2xl p-8 border border-pink-500/20 shadow-inner">
+                    <div className="flex items-start gap-4 mb-4">
+                        <div className="w-12 h-12 rounded-full bg-pink-500/20 flex items-center justify-center shrink-0">
+                            <ImageIcon className="w-6 h-6 text-pink-400" />
+                        </div>
+                        <div>
+                            <h4 className="text-lg font-bold text-pink-300 mb-2">Visão Computacional: Upload de Imagens em Detalhes</h4>
+                            <p className="text-sm text-gray-300 leading-relaxed mb-4">
+                                A IA do SaldoPro é capaz de enxergar. Ao invés de você digitar os gastos meticulosamente, você pode simplesmente enviar uma foto diretamente no chat do WhatsApp. A nossa engine de Visão Computacional (AI Vision) varre a imagem imediatamente:
+                            </p>
+                            <ul className="space-y-3">
+                                <li className="flex gap-3 text-sm text-gray-400">
+                                    <span className="text-pink-400 mt-0.5">•</span>
+                                    <span><strong>Cupons Fiscais de Supermercado:</strong> Envie a foto longa do cupom. A IA varre todos os itens, soma os valores e sabe que trata-se de Alimentação/Mercado.</span>
+                                </li>
+                                <li className="flex gap-3 text-sm text-gray-400">
+                                    <span className="text-pink-400 mt-0.5">•</span>
+                                    <span><strong>Boletos e Faturas (Fotos):</strong> Envie uma foto de uma fatura recém-chegada. Se você disser "agende este pagamento", a IA extrai a data de vencimento e o valor para os seus Lembretes.</span>
+                                </li>
+                                <li className="flex gap-3 text-sm text-gray-400">
+                                    <span className="text-pink-400 mt-0.5">•</span>
+                                    <span><strong>Comprovantes de PIX:</strong> Recebeu um PIX ou Pagou algo? Encaminhe o comprovante em imagem. A IA identifica imediatamente se é uma Receita ou Despesa com base no destinatário.</span>
+                                </li>
+                                <li className="flex gap-3 text-sm text-gray-400">
+                                    <span className="text-pink-400 mt-0.5">•</span>
+                                    <span><strong>Sem textos necessários:</strong> Se a imagem for clara, você nem precisa escrever nada junto com a foto! Mas, se preferir, envie a imagem com a legenda: <em>'Adicione isso como material de escritório'</em>.</span>
+                                </li>
+                            </ul>
                         </div>
                     </div>
                 </div>

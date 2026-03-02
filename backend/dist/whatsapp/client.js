@@ -131,6 +131,7 @@ const DOCUMENT_UNSUPPORTED_MEDIA_REPLY = 'Por enquanto so consigo guardar imagen
 const DOCUMENT_PENDING_PROMPT_REPLY = 'Recebi a imagem. Qual nome ou descricao voce quer usar para salvar?';
 const DOCUMENT_PENDING_CANCELLED_REPLY = 'Salvamento cancelado.';
 const DOCUMENT_SAVE_ERROR_REPLY = 'Nao consegui concluir essa operacao com arquivos agora. Tente novamente em instantes.';
+const DOCUMENT_IMAGE_READ_ERROR_REPLY = 'Recebi seu pedido para guardar a imagem, mas nao consegui ler o arquivo enviado. Tente reenviar a imagem em alguns instantes.';
 /** Max number of messages processed concurrently by the AI pipeline. */
 const MESSAGE_QUEUE_CONCURRENCY = 5;
 /** Refresh typing presence periodically while AI processing is running. */
@@ -817,6 +818,7 @@ class WhatsAppClient {
         const text = (0, events_1.extractMessageText)(message);
         const rawType = (0, events_1.extractRawType)(message);
         const isDocumentUpload = (0, events_1.isDocumentMessage)(message);
+        const hasImageAttachment = (0, events_1.isImageMessage)(message);
         const imageDataUrl = await this.extractInboundImageDataUrl(message);
         const audioDataUrl = await this.extractInboundAudioDataUrl(message);
         const inboundText = text.trim();
@@ -953,20 +955,22 @@ class WhatsAppClient {
             phone: remotePhone,
             textLength: inboundText.length,
             hasImage: Boolean(imageDataUrl),
+            hadImageAttachment: hasImageAttachment,
             hasAudio: Boolean(audioDataUrl)
         });
-        await this.sendSmartReply(binding.uid, replyJid, remotePhone, inboundText, imageDataUrl, audioDataUrl);
+        await this.sendSmartReply(binding.uid, replyJid, remotePhone, inboundText, imageDataUrl, audioDataUrl, hasImageAttachment);
     }
-    async sendSmartReply(ownerUid, remoteJid, remotePhone, inboundText, imageDataUrl, audioDataUrl = null) {
+    async sendSmartReply(ownerUid, remoteJid, remotePhone, inboundText, imageDataUrl, audioDataUrl = null, hasImageAttachment = false) {
         const hasInboundInput = inboundText.trim().length > 0 || Boolean(imageDataUrl) || Boolean(audioDataUrl);
         if (hasInboundInput) {
             try {
-                const handledByDocumentFlow = await this.handleDocumentRouting(ownerUid, remoteJid, remotePhone, inboundText, imageDataUrl, audioDataUrl);
+                const handledByDocumentFlow = await this.handleDocumentRouting(ownerUid, remoteJid, remotePhone, inboundText, imageDataUrl, audioDataUrl, hasImageAttachment);
                 if (handledByDocumentFlow) {
                     logger_1.logger.info('MSG_DOCUMENT_FLOW_HANDLED', {
                         uid: ownerUid,
                         phone: remotePhone,
                         hasImage: Boolean(imageDataUrl),
+                        hadImageAttachment: hasImageAttachment,
                         hasAudio: Boolean(audioDataUrl),
                         textLength: inboundText.trim().length
                     });
@@ -1097,10 +1101,19 @@ class WhatsAppClient {
             });
         }
     }
-    async handleDocumentRouting(ownerUid, remoteJid, remotePhone, inboundText, imageDataUrl, audioDataUrl) {
+    async handleDocumentRouting(ownerUid, remoteJid, remotePhone, inboundText, imageDataUrl, audioDataUrl, hasImageAttachment) {
         const activeDraft = await this.getUsablePendingDocumentDraft(ownerUid, remotePhone);
+        const saveIntent = (0, document_intents_1.detectDocumentSaveIntent)(inboundText);
+        if (hasImageAttachment && !imageDataUrl && saveIntent.matched) {
+            logger_1.logger.warn('DOC_SAVE_SKIPPED_NO_IMAGE_DATA: explicit save requested but image payload was unavailable', {
+                uid: ownerUid,
+                phone: remotePhone,
+                textLength: inboundText.trim().length
+            });
+            await this.sendDocumentTextReply(ownerUid, remoteJid, remotePhone, DOCUMENT_IMAGE_READ_ERROR_REPLY, '[Arquivo nao salvo] falha ao ler imagem');
+            return true;
+        }
         if (imageDataUrl) {
-            const saveIntent = (0, document_intents_1.detectDocumentSaveIntent)(inboundText);
             if (saveIntent.matched) {
                 await this.handleExplicitDocumentSave(ownerUid, remoteJid, remotePhone, imageDataUrl, saveIntent.labelCandidate, activeDraft);
                 return true;
@@ -1176,6 +1189,10 @@ class WhatsAppClient {
     }
     async saveReadyDocumentFromImage(ownerUid, imageDataUrl, labelSource) {
         const metadata = this.buildDocumentMetadata(labelSource);
+        logger_1.logger.info('DOC_SAVE_START', {
+            uid: ownerUid,
+            title: metadata.title
+        });
         const upload = await (0, document_storage_1.uploadPendingDocument)(ownerUid, imageDataUrl);
         const documentId = (0, node_crypto_1.randomUUID)();
         let currentStoragePath = upload.storagePath;
@@ -1194,6 +1211,13 @@ class WhatsAppClient {
                 sizeBytes: upload.sizeBytes,
                 status: 'ready'
             });
+            logger_1.logger.info('DOC_SAVE_SUCCESS', {
+                uid: ownerUid,
+                documentId,
+                storagePath: currentStoragePath,
+                title: metadata.title,
+                sizeBytes: upload.sizeBytes
+            });
             return metadata.title;
         }
         catch (error) {
@@ -1211,6 +1235,11 @@ class WhatsAppClient {
     }
     async finalizePendingDocumentDraft(ownerUid, draft, labelSource) {
         const metadata = this.buildDocumentMetadata(labelSource);
+        logger_1.logger.info('DOC_PENDING_FINALIZE_START', {
+            uid: ownerUid,
+            draftId: draft.id,
+            title: metadata.title
+        });
         const documentId = (0, node_crypto_1.randomUUID)();
         let movedToFinal = false;
         let finalStoragePath = draft.storagePath;
@@ -1231,6 +1260,14 @@ class WhatsAppClient {
                 status: 'ready'
             });
             await (0, firestore_1.deletePendingWhatsAppDocumentDraft)(draft.id);
+            logger_1.logger.info('DOC_PENDING_FINALIZE_SUCCESS', {
+                uid: ownerUid,
+                draftId: draft.id,
+                documentId,
+                storagePath: finalStoragePath,
+                title: metadata.title,
+                sizeBytes: draft.sizeBytes
+            });
             return metadata.title;
         }
         catch (error) {

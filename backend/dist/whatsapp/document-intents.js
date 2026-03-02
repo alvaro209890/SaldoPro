@@ -5,7 +5,7 @@ exports.detectDocumentSaveIntent = detectDocumentSaveIntent;
 exports.detectDocumentFetchIntent = detectDocumentFetchIntent;
 exports.tokenizeDocumentSearch = tokenizeDocumentSearch;
 exports.isMeaningfulDocumentLabel = isMeaningfulDocumentLabel;
-const SAVE_KEYWORDS = ['guardar', 'guarda', 'salvar', 'salva', 'arquivar', 'arquiva'];
+const SAVE_KEYWORDS = ['guardar', 'guarda', 'guarde', 'salvar', 'salva', 'salve', 'arquivar', 'arquiva', 'arquive'];
 const FETCH_VERBS = [
     'me manda',
     'manda',
@@ -60,6 +60,26 @@ const GENERIC_LABEL_WORDS = new Set([
     'este',
     'isto'
 ]);
+const LEADING_LABEL_FILLER_WORDS = new Set([
+    'a',
+    'as',
+    'essa',
+    'esse',
+    'esta',
+    'este',
+    'foto',
+    'imagem',
+    'isso',
+    'isto',
+    'o',
+    'os',
+    'doc',
+    'documento',
+    'arquivo',
+    'uma',
+    'um',
+    'como'
+]);
 function collapseWhitespace(value) {
     return value.replace(/\s+/g, ' ').trim();
 }
@@ -74,19 +94,84 @@ function removeKeywordOnce(value, keyword) {
     const pattern = new RegExp(`\\b${keyword}\\b`, 'i');
     return collapseWhitespace(value.replace(pattern, ' '));
 }
+function isSingleEditOrAdjacentSwap(a, b) {
+    if (!a || !b || Math.abs(a.length - b.length) > 1)
+        return false;
+    if (a === b)
+        return true;
+    if (a.length === b.length) {
+        const mismatches = [];
+        for (let index = 0; index < a.length; index += 1) {
+            if (a[index] !== b[index]) {
+                mismatches.push(index);
+                if (mismatches.length > 2)
+                    return false;
+            }
+        }
+        if (mismatches.length === 1) {
+            return true;
+        }
+        if (mismatches.length === 2) {
+            const [first, second] = mismatches;
+            return (second === first + 1 &&
+                a[first] === b[second] &&
+                a[second] === b[first]);
+        }
+        return false;
+    }
+    const shorter = a.length < b.length ? a : b;
+    const longer = a.length < b.length ? b : a;
+    let shortIndex = 0;
+    let longIndex = 0;
+    let edits = 0;
+    while (shortIndex < shorter.length && longIndex < longer.length) {
+        if (shorter[shortIndex] === longer[longIndex]) {
+            shortIndex += 1;
+            longIndex += 1;
+            continue;
+        }
+        edits += 1;
+        if (edits > 1)
+            return false;
+        longIndex += 1;
+    }
+    return true;
+}
+function matchSaveKeywordToken(token) {
+    if (!token)
+        return false;
+    if (SAVE_KEYWORDS.includes(token))
+        return true;
+    if (token.length < 5)
+        return false;
+    return SAVE_KEYWORDS.some((keyword) => isSingleEditOrAdjacentSwap(token, keyword));
+}
+function stripLeadingLabelFillers(rawTokens) {
+    let startIndex = 0;
+    while (startIndex < rawTokens.length) {
+        const normalizedToken = normalizeDocumentText(rawTokens[startIndex]);
+        if (!normalizedToken || LEADING_LABEL_FILLER_WORDS.has(normalizedToken)) {
+            startIndex += 1;
+            continue;
+        }
+        break;
+    }
+    return collapseWhitespace(rawTokens.slice(startIndex).join(' '));
+}
 function detectDocumentSaveIntent(text) {
     const trimmed = text.trim();
     if (!trimmed) {
         return { matched: false, labelCandidate: '' };
     }
-    const normalized = normalizeDocumentText(trimmed);
-    const matchedKeyword = SAVE_KEYWORDS.find((keyword) => new RegExp(`\\b${keyword}\\b`).test(normalized));
-    if (!matchedKeyword) {
+    const rawTokens = collapseWhitespace(trimmed).split(' ').filter(Boolean);
+    const normalizedTokens = rawTokens.map((token) => normalizeDocumentText(token));
+    const matchedIndex = normalizedTokens.findIndex((token) => matchSaveKeywordToken(token));
+    if (matchedIndex === -1) {
         return { matched: false, labelCandidate: '' };
     }
     return {
         matched: true,
-        labelCandidate: removeKeywordOnce(trimmed, matchedKeyword)
+        labelCandidate: stripLeadingLabelFillers(rawTokens.slice(matchedIndex + 1))
     };
 }
 function detectDocumentFetchIntent(text) {
