@@ -30,19 +30,67 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }, []);
 
     useEffect(() => {
-        if (!user || displayName) return;
+        if (typeof window === 'undefined') return;
+
+        const handleProfileUpdated = (event: Event) => {
+            const detail = (event as CustomEvent<{ uid?: string; displayName?: string | null }>).detail;
+            if (!detail?.uid || detail.uid !== auth.currentUser?.uid) return;
+            setDisplayName(detail.displayName || null);
+        };
+
+        window.addEventListener('saldopro:profile-updated', handleProfileUpdated);
+
+        return () => {
+            window.removeEventListener('saldopro:profile-updated', handleProfileUpdated);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!user) {
+            setDisplayName(null);
+            return;
+        }
+
+        if (displayName) return;
 
         let cancelled = false;
-        void user.reload().then(() => {
+        let retryTimer: ReturnType<typeof setTimeout> | null = null;
+        let remainingRetries = 5;
+
+        const syncDisplayName = async () => {
+            const immediateName = auth.currentUser?.displayName || user.displayName || null;
+            if (immediateName) {
+                if (!cancelled) setDisplayName(immediateName);
+                return;
+            }
+
+            try {
+                await user.reload();
+            } catch {
+                // Ignore transient Firebase refresh errors and retry briefly.
+            }
+
             if (cancelled) return;
-            setDisplayName(auth.currentUser?.displayName || null);
-        }).catch(() => {
-            if (cancelled) return;
-            setDisplayName(user.displayName || null);
-        });
+
+            const refreshedName = auth.currentUser?.displayName || user.displayName || null;
+            if (refreshedName) {
+                setDisplayName(refreshedName);
+                return;
+            }
+
+            if (remainingRetries <= 0) return;
+
+            remainingRetries -= 1;
+            retryTimer = setTimeout(() => {
+                void syncDisplayName();
+            }, 250);
+        };
+
+        void syncDisplayName();
 
         return () => {
             cancelled = true;
+            if (retryTimer) clearTimeout(retryTimer);
         };
     }, [user, displayName]);
 

@@ -29,6 +29,18 @@ export async function registerUser(email: string, password: string, displayName:
     const cred = await createUserWithEmailAndPassword(auth, email, password);
     await updateProfile(cred.user, { displayName });
     await cred.user.reload();
+
+    if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+            new CustomEvent('saldopro:profile-updated', {
+                detail: {
+                    uid: cred.user.uid,
+                    displayName,
+                },
+            })
+        );
+    }
+
     const idToken = await cred.user.getIdToken();
 
     const response = await fetch(`${BACKEND_URL}/api/data/bootstrap`, {

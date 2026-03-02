@@ -72,7 +72,14 @@ function sleep(ms: number): Promise<void> {
 
 function isExpectedMediaDecryptError(error: unknown): boolean {
   const message = error instanceof Error ? error.message.toLowerCase() : String(error ?? '').toLowerCase();
-  return message.includes('bad decrypt') || message.includes('bad mac');
+  return (
+    message.includes('bad decrypt') ||
+    message.includes('bad mac') ||
+    message.includes('no matching sessions found') ||
+    message.includes('no session') ||
+    message.includes('sessionerror') ||
+    message.includes('prekey')
+  );
 }
 
 function asDisconnectCode(error: unknown): number | null {
@@ -765,11 +772,11 @@ export class WhatsAppClient {
         await this.handleSingleIncomingMessage(message);
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : '';
-        if (errorMsg.includes('Bad MAC')) {
+        if (isExpectedMediaDecryptError(error)) {
           const remoteJid = message.key?.remoteJid ?? 'unknown';
           const messageId = message.key?.id ?? 'unknown';
           await this.registerBadMac(message, errorMsg);
-          logger.warn('Bad MAC decryption error detected; ignoring message without session reset', {
+          logger.warn('Signal decryption error detected; ignoring message while recovery stays in place', {
             slotId: this.slotId,
             remoteJid,
             messageId,
@@ -891,6 +898,8 @@ export class WhatsAppClient {
     // new messages.upsert with the SAME message ID but with actual content.
     // Marking it as processed here would cause the retry to be silently dropped.
     if (!message.message) {
+      await this.registerBadMac(message, 'empty_payload_decrypt_failure');
+      this.tryExtractPhoneFromMessageMeta(message);
       logger.warn('MSG_DECRYPT_FAIL: empty payload (decrypt failure), awaiting Baileys retry', {
         slotId: this.slotId,
         messageId,
