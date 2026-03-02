@@ -7,14 +7,28 @@ exports.tokenizeDocumentSearch = tokenizeDocumentSearch;
 exports.isMeaningfulDocumentLabel = isMeaningfulDocumentLabel;
 const SAVE_KEYWORDS = ['guardar', 'guarda', 'guarde', 'salvar', 'salva', 'salve', 'arquivar', 'arquiva', 'arquive'];
 const FETCH_VERBS = [
+    'me manda de volta',
+    'manda de volta',
+    'me mandar de volta',
+    'mandar de volta',
     'me manda',
+    'me mandar',
     'manda',
+    'mandar',
     'me envia',
+    'me enviar',
     'envia',
+    'enviar',
     'me mostra',
+    'me mostrar',
     'mostra',
+    'mostrar',
+    'me devolve',
+    'devolve',
     'busca',
+    'buscar',
     'procura',
+    'procurar',
     'cade',
     'cade a',
     'onde ta',
@@ -146,6 +160,45 @@ function matchSaveKeywordToken(token) {
         return false;
     return SAVE_KEYWORDS.some((keyword) => isSingleEditOrAdjacentSwap(token, keyword));
 }
+function matchFetchKeywordToken(token, keyword) {
+    if (!token || !keyword)
+        return false;
+    if (token === keyword)
+        return true;
+    if (token.length < 4 || keyword.length < 4)
+        return false;
+    return isSingleEditOrAdjacentSwap(token, keyword);
+}
+function findFetchVerbMatch(normalizedTokens) {
+    const normalizedPhrases = [...FETCH_VERBS]
+        .map((phrase) => ({
+        phrase,
+        tokens: phrase.split(' ')
+    }))
+        .sort((a, b) => b.tokens.length - a.tokens.length);
+    for (const candidate of normalizedPhrases) {
+        const { tokens } = candidate;
+        if (tokens.length === 0 || tokens.length > normalizedTokens.length)
+            continue;
+        for (let startIndex = 0; startIndex <= normalizedTokens.length - tokens.length; startIndex += 1) {
+            let matches = true;
+            for (let tokenIndex = 0; tokenIndex < tokens.length; tokenIndex += 1) {
+                if (!matchFetchKeywordToken(normalizedTokens[startIndex + tokenIndex], tokens[tokenIndex])) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) {
+                return {
+                    phrase: candidate.phrase,
+                    startIndex,
+                    length: tokens.length
+                };
+            }
+        }
+    }
+    return null;
+}
 function stripLeadingLabelFillers(rawTokens) {
     let startIndex = 0;
     while (startIndex < rawTokens.length) {
@@ -179,26 +232,30 @@ function detectDocumentFetchIntent(text) {
     if (!normalized) {
         return { matched: false, query: '' };
     }
-    const hasVerb = FETCH_VERBS.some((verb) => normalized.includes(verb));
-    const hasDocumentNoun = DOCUMENT_NOUNS.some((noun) => new RegExp(`\\b${noun}\\b`).test(normalized));
-    if (!hasVerb || !hasDocumentNoun) {
+    const normalizedTokens = normalized.split(' ').filter(Boolean);
+    const verbMatch = findFetchVerbMatch(normalizedTokens);
+    if (!verbMatch) {
         return { matched: false, query: '' };
     }
-    let query = normalized;
-    for (const verb of [...FETCH_VERBS].sort((a, b) => b.length - a.length)) {
-        query = query.replace(new RegExp(`\\b${verb.replace(/\s+/g, '\\s+')}\\b`, 'g'), ' ');
-    }
-    for (const noun of DOCUMENT_NOUNS) {
-        query = query.replace(new RegExp(`\\b${noun}\\b`, 'g'), ' ');
-    }
-    query = collapseWhitespace(query);
-    const filtered = query
-        .split(' ')
+    const queryTokens = normalizedTokens.filter((_, index) => {
+        if (index >= verbMatch.startIndex && index < verbMatch.startIndex + verbMatch.length) {
+            return false;
+        }
+        return true;
+    });
+    const filtered = queryTokens
         .filter((token) => token && !STOPWORDS.has(token))
+        .filter((token) => !DOCUMENT_NOUNS.includes(token))
         .join(' ');
+    const hasDocumentNoun = DOCUMENT_NOUNS.some((noun) => normalizedTokens.includes(noun));
+    const impliesReturnRequest = normalized.includes('de volta') || normalized.includes('de novo');
+    const query = collapseWhitespace(filtered);
+    if (!query && !hasDocumentNoun && !impliesReturnRequest) {
+        return { matched: false, query: '' };
+    }
     return {
         matched: true,
-        query: collapseWhitespace(filtered)
+        query
     };
 }
 function tokenizeDocumentSearch(text) {

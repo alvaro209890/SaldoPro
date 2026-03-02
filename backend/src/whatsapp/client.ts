@@ -151,6 +151,15 @@ function isUndoMessage(text: string): boolean {
   return UNDO_KEYWORDS.some((kw) => normalized.includes(kw));
 }
 
+function buildDocumentSavedReply(title: string): string {
+  return [
+    `Arquivo salvo como "${title}".`,
+    '',
+    `Para pedir depois, voce pode enviar: "me manda ${title}".`,
+    `Tambem funciona: "manda de volta ${title}".`
+  ].join('\n');
+}
+
 interface ConversationEntry {
   role: 'user' | 'assistant';
   content: string;
@@ -178,7 +187,7 @@ const DOCUMENT_RECENCY_BONUS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const DOCUMENT_UNSUPPORTED_MEDIA_REPLY =
   'Por enquanto so consigo guardar imagens. PDF e outros tipos ainda nao estao disponiveis.';
 const DOCUMENT_PENDING_PROMPT_REPLY =
-  'Recebi a imagem. Qual nome ou descricao voce quer usar para salvar?';
+  'Recebi a imagem. Qual nome ou descricao voce quer usar para salvar? Exemplo: logo da empresa ou contrato aluguel.';
 const DOCUMENT_PENDING_CANCELLED_REPLY = 'Salvamento cancelado.';
 const DOCUMENT_SAVE_ERROR_REPLY =
   'Nao consegui concluir essa operacao com arquivos agora. Tente novamente em instantes.';
@@ -198,8 +207,8 @@ const USER_DEBOUNCE_MS = 1800;
 /** If the same JID hits repeated Bad MAC in a short window, perform a soft reconnect. */
 const BAD_MAC_WINDOW_MS = 2 * 60 * 1000;
 const BAD_MAC_RECONNECT_THRESHOLD = 3;
-/** After this many soft reconnects without success, escalate to full session reset. */
-const BAD_MAC_HARD_RESET_AFTER = 3;
+/** After this many soft reconnects, restart the cycle but preserve auth state. */
+const BAD_MAC_RECONNECT_CYCLE_AFTER = 3;
 /** How long to keep unresolvable-LID messages buffered before discarding. */
 const LID_BUFFER_TTL_MS = 120_000;
 const LID_BUFFER_MAX_PER_JID = 15;
@@ -509,6 +518,10 @@ export class WhatsAppClient {
     socket.ev.on('creds.update', () => {
       if (this.connectionEpoch !== epoch) return;
       void saveCreds();
+      if (this.lastAuthSyncAt === 0 || this.lastAuthSnapshotHash === null) {
+        this.scheduleAuthStateSync(true);
+        return;
+      }
       this.scheduleAuthStateSync();
     });
     socket.ev.on('connection.update', (update) => {
@@ -616,6 +629,7 @@ export class WhatsAppClient {
       this.badMacByJid.clear();
       this.softReconnectCount = 0;
       this.clearQr();
+      void this.syncAuthStateNow(true);
       this.scheduleAuthStateSync();
 
       // Log the bot's own LID for debugging self-chat detection
@@ -1567,7 +1581,7 @@ export class WhatsAppClient {
       ownerUid,
       remoteJid,
       remotePhone,
-      `Arquivo salvo como "${title}".`,
+      buildDocumentSavedReply(title),
       `[Arquivo salvo] ${title}`
     );
   }
@@ -1608,7 +1622,7 @@ export class WhatsAppClient {
       ownerUid,
       remoteJid,
       remotePhone,
-      `Arquivo salvo como "${title}".`,
+      buildDocumentSavedReply(title),
       `[Arquivo salvo] ${title}`
     );
   }
@@ -1658,8 +1672,17 @@ export class WhatsAppClient {
     remotePhone: string,
     query: string
   ): Promise<void> {
+    logger.info('DOC_FETCH_START', {
+      uid: ownerUid,
+      phone: remotePhone,
+      query
+    });
     const documents = await listRecentUserDocuments(ownerUid, DOCUMENT_RECENT_LIMIT);
     if (documents.length === 0) {
+      logger.info('DOC_FETCH_NONE: user has no saved documents', {
+        uid: ownerUid,
+        phone: remotePhone
+      });
       await this.sendDocumentTextReply(
         ownerUid,
         remoteJid,
@@ -1684,6 +1707,12 @@ export class WhatsAppClient {
       const diffToSecond = top ? top.score - (second?.score ?? 0) : 0;
 
       if (!top || top.score < DOCUMENT_AMBIGUOUS_MIN_SCORE) {
+        logger.info('DOC_FETCH_NONE: no document reached minimum score', {
+          uid: ownerUid,
+          phone: remotePhone,
+          query,
+          topScore: top?.score ?? null
+        });
         await this.sendDocumentTextReply(
           ownerUid,
           remoteJid,
@@ -1703,6 +1732,11 @@ export class WhatsAppClient {
     }
 
     if (!shouldSendDirect && candidates.length === 0) {
+      logger.info('DOC_FETCH_NONE: no candidates after ranking', {
+        uid: ownerUid,
+        phone: remotePhone,
+        query
+      });
       await this.sendDocumentTextReply(
         ownerUid,
         remoteJid,
@@ -1718,6 +1752,12 @@ export class WhatsAppClient {
         .slice(0, 3)
         .map((entry, index) => `${index + 1}) "${entry.document.title}"`)
         .join(' ');
+      logger.info('DOC_FETCH_AMBIGUOUS', {
+        uid: ownerUid,
+        phone: remotePhone,
+        query,
+        candidates: candidates.map((entry) => ({ title: entry.document.title, score: entry.score }))
+      });
       await this.sendDocumentTextReply(
         ownerUid,
         remoteJid,
@@ -1730,6 +1770,11 @@ export class WhatsAppClient {
 
     const selected = candidates[0]?.document;
     if (!selected) {
+      logger.info('DOC_FETCH_NONE: selected document missing after candidate selection', {
+        uid: ownerUid,
+        phone: remotePhone,
+        query
+      });
       await this.sendDocumentTextReply(
         ownerUid,
         remoteJid,
@@ -1741,6 +1786,14 @@ export class WhatsAppClient {
     }
 
     const signedUrl = await createSignedDocumentUrl(selected.storagePath);
+    logger.info('DOC_FETCH_MATCH', {
+      uid: ownerUid,
+      phone: remotePhone,
+      query,
+      documentId: selected.id,
+      title: selected.title,
+      storagePath: selected.storagePath
+    });
     try {
       await touchUserDocumentAccess(ownerUid, selected.id);
     } catch (error) {
@@ -1753,6 +1806,12 @@ export class WhatsAppClient {
 
     const reply = `Aqui está: "${selected.title}".`;
     await this.sendWithRetry(remoteJid, reply, 'auto_reply', ownerUid, { image: { url: signedUrl } });
+    logger.info('DOC_FETCH_SEND_SUCCESS', {
+      uid: ownerUid,
+      phone: remotePhone,
+      documentId: selected.id,
+      title: selected.title
+    });
     await this.appendConversationMessage(ownerUid, remotePhone, {
       role: 'user',
       content: `[Arquivo solicitado] ${query || selected.title}`
@@ -2284,7 +2343,7 @@ export class WhatsAppClient {
       count,
       threshold: BAD_MAC_RECONNECT_THRESHOLD,
       softReconnectCount: this.softReconnectCount,
-      hardResetAfter: BAD_MAC_HARD_RESET_AFTER,
+      reconnectCycleAfter: BAD_MAC_RECONNECT_CYCLE_AFTER,
       errorMessage
     });
 
@@ -2295,15 +2354,15 @@ export class WhatsAppClient {
     this.badMacByJid.set(remoteJid, { count: 0, lastAt: now });
     await this.clearSignalSessionsAfterBadMac(message);
 
-    // Escalate: if soft reconnects haven't fixed it, do a FULL session reset
-    if (this.softReconnectCount >= BAD_MAC_HARD_RESET_AFTER) {
-      logger.error('BAD_MAC_ESCALATION: soft reconnects failed, performing full session recovery', {
+    // Repeated decrypt failures should not wipe the linked-device auth state.
+    if (this.softReconnectCount >= BAD_MAC_RECONNECT_CYCLE_AFTER) {
+      logger.error('BAD_MAC_ESCALATION: repeated decrypt failures detected, preserving auth and recycling socket', {
         slotId: this.slotId,
         remoteJid,
         softReconnectCount: this.softReconnectCount
       });
       this.softReconnectCount = 0;
-      void this.recoverFromInvalidSession();
+      this.triggerSoftReconnectAfterBadMac(remoteJid);
       return;
     }
 
