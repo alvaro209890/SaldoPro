@@ -1,3 +1,5 @@
+import type { UserDocument } from '../lib/firestore';
+
 const SAVE_KEYWORDS = ['guardar', 'guarda', 'guarde', 'salvar', 'salva', 'salve', 'arquivar', 'arquiva', 'arquive'];
 const FETCH_VERBS = [
   'me manda de volta',
@@ -301,4 +303,50 @@ export function isMeaningfulDocumentLabel(text: string): boolean {
   }
 
   return tokenizeDocumentSearch(text).length > 0;
+}
+
+export interface RankedDocumentMatch {
+  document: UserDocument;
+  score: number;
+}
+
+const DOCUMENT_RECENCY_BONUS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function scoreRecentDocuments(documents: UserDocument[], query: string): RankedDocumentMatch[] {
+  const normalizedQuery = normalizeDocumentText(query);
+  const queryTokens = [...new Set(tokenizeDocumentSearch(query))];
+  const now = Date.now();
+
+  return documents
+    .map((document) => {
+      let score = 0;
+      const normalizedTitle = document.normalizedTitle;
+      const normalizedDescription = document.normalizedDescription ?? '';
+      const tokenSet = new Set(document.searchTokens);
+
+      if (normalizedQuery) {
+        if (normalizedTitle === normalizedQuery) {
+          score += 100;
+        } else if (normalizedTitle.includes(normalizedQuery)) {
+          score += 60;
+        }
+      }
+
+      for (const token of queryTokens) {
+        if (normalizedTitle.includes(token)) score += 25;
+        if (normalizedDescription.includes(token)) score += 15;
+        if (tokenSet.has(token)) score += 10;
+      }
+
+      const createdAt = Date.parse(document.createdAt);
+      if (Number.isFinite(createdAt) && now - createdAt <= DOCUMENT_RECENCY_BONUS_WINDOW_MS) {
+        score += 10;
+      }
+
+      return { document, score };
+    })
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return b.document.createdAt.localeCompare(a.document.createdAt);
+    });
 }

@@ -63,7 +63,9 @@ import {
   detectDocumentSaveIntent,
   isMeaningfulDocumentLabel,
   normalizeDocumentText,
-  tokenizeDocumentSearch
+  tokenizeDocumentSearch,
+  scoreRecentDocuments,
+  type RankedDocumentMatch
 } from './document-intents';
 
 function sleep(ms: number): Promise<void> {
@@ -170,11 +172,6 @@ interface MessageKeyWithLid extends proto.IMessageKey {
   participantLid?: string | null;
   participantPn?: string | null;
   remoteJidAlt?: string | null;
-}
-
-interface RankedDocumentMatch {
-  document: UserDocument;
-  score: number;
 }
 
 const IMAGE_ONLY_FALLBACK_TEXT = 'Analise a imagem enviada e registre o lancamento corretamente.';
@@ -1627,45 +1624,6 @@ export class WhatsAppClient {
     );
   }
 
-  private scoreRecentDocuments(documents: UserDocument[], query: string): RankedDocumentMatch[] {
-    const normalizedQuery = normalizeDocumentText(query);
-    const queryTokens = [...new Set(tokenizeDocumentSearch(query))];
-    const now = Date.now();
-
-    return documents
-      .map((document) => {
-        let score = 0;
-        const normalizedTitle = document.normalizedTitle;
-        const normalizedDescription = document.normalizedDescription ?? '';
-        const tokenSet = new Set(document.searchTokens);
-
-        if (normalizedQuery) {
-          if (normalizedTitle === normalizedQuery) {
-            score += 100;
-          } else if (normalizedTitle.includes(normalizedQuery)) {
-            score += 60;
-          }
-        }
-
-        for (const token of queryTokens) {
-          if (normalizedTitle.includes(token)) score += 25;
-          if (normalizedDescription.includes(token)) score += 15;
-          if (tokenSet.has(token)) score += 10;
-        }
-
-        const createdAt = Date.parse(document.createdAt);
-        if (Number.isFinite(createdAt) && now - createdAt <= DOCUMENT_RECENCY_BONUS_WINDOW_MS) {
-          score += 10;
-        }
-
-        return { document, score };
-      })
-      .sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
-        return b.document.createdAt.localeCompare(a.document.createdAt);
-      });
-  }
-
   private async handleDocumentFetchRequest(
     ownerUid: string,
     remoteJid: string,
@@ -1701,7 +1659,7 @@ export class WhatsAppClient {
       candidates = documents.map((document) => ({ document, score: 0 }));
       shouldSendDirect = documents.length === 1;
     } else {
-      const ranked = this.scoreRecentDocuments(documents, query);
+      const ranked = scoreRecentDocuments(documents, query);
       const top = ranked[0];
       const second = ranked[1];
       const diffToSecond = top ? top.score - (second?.score ?? 0) : 0;
