@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { logger } from './logger';
+import { compressPdfBufferToFit } from './pdf-compression';
 import { supabaseAdmin } from './supabase';
 
 const DOCUMENT_BUCKET_NAME = 'user-documents';
 const SIGNED_URL_TTL_SECONDS = 5 * 60;
+export const MAX_STORED_DOCUMENT_BYTES = 10 * 1024 * 1024;
+export const MAX_SOURCE_PDF_BYTES_FOR_COMPRESSION = 25 * 1024 * 1024;
 
 interface ParsedImageDataUrl {
   mimeType: string;
@@ -53,6 +56,16 @@ export interface DocumentStorageUsageSummary {
   unassignedBytes: number;
   unassignedObjects: number;
   users: UserDocumentStorageUsage[];
+}
+
+export class DocumentUploadUserError extends Error {
+  readonly userMessage: string;
+
+  constructor(message: string, userMessage: string) {
+    super(message);
+    this.name = 'DocumentUploadUserError';
+    this.userMessage = userMessage;
+  }
 }
 
 const STORAGE_LIST_PAGE_SIZE = 100;
@@ -266,13 +279,46 @@ export async function uploadPendingDocument(
   imageDataUrl: string
 ): Promise<PendingDocumentUpload> {
   const { mimeType, buffer } = parseImageDataUrl(imageDataUrl);
+  let uploadBuffer = buffer;
+
+  if (mimeType === 'application/pdf' && uploadBuffer.length > MAX_STORED_DOCUMENT_BYTES) {
+    if (uploadBuffer.length > MAX_SOURCE_PDF_BYTES_FOR_COMPRESSION) {
+      throw new DocumentUploadUserError(
+        `uploadPendingDocument: PDF source exceeds compression limit (${uploadBuffer.length} bytes)`,
+        'Recebi o PDF, mas ele esta grande demais para eu reduzir aqui. Envie um PDF menor ou dividido em partes.'
+      );
+    }
+
+    const compressed = await compressPdfBufferToFit(uploadBuffer, MAX_STORED_DOCUMENT_BYTES);
+    if (!compressed) {
+      throw new DocumentUploadUserError(
+        `uploadPendingDocument: could not reduce PDF to ${MAX_STORED_DOCUMENT_BYTES} bytes`,
+        'Recebi o PDF, mas nao consegui reduzir para menos de 10 MB. Tente um PDF menor ou dividido em partes.'
+      );
+    }
+
+    logger.info('Compressed inbound PDF before storage', {
+      uid,
+      originalBytes: uploadBuffer.length,
+      compressedBytes: compressed.length
+    });
+    uploadBuffer = compressed;
+  }
+
+  if (uploadBuffer.length > MAX_STORED_DOCUMENT_BYTES) {
+    throw new DocumentUploadUserError(
+      `uploadPendingDocument: file exceeds storage limit (${uploadBuffer.length} bytes)`,
+      'Recebi o arquivo, mas ele precisa ter ate 10 MB para ser salvo aqui.'
+    );
+  }
+
   const draftId = randomUUID();
   const extension = extensionFromMimeType(mimeType);
   const storagePath = `pending/${uid}/${draftId}.${extension}`;
 
   const { error } = await supabaseAdmin.storage
     .from(DOCUMENT_BUCKET_NAME)
-    .upload(storagePath, buffer, {
+    .upload(storagePath, uploadBuffer, {
       contentType: mimeType,
       upsert: false
     });
@@ -290,7 +336,7 @@ export async function uploadPendingDocument(
     draftId,
     storagePath,
     mimeType,
-    sizeBytes: buffer.length
+    sizeBytes: uploadBuffer.length
   };
 }
 

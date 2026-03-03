@@ -14,8 +14,11 @@ import qrcodeTerminal from 'qrcode-terminal';
 import { handleReminderShortcut, processWhatsAppAIMessage, undoLastAction } from '../ai/assistant';
 import {
   createSignedDocumentUrl,
+  DocumentUploadUserError,
   deleteStoredDocument,
   finalizePendingDocumentMove,
+  MAX_SOURCE_PDF_BYTES_FOR_COMPRESSION,
+  MAX_STORED_DOCUMENT_BYTES,
   uploadPendingDocument
 } from '../lib/document-storage';
 import { isFirebaseUserActive } from '../lib/firebase-user-access';
@@ -178,16 +181,16 @@ function isUndoMessage(text: string): boolean {
 
 function buildDocumentSavedReply(title: string): string {
   return [
-    `Imagem salva com sucesso como "${title}".`,
+    `Arquivo salvo com sucesso como "${title}".`,
     '',
-    `Quando quiser receber de volta, voce pode enviar: "me manda a imagem ${title}".`,
+    `Quando quiser receber de volta, voce pode enviar: "me manda o arquivo ${title}".`,
     `Tambem funciona: "procura ${title}" ou "manda de volta ${title}".`
   ].join('\n');
 }
 
 function buildDocumentFetchReply(title: string): string {
   return [
-    `Encontrei a imagem "${title}" e estou te enviando agora.`,
+    `Encontrei o arquivo "${title}" e estou te enviando agora.`,
     'Se quiser outra, me diga uma parte do nome ou da descricao.'
   ].join('\n');
 }
@@ -228,6 +231,8 @@ const DOCUMENT_PENDING_PROMPT_REPLY =
   'Recebi o arquivo. Me diga o titulo que voce quer usar para salvar. Exemplo: "comprovante de luz". Se quiser, voce tambem pode mandar: "comprovante de luz descricao conta de marco".';
 const DOCUMENT_PENDING_PROMPT_FILE_REPLY =
   'Recebi o arquivo. Me diga o titulo que voce quer usar para salvar. Exemplo: "contrato de aluguel" ou "nota fiscal marco".';
+const DOCUMENT_PENDING_CONFIRM_FILE_REPLY =
+  'Recebi o arquivo e a legenda, mas ela nao deixou claro se voce quer salvar. Se quiser guardar, me diga o titulo que devo usar. Exemplo: "contrato de aluguel".';
 const DOCUMENT_PENDING_CANCELLED_REPLY = 'Salvamento cancelado.';
 const DOCUMENT_SAVE_ERROR_REPLY =
   'Nao consegui concluir essa operacao com arquivos agora. Tente novamente em instantes.';
@@ -1211,7 +1216,10 @@ export class WhatsAppClient {
           phone: remotePhone,
           error: documentFlowError instanceof Error ? documentFlowError.message : 'unknown'
         });
-        await this.sendWithRetry(remoteJid, DOCUMENT_SAVE_ERROR_REPLY, 'auto_reply', ownerUid);
+        const replyText = documentFlowError instanceof DocumentUploadUserError
+          ? documentFlowError.userMessage
+          : DOCUMENT_SAVE_ERROR_REPLY;
+        await this.sendWithRetry(remoteJid, replyText, 'auto_reply', ownerUid);
         return;
       }
     }
@@ -1344,7 +1352,7 @@ export class WhatsAppClient {
     const activeDraft = await this.getUsablePendingDocumentDraft(ownerUid, remotePhone);
     const saveIntent = detectDocumentSaveIntent(inboundText);
 
-    // --- PDF/ZIP document upload: caption becomes the title; without caption, ask for one ---
+    // --- PDF/ZIP document upload: only save immediately when the caption clearly asks to save and includes a usable title ---
     if (documentDataUrl) {
       if (activeDraft) {
         await this.clearPendingDocumentDraft(activeDraft);
@@ -1353,9 +1361,17 @@ export class WhatsAppClient {
       const labelCandidate = saveIntent.matched ? saveIntent.labelCandidate : '';
       const captionText = inboundText.trim();
 
-      if (captionText) {
-        const titleSource = isMeaningfulDocumentLabel(labelCandidate) ? labelCandidate : captionText;
-        const title = await this.saveReadyDocumentFromImage(ownerUid, documentDataUrl, titleSource);
+      if (!captionText) {
+        await this.createPendingDocumentDraftFromDataUrl(ownerUid, remotePhone, documentDataUrl);
+        await this.sendDocumentTextReply(
+          ownerUid,
+          remoteJid,
+          remotePhone,
+          DOCUMENT_PENDING_PROMPT_FILE_REPLY,
+          '[Arquivo pendente] aguardando nome'
+        );
+      } else if (saveIntent.matched && isMeaningfulDocumentLabel(labelCandidate)) {
+        const title = await this.saveReadyDocumentFromDataUrl(ownerUid, documentDataUrl, labelCandidate);
         await this.sendDocumentTextReply(
           ownerUid,
           remoteJid,
@@ -1364,34 +1380,12 @@ export class WhatsAppClient {
           `[Arquivo salvo] ${title}`
         );
       } else {
-        // No caption → create pending draft and ask for title
-        const upload = await uploadPendingDocument(ownerUid, documentDataUrl);
-        try {
-          await createPendingWhatsAppDocumentDraft(ownerUid, remotePhone, {
-            id: upload.draftId,
-            storagePath: upload.storagePath,
-            mimeType: upload.mimeType,
-            sizeBytes: upload.sizeBytes,
-            expiresAt: new Date(Date.now() + DOCUMENT_PENDING_TTL_MS).toISOString(),
-            pendingReason: 'missing_title'
-          });
-        } catch (error) {
-          try {
-            await deleteStoredDocument(upload.storagePath);
-          } catch (cleanupError) {
-            logger.warn('DOC_FILE_PENDING_CLEANUP_FAIL: failed to cleanup pending upload after DB error', {
-              storagePath: upload.storagePath,
-              error: cleanupError instanceof Error ? cleanupError.message : 'unknown'
-            });
-          }
-          throw error;
-        }
-
+        await this.createPendingDocumentDraftFromDataUrl(ownerUid, remotePhone, documentDataUrl);
         await this.sendDocumentTextReply(
           ownerUid,
           remoteJid,
           remotePhone,
-          DOCUMENT_PENDING_PROMPT_FILE_REPLY,
+          saveIntent.matched ? DOCUMENT_PENDING_PROMPT_FILE_REPLY : DOCUMENT_PENDING_CONFIRM_FILE_REPLY,
           '[Arquivo pendente] aguardando nome'
         );
       }
@@ -1514,9 +1508,9 @@ export class WhatsAppClient {
     };
   }
 
-  private async saveReadyDocumentFromImage(
+  private async saveReadyDocumentFromDataUrl(
     ownerUid: string,
-    imageDataUrl: string,
+    fileDataUrl: string,
     labelSource: string
   ): Promise<string> {
     const metadata = this.buildDocumentMetadata(labelSource);
@@ -1524,7 +1518,7 @@ export class WhatsAppClient {
       uid: ownerUid,
       title: metadata.title
     });
-    const upload = await uploadPendingDocument(ownerUid, imageDataUrl);
+    const upload = await uploadPendingDocument(ownerUid, fileDataUrl);
     const documentId = randomUUID();
     let currentStoragePath = upload.storagePath;
 
@@ -1557,6 +1551,35 @@ export class WhatsAppClient {
       } catch (cleanupError) {
         logger.warn('DOC_SAVE_CLEANUP_FAIL: failed to cleanup storage after save error', {
           storagePath: currentStoragePath,
+          error: cleanupError instanceof Error ? cleanupError.message : 'unknown'
+        });
+      }
+      throw error;
+    }
+  }
+
+  private async createPendingDocumentDraftFromDataUrl(
+    ownerUid: string,
+    remotePhone: string,
+    fileDataUrl: string
+  ): Promise<void> {
+    const upload = await uploadPendingDocument(ownerUid, fileDataUrl);
+
+    try {
+      await createPendingWhatsAppDocumentDraft(ownerUid, remotePhone, {
+        id: upload.draftId,
+        storagePath: upload.storagePath,
+        mimeType: upload.mimeType,
+        sizeBytes: upload.sizeBytes,
+        expiresAt: new Date(Date.now() + DOCUMENT_PENDING_TTL_MS).toISOString(),
+        pendingReason: 'missing_title'
+      });
+    } catch (error) {
+      try {
+        await deleteStoredDocument(upload.storagePath);
+      } catch (cleanupError) {
+        logger.warn('DOC_PENDING_CREATE_CLEANUP_FAIL: failed to cleanup pending upload after DB error', {
+          storagePath: upload.storagePath,
           error: cleanupError instanceof Error ? cleanupError.message : 'unknown'
         });
       }
@@ -1663,28 +1686,7 @@ export class WhatsAppClient {
     }
 
     if (!isMeaningfulDocumentLabel(labelCandidate)) {
-      const upload = await uploadPendingDocument(ownerUid, imageDataUrl);
-
-      try {
-        await createPendingWhatsAppDocumentDraft(ownerUid, remotePhone, {
-          id: upload.draftId,
-          storagePath: upload.storagePath,
-          mimeType: upload.mimeType,
-          sizeBytes: upload.sizeBytes,
-          expiresAt: new Date(Date.now() + DOCUMENT_PENDING_TTL_MS).toISOString(),
-          pendingReason: 'missing_title'
-        });
-      } catch (error) {
-        try {
-          await deleteStoredDocument(upload.storagePath);
-        } catch (cleanupError) {
-          logger.warn('DOC_PENDING_CREATE_CLEANUP_FAIL: failed to cleanup pending upload after DB error', {
-            storagePath: upload.storagePath,
-            error: cleanupError instanceof Error ? cleanupError.message : 'unknown'
-          });
-        }
-        throw error;
-      }
+      await this.createPendingDocumentDraftFromDataUrl(ownerUid, remotePhone, imageDataUrl);
 
       await this.sendDocumentTextReply(
         ownerUid,
@@ -1696,7 +1698,7 @@ export class WhatsAppClient {
       return;
     }
 
-    const title = await this.saveReadyDocumentFromImage(ownerUid, imageDataUrl, labelCandidate);
+    const title = await this.saveReadyDocumentFromDataUrl(ownerUid, imageDataUrl, labelCandidate);
     await this.sendDocumentTextReply(
       ownerUid,
       remoteJid,
@@ -3086,12 +3088,16 @@ export class WhatsAppClient {
         return null;
       }
 
-      // Max 10MB for documents
-      const maxDocBytes = 10 * 1024 * 1024;
+      // PDFs can arrive larger and be recompressed during storage; ZIP and other files stay capped at 10 MB.
+      const maxDocBytes = mimeType === 'application/pdf'
+        ? MAX_SOURCE_PDF_BYTES_FOR_COMPRESSION
+        : MAX_STORED_DOCUMENT_BYTES;
       if (mediaBuffer.length > maxDocBytes) {
         logger.warn('DOC_EXTRACT_FAIL: exceeds max size', {
           size: mediaBuffer.length,
-          maxAllowed: maxDocBytes
+          maxAllowed: maxDocBytes,
+          mimeType,
+          fileName: fileName ?? 'document'
         });
         return null;
       }

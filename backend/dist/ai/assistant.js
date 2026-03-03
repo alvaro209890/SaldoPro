@@ -1117,6 +1117,7 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
     let recentReminders;
     let settings;
     let profile;
+    const userGoals = await (0, firestore_1.getUserGoals)(uid);
     if (cached) {
         logger_1.logger.info('Using cached financial context', { uid });
         ({ categories, recentTransactions, recentReminders, settings, profile } = cached);
@@ -1149,6 +1150,7 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
         categories,
         recentTransactions,
         recentReminders,
+        userGoals,
         isFirstMessage: Boolean(options.isFirstMessage),
         isGreeting: Boolean(options.isGreeting),
         isCapabilitiesQuestion: Boolean(options.isCapabilitiesQuestion),

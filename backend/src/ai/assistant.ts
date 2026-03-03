@@ -12,6 +12,7 @@ import {
   getUserCategories,
   getUserProfile,
   getUserSettings,
+  getUserGoals,
   restoreUserTransaction,
   updateUserTransaction,
   addRecurringTransaction as addRecurringTransactionDb,
@@ -21,6 +22,7 @@ import {
   type CreateTransactionInput,
   type CreateRecurringTransactionInput,
   type UserCategory,
+  type UserGoal,
   type UserProfileBackend,
   type UserReminder,
   type UserSettingsBackend,
@@ -1495,6 +1497,7 @@ export async function processWhatsAppAIMessage(
   let recentReminders: UserReminder[];
   let settings: UserSettingsBackend;
   let profile: UserProfileBackend;
+  const userGoals: UserGoal[] = await getUserGoals(uid);
 
   if (cached) {
     logger.info('Using cached financial context', { uid });
@@ -1528,6 +1531,7 @@ export async function processWhatsAppAIMessage(
     categories,
     recentTransactions,
     recentReminders,
+    userGoals,
     isFirstMessage: Boolean(options.isFirstMessage),
     isGreeting: Boolean(options.isGreeting),
     isCapabilitiesQuestion: Boolean(options.isCapabilitiesQuestion),

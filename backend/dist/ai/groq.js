@@ -66,6 +66,32 @@ function buildFinancialSummary(transactions, settings, categories) {
     }
     return lines.join('\n');
 }
+function buildGoalsSummary(goals, currency) {
+    if (goals.length === 0) {
+        return 'O usuario ainda nao possui metas criadas no dashboard.';
+    }
+    const activeGoals = goals.filter((goal) => goal.status === 'active');
+    const completedGoals = goals.filter((goal) => goal.status === 'completed');
+    const cancelledGoals = goals.filter((goal) => goal.status === 'cancelled');
+    const lines = [
+        `🎯 *Metas:* ${goals.length} total`,
+        `- Ativas: ${activeGoals.length}`,
+        `- Concluidas: ${completedGoals.length}`,
+        `- Canceladas: ${cancelledGoals.length}`
+    ];
+    const focusGoals = [...activeGoals, ...completedGoals].slice(0, 6);
+    if (focusGoals.length > 0) {
+        lines.push('', 'Resumo de andamento:');
+        for (const goal of focusGoals) {
+            const progressLabel = typeof goal.targetAmount === 'number' && goal.targetAmount > 0
+                ? `${formatCurrency(goal.currentAmount, currency)} de ${formatCurrency(goal.targetAmount, currency)} (${Math.min(100, (goal.currentAmount / goal.targetAmount) * 100).toFixed(0)}%)`
+                : `${formatCurrency(goal.currentAmount, currency)} acumulado`;
+            const deadlineLabel = goal.deadline ? `, prazo ${goal.deadline}` : '';
+            lines.push(`- "${goal.title}" | status: ${goal.status} | prioridade: ${goal.priority} | progresso: ${progressLabel}${deadlineLabel}`);
+        }
+    }
+    return lines.join('\n');
+}
 /** Max transactions to embed in the system prompt (keeps token usage reasonable). */
 const PROMPT_TX_LIMIT = 15;
 /**
@@ -106,7 +132,7 @@ function isQueryOnlyIntent(messages, context) {
         return false;
     }
     // Explicit query patterns → compact prompt
-    if (/\b(quanto|qual|quais|como|onde|quando|quem|porque|por ?que|mostr|resum|saldo|total|relat|analise|dica|conselho|sugest|explica|ajuda|me fala|me diz|me conta)\b/.test(text)) {
+    if (/\b(quanto|qual|quais|como|onde|quando|quem|porque|por ?que|mostr|resum|saldo|total|relat|analise|dica|conselho|sugest|explica|ajuda|me fala|me diz|me conta|meta|metas|objetivo|objetivos|andamento|progresso|prioridade)\b/.test(text)) {
         return true;
     }
     // Short messages without numbers are likely conversational
@@ -139,10 +165,12 @@ function getCurrentBrasiliaPromptContext() {
  */
 function buildCompactSystemPrompt(context) {
     const { profile, settings, categories, recentTransactions } = context;
+    const userGoals = Array.isArray(context.userGoals) ? context.userGoals : [];
     const userName = profile.displayName?.split(' ')[0] || '';
     const userInfo = userName ? `Nome do usuario: ${userName}.` : '';
     const { today, currentTime, currentDateTime } = getCurrentBrasiliaPromptContext();
     const financialSummary = buildFinancialSummary(recentTransactions, settings, categories);
+    const goalsSummary = buildGoalsSummary(userGoals, settings.currency);
     const categoryNames = categories.map((c) => c.name).join(', ');
     return `Voce e o SaldoPro, assistente financeiro pessoal via WhatsApp.
 ${userInfo}
@@ -150,12 +178,17 @@ ${userInfo}
 Responda a pergunta ou duvida do usuario com base no contexto financeiro abaixo.
 Seja natural, objetivo e util. Nao inclua IDs tecnicos.
 Se o usuario pedir um resumo ou relatorio de seus gastos/ganhos, use os totais por categoria listados no contexto abaixo para fornecer uma quebra detalhada e precisa.
+Se o usuario perguntar sobre metas, objetivos, andamento, progresso, prioridades ou quanto falta para atingir algo, use as metas reais abaixo.
+Com base nelas, voce pode explicar andamento, mostrar quanto ja foi acumulado, dizer quanto falta para bater a meta, sugerir proximos passos praticos e destacar prioridade e prazo.
+Se nao houver metas, diga isso claramente e sugira criar metas no dashboard.
 IMPORTANTE: Se o usuario perguntar se voce pode ver/ler imagens, fotos, recibos ou audios, diga que SIM! Voce tem recursos visuais e de audio integrados no WhatsApp.
 Se o usuario perguntar que horas sao, use EXATAMENTE a hora atual fornecida abaixo no contexto. Nao invente horario e nunca assuma 00:00 so porque recebeu uma data.
 Se o usuario pedir o link do painel, site, dashboard ou app, forneca EXATAMENTE este link: ${env_1.env.appPanelUrl}
 
 
 ${financialSummary}
+
+${goalsSummary}
 
 Categorias: ${categoryNames || '(nenhuma)'}
 Data de hoje (Brasilia): ${today}
@@ -170,6 +203,7 @@ FORMATO: Retorne SEMPRE um JSON valido com exatamente duas chaves:
 function buildSystemPrompt(context) {
     const { profile, settings, categories, recentTransactions } = context;
     const recentReminders = Array.isArray(context.recentReminders) ? context.recentReminders : [];
+    const userGoals = Array.isArray(context.userGoals) ? context.userGoals : [];
     const userName = profile.displayName?.split(' ')[0] || '';
     const userInfo = userName ? `Nome do usuario: ${userName}.` : 'Nome do usuario: nao informado.';
     const lightweight = isLightweightContext(context);
@@ -189,9 +223,13 @@ function buildSystemPrompt(context) {
     if (lightweight) {
         // For greetings / capability questions: only include a brief summary, no tx list
         const financialSummary = buildFinancialSummary(recentTransactions, settings, categories);
+        const goalsSummary = buildGoalsSummary(userGoals, settings.currency);
         const categoryNames = categories.map((c) => c.name).join(', ');
         financialContextBlock = `CONTEXTO FINANCEIRO (resumido)
 ${financialSummary}
+
+Metas do usuario (referencia real para dicas, progresso e orientacoes):
+${goalsSummary}
 
 Categorias disponiveis: ${categoryNames || '(nenhuma)'}
 
@@ -204,6 +242,7 @@ ${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.bu
     else {
         // Full context: categories with IDs + recent transactions for edit/delete operations
         const financialSummary = buildFinancialSummary(recentTransactions, settings, categories);
+        const goalsSummary = buildGoalsSummary(userGoals, settings.currency);
         const categoriesList = categories
             .map((c) => `- ID: "${c.id}", Nome: "${c.name}", Tipo: ${c.type}`)
             .join('\n');
@@ -230,6 +269,9 @@ Se o usuario pedir um resumo ou relatorio, use os totais por categoria abaixo pa
 
 ${financialSummary}
 
+Metas do usuario (referencia real para dicas, progresso e orientacoes):
+${goalsSummary}
+
 Categorias disponiveis:
 ${categoriesList || '(nenhuma categoria cadastrada)'}
 
@@ -252,6 +294,9 @@ OBJETIVO
 - Resolver o pedido atual do usuario com objetividade.
 - Priorizar financas pessoais: lancamentos, analise de gastos, orcamento e orientacoes praticas.
 - Quando o assunto for financeiro, usar o contexto real e executar a acao correta.
+- Quando o usuario perguntar sobre metas e objetivos, use as metas reais do dashboard fornecidas no contexto.
+- Voce pode comentar progresso, prioridade, prazo, quanto falta e sugerir proximos passos concretos.
+- Nao invente metas e nao diga que nao tem acesso, a menos que a lista de metas esteja realmente vazia.
 
 IDENTIDADE FINANCEIRA
 - Voce deve se posicionar como assistente financeiro.

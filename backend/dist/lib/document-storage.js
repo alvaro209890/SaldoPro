@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.DocumentUploadUserError = exports.MAX_SOURCE_PDF_BYTES_FOR_COMPRESSION = exports.MAX_STORED_DOCUMENT_BYTES = void 0;
 exports.getDocumentStorageUsageSummary = getDocumentStorageUsageSummary;
 exports.uploadPendingDocument = uploadPendingDocument;
 exports.finalizePendingDocumentMove = finalizePendingDocumentMove;
@@ -7,9 +8,21 @@ exports.deleteStoredDocument = deleteStoredDocument;
 exports.createSignedDocumentUrl = createSignedDocumentUrl;
 const node_crypto_1 = require("node:crypto");
 const logger_1 = require("./logger");
+const pdf_compression_1 = require("./pdf-compression");
 const supabase_1 = require("./supabase");
 const DOCUMENT_BUCKET_NAME = 'user-documents';
 const SIGNED_URL_TTL_SECONDS = 5 * 60;
+exports.MAX_STORED_DOCUMENT_BYTES = 10 * 1024 * 1024;
+exports.MAX_SOURCE_PDF_BYTES_FOR_COMPRESSION = 25 * 1024 * 1024;
+class DocumentUploadUserError extends Error {
+    userMessage;
+    constructor(message, userMessage) {
+        super(message);
+        this.name = 'DocumentUploadUserError';
+        this.userMessage = userMessage;
+    }
+}
+exports.DocumentUploadUserError = DocumentUploadUserError;
 const STORAGE_LIST_PAGE_SIZE = 100;
 function extensionFromMimeType(mimeType) {
     const normalized = mimeType.toLowerCase();
@@ -190,12 +203,31 @@ async function getDocumentStorageUsageSummary() {
 }
 async function uploadPendingDocument(uid, imageDataUrl) {
     const { mimeType, buffer } = parseImageDataUrl(imageDataUrl);
+    let uploadBuffer = buffer;
+    if (mimeType === 'application/pdf' && uploadBuffer.length > exports.MAX_STORED_DOCUMENT_BYTES) {
+        if (uploadBuffer.length > exports.MAX_SOURCE_PDF_BYTES_FOR_COMPRESSION) {
+            throw new DocumentUploadUserError(`uploadPendingDocument: PDF source exceeds compression limit (${uploadBuffer.length} bytes)`, 'Recebi o PDF, mas ele esta grande demais para eu reduzir aqui. Envie um PDF menor ou dividido em partes.');
+        }
+        const compressed = await (0, pdf_compression_1.compressPdfBufferToFit)(uploadBuffer, exports.MAX_STORED_DOCUMENT_BYTES);
+        if (!compressed) {
+            throw new DocumentUploadUserError(`uploadPendingDocument: could not reduce PDF to ${exports.MAX_STORED_DOCUMENT_BYTES} bytes`, 'Recebi o PDF, mas nao consegui reduzir para menos de 10 MB. Tente um PDF menor ou dividido em partes.');
+        }
+        logger_1.logger.info('Compressed inbound PDF before storage', {
+            uid,
+            originalBytes: uploadBuffer.length,
+            compressedBytes: compressed.length
+        });
+        uploadBuffer = compressed;
+    }
+    if (uploadBuffer.length > exports.MAX_STORED_DOCUMENT_BYTES) {
+        throw new DocumentUploadUserError(`uploadPendingDocument: file exceeds storage limit (${uploadBuffer.length} bytes)`, 'Recebi o arquivo, mas ele precisa ter ate 10 MB para ser salvo aqui.');
+    }
     const draftId = (0, node_crypto_1.randomUUID)();
     const extension = extensionFromMimeType(mimeType);
     const storagePath = `pending/${uid}/${draftId}.${extension}`;
     const { error } = await supabase_1.supabaseAdmin.storage
         .from(DOCUMENT_BUCKET_NAME)
-        .upload(storagePath, buffer, {
+        .upload(storagePath, uploadBuffer, {
         contentType: mimeType,
         upsert: false
     });
@@ -211,7 +243,7 @@ async function uploadPendingDocument(uid, imageDataUrl) {
         draftId,
         storagePath,
         mimeType,
-        sizeBytes: buffer.length
+        sizeBytes: uploadBuffer.length
     };
 }
 async function finalizePendingDocumentMove(uid, pendingStoragePath, documentId, mimeType) {

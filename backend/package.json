@@ -25,6 +25,7 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "firebase-admin": "^13.0.2",
+    "pdf-lib": "^1.17.1",
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0"
   },
