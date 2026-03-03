@@ -51,6 +51,8 @@ import {
   isAudioMessage,
   getAudioMimeType,
   isDocumentMessage,
+  getDocumentMimeType,
+  getDocumentFileName,
   isGroupJid,
   isImageMessage,
   isStatusJid,
@@ -58,6 +60,7 @@ import {
   normalizePhoneNumber,
   normalizePhoneToJid
 } from './events';
+
 import {
   detectDocumentFetchIntent,
   detectDocumentSaveIntent,
@@ -88,6 +91,25 @@ function isExpectedMediaDecryptError(error: unknown): boolean {
 function asDisconnectCode(error: unknown): number | null {
   const code = (error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode;
   return typeof code === 'number' ? code : null;
+}
+
+function resolveSupportedDocumentMimeType(
+  mimeType: string | null | undefined,
+  fileName: string | null | undefined
+): string | null {
+  const normalizedMimeType = (mimeType ?? '').trim().toLowerCase();
+  if (DOCUMENT_ALLOWED_MIME_TYPES.has(normalizedMimeType)) {
+    return normalizedMimeType;
+  }
+
+  const normalizedFileName = (fileName ?? '').trim().toLowerCase();
+  const extensionIndex = normalizedFileName.lastIndexOf('.');
+  if (extensionIndex === -1) {
+    return null;
+  }
+
+  const extension = normalizedFileName.slice(extensionIndex + 1);
+  return DOCUMENT_EXTENSION_TO_MIME[extension] ?? null;
 }
 
 function normalizeForGreeting(value: string): string {
@@ -182,22 +204,35 @@ interface MessageKeyWithLid extends proto.IMessageKey {
   remoteJidAlt?: string | null;
 }
 
-const IMAGE_ONLY_FALLBACK_TEXT = 'Analise a imagem enviada e registre o lancamento corretamente.';
+const IMAGE_ONLY_FALLBACK_TEXT = 'Analise a imagem enviada. Se for um comprovante, recibo, nota fiscal ou boleto (com valores, datas, nomes de bancos, chave PIX, etc.), extraia os dados financeiros e registre automaticamente a transacao usando add_transaction. Se NAO for um documento financeiro (foto, print, screenshot, meme, etc.), responda pedindo ao usuario um titulo/nome para salvar a imagem como arquivo. NAO registre transacao se nao houver dados financeiros claros na imagem.';
 const DOCUMENT_PENDING_TTL_MS = 10 * 60 * 1000;
 const DOCUMENT_RECENT_LIMIT = 30;
 const DOCUMENT_STRONG_MATCH_MIN_SCORE = 60;
 const DOCUMENT_AMBIGUOUS_MIN_SCORE = 25;
 const DOCUMENT_RESULT_GAP_MIN = 15;
 const DOCUMENT_RECENCY_BONUS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+/** Mime types accepted for document upload (PDF and ZIP). */
+const DOCUMENT_ALLOWED_MIME_TYPES = new Set([
+  'application/pdf',
+  'application/zip',
+  'application/x-zip-compressed',
+  'multipart/x-zip'
+]);
+const DOCUMENT_EXTENSION_TO_MIME: Record<string, string> = {
+  pdf: 'application/pdf',
+  zip: 'application/zip'
+};
 const DOCUMENT_UNSUPPORTED_MEDIA_REPLY =
-  'Por enquanto so consigo guardar imagens. PDF e outros tipos ainda nao estao disponiveis.';
+  'Por enquanto so consigo guardar imagens, PDFs e arquivos ZIP. Esse tipo de arquivo ainda nao e suportado.';
 const DOCUMENT_PENDING_PROMPT_REPLY =
-  'Recebi a imagem. Me diga o titulo que voce quer usar para salvar. Exemplo: "titulo comprovante de luz". Se quiser, voce tambem pode mandar: "comprovante de luz descricao conta de marco".';
+  'Recebi o arquivo. Me diga o titulo que voce quer usar para salvar. Exemplo: "comprovante de luz". Se quiser, voce tambem pode mandar: "comprovante de luz descricao conta de marco".';
+const DOCUMENT_PENDING_PROMPT_FILE_REPLY =
+  'Recebi o arquivo. Me diga o titulo que voce quer usar para salvar. Exemplo: "contrato de aluguel" ou "nota fiscal marco".';
 const DOCUMENT_PENDING_CANCELLED_REPLY = 'Salvamento cancelado.';
 const DOCUMENT_SAVE_ERROR_REPLY =
   'Nao consegui concluir essa operacao com arquivos agora. Tente novamente em instantes.';
 const DOCUMENT_IMAGE_READ_ERROR_REPLY =
-  'Recebi seu pedido para guardar a imagem, mas nao consegui ler o arquivo enviado. Tente reenviar a imagem em alguns instantes.';
+  'Recebi seu pedido para guardar o arquivo, mas nao consegui ler o conteudo enviado. Tente reenviar em alguns instantes.';
 
 /** Max number of messages processed concurrently by the AI pipeline. */
 const MESSAGE_QUEUE_CONCURRENCY = 5;
@@ -954,10 +989,17 @@ export class WhatsAppClient {
     const text = extractMessageText(message);
     const rawType = extractRawType(message);
     const isDocumentUpload = isDocumentMessage(message);
+    const documentMimeType = isDocumentUpload ? (getDocumentMimeType(message) ?? '').toLowerCase() : '';
+    const documentFileName = isDocumentUpload ? getDocumentFileName(message) : null;
+    const isAllowedDocument =
+      isDocumentUpload && Boolean(resolveSupportedDocumentMimeType(documentMimeType, documentFileName));
     const hasImageAttachment = isImageMessage(message);
     const imageDataUrl = await this.extractInboundImageDataUrl(message);
     const audioDataUrl = await this.extractInboundAudioDataUrl(message);
     const inboundText = text.trim();
+
+    // Extract document data URL for allowed document types (PDF/ZIP)
+    const documentDataUrl = isAllowedDocument ? await this.extractInboundDocumentDataUrl(message) : null;
 
     // Skip messages with no usable content (e.g. decryption failures)
     if (!inboundText && !imageDataUrl && !audioDataUrl && !isDocumentUpload) {
@@ -1080,7 +1122,7 @@ export class WhatsAppClient {
     await saveMessageSafe(inboundRecord);
     this.rememberInbound(messageId);
 
-    if (isDocumentUpload) {
+    if (isDocumentUpload && !isAllowedDocument) {
       await this.sendWithRetry(replyJid, DOCUMENT_UNSUPPORTED_MEDIA_REPLY, 'auto_reply', binding.uid);
       await this.appendConversationMessage(binding.uid, remotePhone, {
         role: 'user',
@@ -1089,6 +1131,20 @@ export class WhatsAppClient {
       await this.appendConversationMessage(binding.uid, remotePhone, {
         role: 'assistant',
         content: DOCUMENT_UNSUPPORTED_MEDIA_REPLY
+      });
+      return;
+    }
+
+    if (isAllowedDocument && !documentDataUrl) {
+      const readErrorReply = 'Nao consegui ler o arquivo enviado. Tente reenviar em alguns instantes.';
+      await this.sendWithRetry(replyJid, readErrorReply, 'auto_reply', binding.uid);
+      await this.appendConversationMessage(binding.uid, remotePhone, {
+        role: 'user',
+        content: inboundText || 'Documento enviado no WhatsApp.'
+      });
+      await this.appendConversationMessage(binding.uid, remotePhone, {
+        role: 'assistant',
+        content: readErrorReply
       });
       return;
     }
@@ -1109,7 +1165,8 @@ export class WhatsAppClient {
       inboundText,
       imageDataUrl,
       audioDataUrl,
-      hasImageAttachment
+      hasImageAttachment,
+      documentDataUrl
     );
   }
 
@@ -1120,9 +1177,10 @@ export class WhatsAppClient {
     inboundText: string,
     imageDataUrl: string | null,
     audioDataUrl: string | null = null,
-    hasImageAttachment = false
+    hasImageAttachment = false,
+    documentDataUrl: string | null = null
   ): Promise<void> {
-    const hasInboundInput = inboundText.trim().length > 0 || Boolean(imageDataUrl) || Boolean(audioDataUrl);
+    const hasInboundInput = inboundText.trim().length > 0 || Boolean(imageDataUrl) || Boolean(audioDataUrl) || Boolean(documentDataUrl);
 
     if (hasInboundInput) {
       try {
@@ -1133,7 +1191,8 @@ export class WhatsAppClient {
           inboundText,
           imageDataUrl,
           audioDataUrl,
-          hasImageAttachment
+          hasImageAttachment,
+          documentDataUrl
         );
         if (handledByDocumentFlow) {
           logger.info('MSG_DOCUMENT_FLOW_HANDLED', {
@@ -1279,10 +1338,65 @@ export class WhatsAppClient {
     inboundText: string,
     imageDataUrl: string | null,
     audioDataUrl: string | null,
-    hasImageAttachment: boolean
+    hasImageAttachment: boolean,
+    documentDataUrl: string | null = null
   ): Promise<boolean> {
     const activeDraft = await this.getUsablePendingDocumentDraft(ownerUid, remotePhone);
     const saveIntent = detectDocumentSaveIntent(inboundText);
+
+    // --- PDF/ZIP document upload: caption becomes the title; without caption, ask for one ---
+    if (documentDataUrl) {
+      if (activeDraft) {
+        await this.clearPendingDocumentDraft(activeDraft);
+      }
+
+      const labelCandidate = saveIntent.matched ? saveIntent.labelCandidate : '';
+      const captionText = inboundText.trim();
+
+      if (captionText) {
+        const titleSource = isMeaningfulDocumentLabel(labelCandidate) ? labelCandidate : captionText;
+        const title = await this.saveReadyDocumentFromImage(ownerUid, documentDataUrl, titleSource);
+        await this.sendDocumentTextReply(
+          ownerUid,
+          remoteJid,
+          remotePhone,
+          buildDocumentSavedReply(title),
+          `[Arquivo salvo] ${title}`
+        );
+      } else {
+        // No caption → create pending draft and ask for title
+        const upload = await uploadPendingDocument(ownerUid, documentDataUrl);
+        try {
+          await createPendingWhatsAppDocumentDraft(ownerUid, remotePhone, {
+            id: upload.draftId,
+            storagePath: upload.storagePath,
+            mimeType: upload.mimeType,
+            sizeBytes: upload.sizeBytes,
+            expiresAt: new Date(Date.now() + DOCUMENT_PENDING_TTL_MS).toISOString(),
+            pendingReason: 'missing_title'
+          });
+        } catch (error) {
+          try {
+            await deleteStoredDocument(upload.storagePath);
+          } catch (cleanupError) {
+            logger.warn('DOC_FILE_PENDING_CLEANUP_FAIL: failed to cleanup pending upload after DB error', {
+              storagePath: upload.storagePath,
+              error: cleanupError instanceof Error ? cleanupError.message : 'unknown'
+            });
+          }
+          throw error;
+        }
+
+        await this.sendDocumentTextReply(
+          ownerUid,
+          remoteJid,
+          remotePhone,
+          DOCUMENT_PENDING_PROMPT_FILE_REPLY,
+          '[Arquivo pendente] aguardando nome'
+        );
+      }
+      return true;
+    }
 
     if (hasImageAttachment && !imageDataUrl && saveIntent.matched) {
       logger.warn('DOC_SAVE_SKIPPED_NO_IMAGE_DATA: explicit save requested but image payload was unavailable', {
@@ -1314,12 +1428,12 @@ export class WhatsAppClient {
       }
     }
 
-    if (activeDraft && inboundText.trim() && !imageDataUrl && !audioDataUrl) {
+    if (activeDraft && inboundText.trim() && !imageDataUrl && !audioDataUrl && !documentDataUrl) {
       await this.handlePendingDocumentFollowUp(ownerUid, remoteJid, remotePhone, inboundText, activeDraft);
       return true;
     }
 
-    if (!imageDataUrl && !audioDataUrl && inboundText.trim()) {
+    if (!imageDataUrl && !audioDataUrl && !documentDataUrl && inboundText.trim()) {
       const fetchIntent = detectDocumentFetchIntent(inboundText);
       if (fetchIntent.matched) {
         await this.handleDocumentFetchRequest(ownerUid, remoteJid, remotePhone, fetchIntent.query);
@@ -2945,6 +3059,59 @@ export class WhatsAppClient {
         });
       } else {
         logger.error('AUDIO_EXTRACT_ERROR: Failed to download inbound WhatsApp audio', error);
+      }
+      return null;
+    }
+  }
+
+  private async extractInboundDocumentDataUrl(message: proto.IWebMessageInfo): Promise<string | null> {
+    if (!isDocumentMessage(message)) return null;
+
+    const fileName = getDocumentFileName(message);
+    const rawMimeType = (getDocumentMimeType(message) ?? '').toLowerCase();
+    const mimeType = resolveSupportedDocumentMimeType(rawMimeType, fileName);
+    if (!mimeType) {
+      logger.info('DOC_EXTRACT_SKIP: unsupported document type', {
+        messageId: message.key?.id ?? 'unknown',
+        mimeType: rawMimeType,
+        fileName
+      });
+      return null;
+    }
+
+    try {
+      const mediaBuffer = await downloadMediaMessage(message, 'buffer', {}, this.getMediaDownloadContext());
+      if (!mediaBuffer || mediaBuffer.length === 0) {
+        logger.warn('DOC_EXTRACT_FAIL: buffer is empty');
+        return null;
+      }
+
+      // Max 10MB for documents
+      const maxDocBytes = 10 * 1024 * 1024;
+      if (mediaBuffer.length > maxDocBytes) {
+        logger.warn('DOC_EXTRACT_FAIL: exceeds max size', {
+          size: mediaBuffer.length,
+          maxAllowed: maxDocBytes
+        });
+        return null;
+      }
+
+      const base64 = mediaBuffer.toString('base64');
+      logger.info('DOC_EXTRACT_SUCCESS', { size: mediaBuffer.length, mimeType, fileName: fileName ?? 'document' });
+      return `data:${mimeType};base64,${base64}`;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : '';
+      if (errorMsg.includes('Bad MAC')) {
+        await this.registerBadMac(message, errorMsg);
+      }
+      if (isExpectedMediaDecryptError(error)) {
+        logger.warn('DOC_EXTRACT_SKIP: decrypt failure on inbound document', {
+          slotId: this.slotId,
+          messageId: message.key?.id ?? 'unknown',
+          error: errorMsg || 'unknown'
+        });
+      } else {
+        logger.error('DOC_EXTRACT_ERROR: Failed to download inbound WhatsApp document', error);
       }
       return null;
     }

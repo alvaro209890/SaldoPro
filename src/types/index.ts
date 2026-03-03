@@ -160,3 +160,44 @@ export interface RecurringTransactionFormData {
     startDate: string;
     endDate: string;
 }
+
+export interface FinancialProfile {
+    monthlyIncome: number;
+    fixedExpenses: number;
+    variableExpenses: number;
+    savingsTargetPct: number;
+    financialGoalsText: string | null;
+    completedAt: string;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface FinancialProfileFormData {
+    monthlyIncome: number;
+    fixedExpenses: number;
+    variableExpenses: number;
+    savingsTargetPct: number;
+    financialGoalsText: string;
+}
+
+export interface Goal {
+    id: string;
+    title: string;
+    description: string | null;
+    targetAmount: number | null;
+    currentAmount: number;
+    deadline: string | null;
+    source: 'ai' | 'manual';
+    status: 'active' | 'completed' | 'cancelled';
+    priority: 'low' | 'medium' | 'high';
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface GoalFormData {
+    title: string;
+    description: string;
+    targetAmount: number | null;
+    deadline: string;
+    priority: 'low' | 'medium' | 'high';
+}

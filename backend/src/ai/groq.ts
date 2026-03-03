@@ -495,6 +495,24 @@ COMPREENSAO DE LINGUAGEM NATURAL
   - Para excluir lembrete: use "delete_reminder" com "id".
   - Use os IDs da lista de lembretes no contexto. Nunca invente IDs.
 
+REGRAS DE IMAGEM (OBRIGATORIO)
+- Quando o usuario envia uma imagem SEM legenda (sem texto acompanhando):
+  1. ANALISE o conteudo visual da imagem cuidadosamente.
+  2. Se a imagem for um COMPROVANTE, RECIBO, NOTA FISCAL, BOLETO ou documento financeiro (contendo valores monetarios, datas de transacao, nomes de banco, chave PIX, codigo de barras, QR code de pagamento, etc.):
+     - EXTRAIA os dados financeiros: valor, data, descricao, forma de pagamento.
+     - Use "add_transaction" para registrar automaticamente.
+     - NAO pergunte se quer registrar, apenas registre e confirme.
+  3. Se a imagem NAO for um documento financeiro (foto pessoal, screenshot, meme, print de tela, paisagem, documento generico, etc.):
+     - NAO registre nenhuma transacao.
+     - Responda pedindo ao usuario um titulo/nome para salvar a imagem como arquivo.
+     - Exemplo de resposta: "Recebi sua imagem! Qual titulo voce quer dar para esse arquivo? Ex: foto do contrato, print do pedido"
+     - Use action "none" neste caso.
+- Quando o usuario envia uma imagem COM legenda:
+  - Se a legenda contem verbo de acao financeira (gastei, paguei, etc.) + valor: registre a transacao normalmente.
+  - Se a legenda contem "salvar", "guardar", "arquivar": o sistema de documentos ja trata isso, nao interfira.
+  - Se a legenda descreve a imagem mas sem contexto financeiro: trate como imagem generica (peca titulo se necessario).
+- NUNCA diga que nao consegue ver ou analisar imagens. Voce TEM visao computacional habilitada.
+
 REGRAS DE RESUMO DE CAPACIDADES
 - ${summaryInstruction}
 - ${greetingInstruction}
@@ -505,7 +523,8 @@ QUANDO RESUMIR CAPACIDADES, PRIORIZE ESTES ITENS
 - Criar transacoes recorrentes (mensal, semanal, anual) para gastos fixos.
 - Criar lembretes de contas a pagar e a receber com vencimento.
 - Ler imagem e sugerir ou registrar lancamento quando houver contexto financeiro.
-- Guardar e reenviar imagens pelo WhatsApp quando o usuario pedir explicitamente para salvar ou ver um arquivo.
+- Receber e guardar PDF e ZIP enviados pelo WhatsApp, alem de imagens.
+- Guardar e reenviar imagens e documentos (PDF, ZIP) pelo WhatsApp quando o usuario pedir explicitamente para salvar ou ver um arquivo.
 - Se o usuario pedir para buscar ou enviar uma imagem (comprovante, documento, etc), use a acao "fetch_document" com sua "query".
 - Mostrar resumo do mes (receitas, despesas e saldo).
 - Ajudar no controle de orcamento e alertar excesso de gastos.
@@ -1425,4 +1444,159 @@ async function queryGeminiAssistant(
     clearTimeout(timeoutId);
     throw error;
   }
+}
+
+// ─── Financial Goals Generation ──────────────────────────────────────────────
+
+export interface GeneratedGoal {
+  title: string;
+  description: string;
+  targetAmount: number | null;
+  deadline: string | null;
+  priority: 'low' | 'medium' | 'high';
+}
+
+export async function generateFinancialGoals(profile: {
+  monthlyIncome: number;
+  fixedExpenses: number;
+  variableExpenses: number;
+  savingsTargetPct: number;
+  financialGoalsText: string | null;
+}, currency: string): Promise<GeneratedGoal[]> {
+  const disposableIncome = profile.monthlyIncome - profile.fixedExpenses - profile.variableExpenses;
+  const savingsTarget = (profile.monthlyIncome * profile.savingsTargetPct) / 100;
+
+  const systemPrompt = `Voce e um consultor financeiro pessoal. Com base no perfil financeiro do usuario, gere de 3 a 5 metas SMART e praticas de economia.
+
+PERFIL FINANCEIRO DO USUARIO:
+- Renda mensal: ${formatCurrency(profile.monthlyIncome, currency)}
+- Gastos fixos: ${formatCurrency(profile.fixedExpenses, currency)}
+- Gastos variaveis: ${formatCurrency(profile.variableExpenses, currency)}
+- Renda disponivel: ${formatCurrency(disposableIncome, currency)}
+- Meta de economia: ${profile.savingsTargetPct}% (${formatCurrency(savingsTarget, currency)}/mes)
+${profile.financialGoalsText ? `- Objetivos pessoais do usuario: "${profile.financialGoalsText}"` : ''}
+
+REGRAS:
+1. Gere de 3 a 5 metas realistas e acionaveis.
+2. Cada meta deve ser especifica, mensuravel e com prazo definido.
+3. As metas devem ajudar o usuario a economizar dinheiro e atingir seu percentual de economia.
+4. Considere o contexto brasileiro (BRL, praticas locais como PIX, boletos, cartoes).
+5. Use deadlines no formato YYYY-MM-DD, sempre datas futuras.
+6. Se o usuario mencionou objetivos pessoais, incorpore-os nas metas.
+7. Prioridades: "high" para metas urgentes/fundamentais, "medium" para importantes, "low" para opcionais.
+
+FORMATO DE RESPOSTA (JSON valido, sem texto extra):
+{"goals":[{"title":"...","description":"...","targetAmount":1000,"deadline":"2026-06-01","priority":"high"}]}
+
+Se targetAmount nao aplicar (meta comportamental), use null.`;
+
+  const userMessage = 'Gere minhas metas financeiras personalizadas.';
+
+  const formattedMessages = [{ role: 'user', content: userMessage }];
+
+  for (const model of GROQ_MODEL_CHAIN.filter(m => !m.vision)) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), env.groqTimeoutMs);
+
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.groqApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: model.id,
+          temperature: 0.7,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: systemPrompt },
+            ...formattedMessages
+          ]
+        }),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const statusCode = response.status;
+        if (isRateLimitStatus(statusCode) || isServerErrorStatus(statusCode)) {
+          logger.warn('generateFinancialGoals: model unavailable, trying next', { model: model.id, status: statusCode });
+          continue;
+        }
+        throw new Error(`Groq request failed: ${response.status}`);
+      }
+
+      const data = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const rawContent = data.choices?.[0]?.message?.content;
+      if (!rawContent) continue;
+
+      const content = stripThinkingBlocks(rawContent);
+      let parsed: { goals?: unknown[] };
+      try {
+        parsed = JSON.parse(content.trim().replace(/^```+(?:json)?\s*/i, '').replace(/\s*```+$/i, ''));
+      } catch {
+        const start = content.indexOf('{');
+        const end = content.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+          parsed = JSON.parse(content.slice(start, end + 1));
+        } else {
+          continue;
+        }
+      }
+
+      if (!Array.isArray(parsed.goals)) continue;
+
+      const goals: GeneratedGoal[] = parsed.goals
+        .filter((g): g is Record<string, unknown> => typeof g === 'object' && g !== null)
+        .slice(0, 5)
+        .map(g => ({
+          title: typeof g.title === 'string' ? g.title.slice(0, 120) : 'Meta financeira',
+          description: typeof g.description === 'string' ? g.description.slice(0, 500) : '',
+          targetAmount: typeof g.targetAmount === 'number' && Number.isFinite(g.targetAmount) && g.targetAmount > 0 ? g.targetAmount : null,
+          deadline: typeof g.deadline === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(g.deadline) ? g.deadline : null,
+          priority: g.priority === 'high' ? 'high' : g.priority === 'low' ? 'low' : 'medium' as const,
+        }));
+
+      if (goals.length > 0) {
+        logger.info('generateFinancialGoals: success', { model: model.id, goalCount: goals.length });
+        return goals;
+      }
+    } catch (error) {
+      logger.warn('generateFinancialGoals: model failed', {
+        model: model.id,
+        error: error instanceof Error ? error.message : 'unknown'
+      });
+      continue;
+    }
+  }
+
+  // Fallback: return sensible default goals
+  logger.warn('generateFinancialGoals: all models exhausted, returning defaults');
+  return [
+    {
+      title: 'Criar reserva de emergência',
+      description: `Acumular o equivalente a 3 meses de gastos fixos (${formatCurrency(profile.fixedExpenses * 3, currency)}) em uma conta de alta liquidez.`,
+      targetAmount: profile.fixedExpenses * 3,
+      deadline: null,
+      priority: 'high',
+    },
+    {
+      title: `Economizar ${profile.savingsTargetPct}% da renda`,
+      description: `Guardar ${formatCurrency(savingsTarget, currency)} por mês através de cortes em gastos variáveis e escolhas mais conscientes.`,
+      targetAmount: savingsTarget * 6,
+      deadline: null,
+      priority: 'medium',
+    },
+    {
+      title: 'Reduzir gastos variáveis em 15%',
+      description: `Diminuir os gastos variáveis de ${formatCurrency(profile.variableExpenses, currency)} para ${formatCurrency(profile.variableExpenses * 0.85, currency)} por mês.`,
+      targetAmount: null,
+      deadline: null,
+      priority: 'medium',
+    },
+  ];
 }

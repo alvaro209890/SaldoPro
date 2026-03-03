@@ -5,6 +5,7 @@ const node_crypto_1 = require("node:crypto");
 const express_1 = require("express");
 const firebase_auth_1 = require("../middleware/firebase-auth");
 const firestore_1 = require("../lib/firestore");
+const groq_1 = require("../ai/groq");
 const document_storage_1 = require("../lib/document-storage");
 const logger_1 = require("../lib/logger");
 const document_intents_1 = require("../whatsapp/document-intents");
@@ -584,6 +585,146 @@ function createDataRouter(signupWelcomeDispatcher) {
         const uid = getUid(req);
         await (0, firestore_1.deleteRecurringTransaction)(uid, req.params.id);
         res.json({ ok: true });
+    });
+    // ─── Financial Profile ─────────────────────────────────────────────────
+    router.get('/financial-profile', async (req, res, next) => {
+        try {
+            const uid = getUid(req);
+            const profile = await (0, firestore_1.getUserFinancialProfile)(uid);
+            res.json(profile);
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.put('/financial-profile', async (req, res, next) => {
+        try {
+            const uid = getUid(req);
+            const body = (req.body ?? {});
+            const monthlyIncome = typeof body.monthlyIncome === 'number' ? body.monthlyIncome : NaN;
+            const fixedExpenses = typeof body.fixedExpenses === 'number' ? body.fixedExpenses : NaN;
+            const variableExpenses = typeof body.variableExpenses === 'number' ? body.variableExpenses : NaN;
+            const savingsTargetPct = typeof body.savingsTargetPct === 'number' ? body.savingsTargetPct : NaN;
+            const financialGoalsText = typeof body.financialGoalsText === 'string' ? body.financialGoalsText.trim().slice(0, 500) : null;
+            if (!Number.isFinite(monthlyIncome) || monthlyIncome < 0 ||
+                !Number.isFinite(fixedExpenses) || fixedExpenses < 0 ||
+                !Number.isFinite(variableExpenses) || variableExpenses < 0 ||
+                !Number.isFinite(savingsTargetPct) || savingsTargetPct < 0 || savingsTargetPct > 100) {
+                res.status(400).json({ error: 'Campos invalidos para perfil financeiro.' });
+                return;
+            }
+            await (0, firestore_1.upsertUserFinancialProfile)(uid, {
+                monthlyIncome,
+                fixedExpenses,
+                variableExpenses,
+                savingsTargetPct,
+                financialGoalsText,
+            });
+            const profile = await (0, firestore_1.getUserFinancialProfile)(uid);
+            res.json(profile);
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    // ─── Goals ─────────────────────────────────────────────────────────────
+    router.get('/goals', async (req, res, next) => {
+        try {
+            const uid = getUid(req);
+            const goals = await (0, firestore_1.getUserGoals)(uid);
+            res.json(goals);
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.post('/goals', async (req, res, next) => {
+        try {
+            const uid = getUid(req);
+            const body = (req.body ?? {});
+            const title = asString(body.title);
+            if (!title) {
+                res.status(400).json({ error: '`title` e obrigatorio.' });
+                return;
+            }
+            const description = typeof body.description === 'string' ? body.description.trim().slice(0, 500) : null;
+            const targetAmount = typeof body.targetAmount === 'number' && Number.isFinite(body.targetAmount) && body.targetAmount > 0 ? body.targetAmount : null;
+            const currentAmount = typeof body.currentAmount === 'number' && Number.isFinite(body.currentAmount) ? body.currentAmount : 0;
+            const deadline = typeof body.deadline === 'string' ? body.deadline.trim() : null;
+            const priority = body.priority === 'low' || body.priority === 'high' ? body.priority : 'medium';
+            const id = await (0, firestore_1.addUserGoal)(uid, {
+                title: title.slice(0, 120),
+                description,
+                targetAmount,
+                currentAmount,
+                deadline,
+                source: 'manual',
+                priority,
+            });
+            res.json({ id });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.post('/goals/generate', async (req, res, next) => {
+        try {
+            const uid = getUid(req);
+            const profile = await (0, firestore_1.getUserFinancialProfile)(uid);
+            if (!profile) {
+                res.status(400).json({ error: 'Perfil financeiro nao encontrado. Preencha o questionario primeiro.' });
+                return;
+            }
+            const settings = await (0, firestore_1.getUserSettings)(uid);
+            const currency = settings?.currency ?? 'BRL';
+            const generatedGoals = await (0, groq_1.generateFinancialGoals)(profile, currency);
+            const ids = [];
+            for (const goal of generatedGoals) {
+                const id = await (0, firestore_1.addUserGoal)(uid, {
+                    title: goal.title,
+                    description: goal.description,
+                    targetAmount: goal.targetAmount,
+                    deadline: goal.deadline,
+                    source: 'ai',
+                    priority: goal.priority,
+                });
+                ids.push(id);
+            }
+            const goals = await (0, firestore_1.getUserGoals)(uid);
+            res.json({ generated: ids.length, goals });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.patch('/goals/:id', async (req, res, next) => {
+        try {
+            const uid = getUid(req);
+            const body = (req.body ?? {});
+            await (0, firestore_1.updateUserGoal)(uid, req.params.id, {
+                ...(typeof body.title === 'string' ? { title: body.title.slice(0, 120) } : {}),
+                ...(typeof body.description === 'string' || body.description === null ? { description: body.description } : {}),
+                ...(typeof body.targetAmount === 'number' || body.targetAmount === null ? { targetAmount: body.targetAmount } : {}),
+                ...(typeof body.currentAmount === 'number' ? { currentAmount: body.currentAmount } : {}),
+                ...(typeof body.deadline === 'string' || body.deadline === null ? { deadline: body.deadline } : {}),
+                ...(body.status === 'active' || body.status === 'completed' || body.status === 'cancelled' ? { status: body.status } : {}),
+                ...(body.priority === 'low' || body.priority === 'medium' || body.priority === 'high' ? { priority: body.priority } : {}),
+            });
+            res.json({ ok: true });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.delete('/goals/:id', async (req, res, next) => {
+        try {
+            const uid = getUid(req);
+            await (0, firestore_1.deleteUserGoal)(uid, req.params.id);
+            res.json({ ok: true });
+        }
+        catch (error) {
+            next(error);
+        }
     });
     router.use((error, _req, res, _next) => {
         logger_1.logger.error('Data router error', error);

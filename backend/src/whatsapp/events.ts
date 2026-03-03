@@ -41,6 +41,20 @@ export function isDocumentMessage(message: proto.IWebMessageInfo): boolean {
   return Boolean(payload?.documentMessage);
 }
 
+export function getDocumentMimeType(message: proto.IWebMessageInfo): string | null {
+  const payload = getMessageContent(message);
+  const mimeType = payload?.documentMessage?.mimetype;
+  if (!mimeType || typeof mimeType !== 'string') return null;
+  return mimeType;
+}
+
+export function getDocumentFileName(message: proto.IWebMessageInfo): string | null {
+  const payload = getMessageContent(message);
+  const fileName = payload?.documentMessage?.fileName;
+  if (!fileName || typeof fileName !== 'string') return null;
+  return fileName;
+}
+
 export function getImageMimeType(message: proto.IWebMessageInfo): string | null {
   const payload = getMessageContent(message);
   const mimeType = payload?.imageMessage?.mimetype;

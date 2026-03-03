@@ -393,3 +393,69 @@ export async function deleteRecurringTransaction(_uid: string, recurringId: stri
     });
     notifyRefresh();
 }
+
+// ─── Financial Profile ───────────────────────────────────────────────────────
+
+export async function getFinancialProfile(): Promise<import('@/types').FinancialProfile | null> {
+    return apiRequest<import('@/types').FinancialProfile | null>('/api/data/financial-profile');
+}
+
+export async function upsertFinancialProfile(data: import('@/types').FinancialProfileFormData): Promise<import('@/types').FinancialProfile> {
+    return apiRequest<import('@/types').FinancialProfile>('/api/data/financial-profile', {
+        method: 'PUT',
+        body: JSON.stringify(data),
+    });
+}
+
+// ─── Goals ───────────────────────────────────────────────────────────────────
+
+export function onGoalsSnapshot(
+    _uid: string,
+    callback: (goals: import('@/types').Goal[]) => void,
+    onError?: (error: Error) => void
+): Unsubscribe {
+    return createPollingSubscription(
+        () => apiRequest<import('@/types').Goal[]>('/api/data/goals'),
+        callback,
+        onError
+    );
+}
+
+export async function addGoal(
+    _uid: string,
+    data: Omit<import('@/types').Goal, 'id' | 'createdAt' | 'updatedAt' | 'source' | 'status' | 'currentAmount'> & { currentAmount?: number }
+) {
+    const result = await apiRequest<{ id: string }>('/api/data/goals', {
+        method: 'POST',
+        body: JSON.stringify(data),
+    });
+    notifyRefresh();
+    return result;
+}
+
+export async function updateGoal(
+    _uid: string,
+    goalId: string,
+    data: Partial<Omit<import('@/types').Goal, 'id' | 'createdAt'>>
+) {
+    await apiRequest<{ ok: true }>(`/api/data/goals/${goalId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+    });
+    notifyRefresh();
+}
+
+export async function deleteGoal(_uid: string, goalId: string) {
+    await apiRequest<{ ok: true }>(`/api/data/goals/${goalId}`, {
+        method: 'DELETE',
+    });
+    notifyRefresh();
+}
+
+export async function generateAIGoals(): Promise<{ generated: number; goals: import('@/types').Goal[] }> {
+    const result = await apiRequest<{ generated: number; goals: import('@/types').Goal[] }>('/api/data/goals/generate', {
+        method: 'POST',
+    });
+    notifyRefresh();
+    return result;
+}

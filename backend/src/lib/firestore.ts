@@ -2392,3 +2392,199 @@ export async function listUserDocuments(uid: string, limitCount = 200): Promise<
   assertNoError(error, 'listUserDocuments');
   return ((data ?? []) as DbUserDocumentRow[]).map(mapUserDocument);
 }
+
+// ─── Financial Profiles & Goals ──────────────────────────────────────────────
+
+interface DbFinancialProfileRow {
+  uid: string;
+  monthly_income: number | string;
+  fixed_expenses: number | string;
+  variable_expenses: number | string;
+  savings_target_pct: number | string;
+  financial_goals_text: string | null;
+  completed_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface DbGoalRow {
+  id: string;
+  uid: string;
+  title: string;
+  description: string | null;
+  target_amount: number | string | null;
+  current_amount: number | string;
+  deadline: string | null;
+  source: string;
+  status: string;
+  priority: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserFinancialProfile {
+  monthlyIncome: number;
+  fixedExpenses: number;
+  variableExpenses: number;
+  savingsTargetPct: number;
+  financialGoalsText: string | null;
+  completedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpsertFinancialProfileInput {
+  monthlyIncome: number;
+  fixedExpenses: number;
+  variableExpenses: number;
+  savingsTargetPct: number;
+  financialGoalsText?: string | null;
+}
+
+export interface UserGoal {
+  id: string;
+  title: string;
+  description: string | null;
+  targetAmount: number | null;
+  currentAmount: number;
+  deadline: string | null;
+  source: 'ai' | 'manual';
+  status: 'active' | 'completed' | 'cancelled';
+  priority: 'low' | 'medium' | 'high';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateGoalInput {
+  title: string;
+  description?: string | null;
+  targetAmount?: number | null;
+  currentAmount?: number;
+  deadline?: string | null;
+  source?: 'ai' | 'manual';
+  priority?: 'low' | 'medium' | 'high';
+}
+
+function mapFinancialProfile(row: DbFinancialProfileRow): UserFinancialProfile {
+  return {
+    monthlyIncome: toNumber(row.monthly_income),
+    fixedExpenses: toNumber(row.fixed_expenses),
+    variableExpenses: toNumber(row.variable_expenses),
+    savingsTargetPct: toNumber(row.savings_target_pct),
+    financialGoalsText: row.financial_goals_text,
+    completedAt: row.completed_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapGoal(row: DbGoalRow): UserGoal {
+  return {
+    id: row.id,
+    title: row.title,
+    description: row.description,
+    targetAmount: row.target_amount != null ? toNumber(row.target_amount) : null,
+    currentAmount: toNumber(row.current_amount),
+    deadline: row.deadline,
+    source: row.source === 'ai' ? 'ai' : 'manual',
+    status: row.status === 'completed' ? 'completed' : row.status === 'cancelled' ? 'cancelled' : 'active',
+    priority: row.priority === 'high' ? 'high' : row.priority === 'low' ? 'low' : 'medium',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function getUserFinancialProfile(uid: string): Promise<UserFinancialProfile | null> {
+  const { data, error } = await db
+    .from('app_financial_profiles')
+    .select('uid, monthly_income, fixed_expenses, variable_expenses, savings_target_pct, financial_goals_text, completed_at, created_at, updated_at')
+    .eq('uid', uid)
+    .maybeSingle<DbFinancialProfileRow>();
+  assertNoError(error, 'getUserFinancialProfile');
+  return data ? mapFinancialProfile(data) : null;
+}
+
+export async function upsertUserFinancialProfile(uid: string, input: UpsertFinancialProfileInput): Promise<void> {
+  const now = new Date().toISOString();
+  const { error } = await db
+    .from('app_financial_profiles')
+    .upsert({
+      uid,
+      monthly_income: input.monthlyIncome,
+      fixed_expenses: input.fixedExpenses,
+      variable_expenses: input.variableExpenses,
+      savings_target_pct: input.savingsTargetPct,
+      financial_goals_text: input.financialGoalsText ?? null,
+      completed_at: now,
+      created_at: now,
+      updated_at: now,
+    }, { onConflict: 'uid' });
+  assertNoError(error, 'upsertUserFinancialProfile');
+}
+
+export async function getUserGoals(uid: string): Promise<UserGoal[]> {
+  const { data, error } = await db
+    .from('app_goals')
+    .select('id, uid, title, description, target_amount, current_amount, deadline, source, status, priority, created_at, updated_at')
+    .eq('uid', uid)
+    .order('created_at', { ascending: false });
+  assertNoError(error, 'getUserGoals');
+  return ((data ?? []) as DbGoalRow[]).map(mapGoal);
+}
+
+export async function addUserGoal(uid: string, input: CreateGoalInput): Promise<string> {
+  const now = new Date().toISOString();
+  const { data, error } = await db
+    .from('app_goals')
+    .insert({
+      uid,
+      title: input.title,
+      description: input.description ?? null,
+      target_amount: input.targetAmount ?? null,
+      current_amount: input.currentAmount ?? 0,
+      deadline: input.deadline ?? null,
+      source: input.source ?? 'manual',
+      status: 'active',
+      priority: input.priority ?? 'medium',
+      created_at: now,
+      updated_at: now,
+    })
+    .select('id')
+    .single<{ id: string }>();
+  assertNoError(error, 'addUserGoal');
+  if (!data?.id) throw new Error('addUserGoal: response sem id');
+  return data.id;
+}
+
+export async function updateUserGoal(
+  uid: string,
+  goalId: string,
+  input: Partial<Omit<UserGoal, 'id' | 'createdAt'>>
+): Promise<void> {
+  const updates: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+  };
+  if (typeof input.title === 'string') updates.title = input.title;
+  if (input.description === null || typeof input.description === 'string') updates.description = input.description;
+  if (typeof input.targetAmount === 'number' || input.targetAmount === null) updates.target_amount = input.targetAmount;
+  if (typeof input.currentAmount === 'number') updates.current_amount = input.currentAmount;
+  if (typeof input.deadline === 'string' || input.deadline === null) updates.deadline = input.deadline;
+  if (input.status === 'active' || input.status === 'completed' || input.status === 'cancelled') updates.status = input.status;
+  if (input.priority === 'low' || input.priority === 'medium' || input.priority === 'high') updates.priority = input.priority;
+
+  const { error } = await db
+    .from('app_goals')
+    .update(updates)
+    .eq('uid', uid)
+    .eq('id', goalId);
+  assertNoError(error, 'updateUserGoal');
+}
+
+export async function deleteUserGoal(uid: string, goalId: string): Promise<void> {
+  const { error } = await db
+    .from('app_goals')
+    .delete()
+    .eq('uid', uid)
+    .eq('id', goalId);
+  assertNoError(error, 'deleteUserGoal');
+}

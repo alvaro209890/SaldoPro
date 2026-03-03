@@ -18,7 +18,7 @@ const VALID_PAYMENT_METHODS = [
 ];
 const DISPLAY_TIMEZONE = 'America/Sao_Paulo';
 const MAX_ACTIONS_PER_MESSAGE = 10;
-const IMAGE_DOCUMENT_SAVE_FALLBACK = 'Nao consegui lancar essa imagem como transacao. Se quiser guardar, envie novamente com "guardar", "salvar" ou "arquivar" junto com um nome.';
+const IMAGE_DOCUMENT_SAVE_FALLBACK = 'Recebi sua imagem! Nao identifiquei dados financeiros para registrar. Se quiser guardar essa imagem, me diga o titulo que deseja usar.';
 // ---------------------------------------------------------------------------
 // Financial context cache — avoids repeated Firestore reads for active users.
 // TTL: 2 minutes. Invalidated when a transaction is added/updated/deleted.
@@ -1179,7 +1179,15 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
                 mediaUrl
             };
         }
+        // When image-only message didn't produce any AI action, let the AI's reply pass through.
+        // The AI prompt now handles distinguishing receipts from generic images,
+        // so its reply will either be a transaction confirmation or a request for a title.
+        // Only use the static fallback if the AI's reply is also empty.
         if (options.imageOnlyWithoutDocumentIntent && !rawLatestUserMessageText && !mediaUrl) {
+            const aiText = ai.reply.trim();
+            if (aiText) {
+                return { text: aiText.slice(0, env_1.env.maxMessageLength) };
+            }
             return {
                 text: IMAGE_DOCUMENT_SAVE_FALLBACK.slice(0, env_1.env.maxMessageLength)
             };

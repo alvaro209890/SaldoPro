@@ -4,6 +4,8 @@ exports.extractRawType = extractRawType;
 exports.extractMessageText = extractMessageText;
 exports.isImageMessage = isImageMessage;
 exports.isDocumentMessage = isDocumentMessage;
+exports.getDocumentMimeType = getDocumentMimeType;
+exports.getDocumentFileName = getDocumentFileName;
 exports.getImageMimeType = getImageMimeType;
 exports.isAudioMessage = isAudioMessage;
 exports.getAudioMimeType = getAudioMimeType;
@@ -55,6 +57,20 @@ function isImageMessage(message) {
 function isDocumentMessage(message) {
     const payload = getMessageContent(message);
     return Boolean(payload?.documentMessage);
+}
+function getDocumentMimeType(message) {
+    const payload = getMessageContent(message);
+    const mimeType = payload?.documentMessage?.mimetype;
+    if (!mimeType || typeof mimeType !== 'string')
+        return null;
+    return mimeType;
+}
+function getDocumentFileName(message) {
+    const payload = getMessageContent(message);
+    const fileName = payload?.documentMessage?.fileName;
+    if (!fileName || typeof fileName !== 'string')
+        return null;
+    return fileName;
 }
 function getImageMimeType(message) {
     const payload = getMessageContent(message);

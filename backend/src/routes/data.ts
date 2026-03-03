@@ -33,8 +33,15 @@ import {
   updateUserDocument,
   updateUserReminder,
   updateUserSettings,
-  updateUserTransaction
+  updateUserTransaction,
+  getUserFinancialProfile,
+  upsertUserFinancialProfile,
+  getUserGoals,
+  addUserGoal,
+  updateUserGoal,
+  deleteUserGoal,
 } from '../lib/firestore';
+import { generateFinancialGoals } from '../ai/groq';
 import {
   createSignedDocumentUrl,
   deleteStoredDocument,
@@ -254,10 +261,10 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
       ...(typeof body.currency === 'string' ? { currency: body.currency } : {}),
       ...(Array.isArray(body.whatsappAllowedNumbers)
         ? {
-            whatsappAllowedNumbers: body.whatsappAllowedNumbers.filter(
-              (value): value is string => typeof value === 'string'
-            )
-          }
+          whatsappAllowedNumbers: body.whatsappAllowedNumbers.filter(
+            (value): value is string => typeof value === 'string'
+          )
+        }
         : {})
     });
 
@@ -369,14 +376,14 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
       ...(typeof body.description === 'string' ? { description: body.description } : {}),
       ...(typeof body.paymentMethod === 'string'
         ? {
-            paymentMethod: body.paymentMethod as
-              | 'pix'
-              | 'credit'
-              | 'debit'
-              | 'cash'
-              | 'transfer'
-              | 'boleto'
-          }
+          paymentMethod: body.paymentMethod as
+            | 'pix'
+            | 'credit'
+            | 'debit'
+            | 'cash'
+            | 'transfer'
+            | 'boleto'
+        }
         : {})
     });
     res.json({ ok: true });
@@ -747,14 +754,14 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
       ...(typeof body.description === 'string' ? { description: body.description } : {}),
       ...(typeof body.paymentMethod === 'string'
         ? {
-            paymentMethod: body.paymentMethod as
-              | 'pix'
-              | 'credit'
-              | 'debit'
-              | 'cash'
-              | 'transfer'
-              | 'boleto'
-          }
+          paymentMethod: body.paymentMethod as
+            | 'pix'
+            | 'credit'
+            | 'debit'
+            | 'cash'
+            | 'transfer'
+            | 'boleto'
+        }
         : {}),
       ...(body.frequency === 'weekly' || body.frequency === 'monthly' || body.frequency === 'yearly'
         ? { frequency: body.frequency }
@@ -771,6 +778,155 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
     const uid = getUid(req);
     await deleteRecurringTransaction(uid, req.params.id);
     res.json({ ok: true });
+  });
+
+  // ─── Financial Profile ─────────────────────────────────────────────────
+
+  router.get('/financial-profile', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const uid = getUid(req);
+      const profile = await getUserFinancialProfile(uid);
+      res.json(profile);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.put('/financial-profile', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const uid = getUid(req);
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const monthlyIncome = typeof body.monthlyIncome === 'number' ? body.monthlyIncome : NaN;
+      const fixedExpenses = typeof body.fixedExpenses === 'number' ? body.fixedExpenses : NaN;
+      const variableExpenses = typeof body.variableExpenses === 'number' ? body.variableExpenses : NaN;
+      const savingsTargetPct = typeof body.savingsTargetPct === 'number' ? body.savingsTargetPct : NaN;
+      const financialGoalsText = typeof body.financialGoalsText === 'string' ? body.financialGoalsText.trim().slice(0, 500) : null;
+
+      if (!Number.isFinite(monthlyIncome) || monthlyIncome < 0 ||
+        !Number.isFinite(fixedExpenses) || fixedExpenses < 0 ||
+        !Number.isFinite(variableExpenses) || variableExpenses < 0 ||
+        !Number.isFinite(savingsTargetPct) || savingsTargetPct < 0 || savingsTargetPct > 100) {
+        res.status(400).json({ error: 'Campos invalidos para perfil financeiro.' });
+        return;
+      }
+
+      await upsertUserFinancialProfile(uid, {
+        monthlyIncome,
+        fixedExpenses,
+        variableExpenses,
+        savingsTargetPct,
+        financialGoalsText,
+      });
+      const profile = await getUserFinancialProfile(uid);
+      res.json(profile);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // ─── Goals ─────────────────────────────────────────────────────────────
+
+  router.get('/goals', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const uid = getUid(req);
+      const goals = await getUserGoals(uid);
+      res.json(goals);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/goals', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const uid = getUid(req);
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const title = asString(body.title);
+      if (!title) {
+        res.status(400).json({ error: '`title` e obrigatorio.' });
+        return;
+      }
+      const description = typeof body.description === 'string' ? body.description.trim().slice(0, 500) : null;
+      const targetAmount = typeof body.targetAmount === 'number' && Number.isFinite(body.targetAmount) && body.targetAmount > 0 ? body.targetAmount : null;
+      const currentAmount = typeof body.currentAmount === 'number' && Number.isFinite(body.currentAmount) ? body.currentAmount : 0;
+      const deadline = typeof body.deadline === 'string' ? body.deadline.trim() : null;
+      const priority = body.priority === 'low' || body.priority === 'high' ? body.priority : 'medium';
+
+      const id = await addUserGoal(uid, {
+        title: title.slice(0, 120),
+        description,
+        targetAmount,
+        currentAmount,
+        deadline,
+        source: 'manual',
+        priority,
+      });
+      res.json({ id });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/goals/generate', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const uid = getUid(req);
+      const profile = await getUserFinancialProfile(uid);
+      if (!profile) {
+        res.status(400).json({ error: 'Perfil financeiro nao encontrado. Preencha o questionario primeiro.' });
+        return;
+      }
+
+      const settings = await getUserSettings(uid);
+      const currency = settings?.currency ?? 'BRL';
+
+      const generatedGoals = await generateFinancialGoals(profile, currency);
+
+      const ids: string[] = [];
+      for (const goal of generatedGoals) {
+        const id = await addUserGoal(uid, {
+          title: goal.title,
+          description: goal.description,
+          targetAmount: goal.targetAmount,
+          deadline: goal.deadline,
+          source: 'ai',
+          priority: goal.priority,
+        });
+        ids.push(id);
+      }
+
+      const goals = await getUserGoals(uid);
+      res.json({ generated: ids.length, goals });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch('/goals/:id', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const uid = getUid(req);
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      await updateUserGoal(uid, req.params.id, {
+        ...(typeof body.title === 'string' ? { title: body.title.slice(0, 120) } : {}),
+        ...(typeof body.description === 'string' || body.description === null ? { description: body.description as string | null } : {}),
+        ...(typeof body.targetAmount === 'number' || body.targetAmount === null ? { targetAmount: body.targetAmount as number | null } : {}),
+        ...(typeof body.currentAmount === 'number' ? { currentAmount: body.currentAmount } : {}),
+        ...(typeof body.deadline === 'string' || body.deadline === null ? { deadline: body.deadline as string | null } : {}),
+        ...(body.status === 'active' || body.status === 'completed' || body.status === 'cancelled' ? { status: body.status } : {}),
+        ...(body.priority === 'low' || body.priority === 'medium' || body.priority === 'high' ? { priority: body.priority } : {}),
+      });
+      res.json({ ok: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete('/goals/:id', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const uid = getUid(req);
+      await deleteUserGoal(uid, req.params.id);
+      res.json({ ok: true });
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.use((error: unknown, _req: Request, res: Response, _next: unknown) => {
