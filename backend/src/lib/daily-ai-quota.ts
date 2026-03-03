@@ -1,20 +1,18 @@
 import { supabaseAdmin as db } from './supabase';
 
 const DAILY_AI_QUOTA_TABLE = 'app_daily_ai_quotas';
-const CONSUME_DAILY_AI_QUOTA_RPC = 'consume_daily_ai_quota';
 const BRASILIA_TIMEZONE = 'America/Sao_Paulo';
+const QUOTA_UPDATE_MAX_ATTEMPTS = 3;
 
 export const WHATSAPP_FREE_QUOTA_CHANNEL = 'whatsapp_free';
-export const FREE_WHATSAPP_DAILY_LIMIT = 1;
+export const FREE_WHATSAPP_DAILY_LIMIT = 2;
 
 interface DbDailyAiQuotaRow {
   used_count: number;
 }
 
-interface ConsumeQuotaRpcRow {
-  allowed: boolean;
+interface DbQuotaMutationRow {
   used_count: number;
-  remaining_count: number;
 }
 
 export interface DailyQuotaState {
@@ -110,28 +108,79 @@ export async function consumeDailyAiQuota(
   enabled = true
 ): Promise<DailyQuotaState & { allowed: boolean }> {
   const quotaDate = getCurrentBrasiliaQuotaDate();
-  const { data, error } = await db.rpc(CONSUME_DAILY_AI_QUOTA_RPC, {
-    p_uid: uid,
-    p_quota_date: quotaDate,
-    p_channel: channel,
-    p_limit: limit
-  });
+  const nowIso = new Date().toISOString();
+  const resetsAt = getNextBrasiliaMidnightUtcIso();
 
-  assertNoError(error, 'consumeDailyAiQuota');
+  const { error: upsertError } = await db
+    .from(DAILY_AI_QUOTA_TABLE)
+    .upsert({
+      uid,
+      quota_date: quotaDate,
+      channel,
+      used_count: 0,
+      created_at: nowIso,
+      updated_at: nowIso
+    }, {
+      onConflict: 'uid,quota_date,channel',
+      ignoreDuplicates: true
+    });
 
-  const row = Array.isArray(data) ? (data[0] as ConsumeQuotaRpcRow | undefined) : undefined;
-  const used = Math.max(0, Number(row?.used_count ?? 0));
-  const remaining = Math.max(0, Number(row?.remaining_count ?? Math.max(limit - used, 0)));
+  assertNoError(upsertError, 'consumeDailyAiQuota.ensureRow');
 
-  return {
-    allowed: Boolean(row?.allowed),
-    enabled,
-    limit,
-    used,
-    remaining,
-    quotaDate,
-    resetsAt: getNextBrasiliaMidnightUtcIso()
-  };
+  for (let attempt = 0; attempt < QUOTA_UPDATE_MAX_ATTEMPTS; attempt += 1) {
+    const { data: currentRow, error: currentError } = await db
+      .from(DAILY_AI_QUOTA_TABLE)
+      .select('used_count')
+      .eq('uid', uid)
+      .eq('quota_date', quotaDate)
+      .eq('channel', channel)
+      .maybeSingle();
+
+    assertNoError(currentError, 'consumeDailyAiQuota.readCurrent');
+
+    const currentUsed = Math.max(0, Number((currentRow as DbDailyAiQuotaRow | null)?.used_count ?? 0));
+    if (currentUsed >= limit) {
+      return {
+        allowed: false,
+        enabled,
+        limit,
+        used: currentUsed,
+        remaining: 0,
+        quotaDate,
+        resetsAt
+      };
+    }
+
+    const nextUsed = currentUsed + 1;
+    const { data: updatedRow, error: updateError } = await db
+      .from(DAILY_AI_QUOTA_TABLE)
+      .update({
+        used_count: nextUsed,
+        updated_at: new Date().toISOString()
+      })
+      .eq('uid', uid)
+      .eq('quota_date', quotaDate)
+      .eq('channel', channel)
+      .eq('used_count', currentUsed)
+      .select('used_count')
+      .maybeSingle();
+
+    assertNoError(updateError, 'consumeDailyAiQuota.compareAndSet');
+
+    if (updatedRow) {
+      return {
+        allowed: true,
+        enabled,
+        limit,
+        used: Math.max(0, Number((updatedRow as DbQuotaMutationRow).used_count)),
+        remaining: Math.max(limit - nextUsed, 0),
+        quotaDate,
+        resetsAt
+      };
+    }
+  }
+
+  throw new Error('consumeDailyAiQuota: failed to update quota after retries');
 }
 
 export async function consumeFreeWhatsAppQuota(uid: string): Promise<DailyQuotaState & { allowed: boolean }> {

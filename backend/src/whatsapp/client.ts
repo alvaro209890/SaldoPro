@@ -21,7 +21,7 @@ import {
   MAX_STORED_DOCUMENT_BYTES,
   uploadPendingDocument
 } from '../lib/document-storage';
-import { consumeFreeWhatsAppQuota } from '../lib/daily-ai-quota';
+import { consumeFreeWhatsAppQuota, getFreeWhatsAppQuotaState } from '../lib/daily-ai-quota';
 import { isFirebaseUserActive } from '../lib/firebase-user-access';
 import { getUserPlanAccess } from '../lib/subscription-access';
 import type { GroqChatMessage } from '../ai/groq';
@@ -245,8 +245,145 @@ const DOCUMENT_PLAN_REQUIRED_REPLY =
 const FREE_WHATSAPP_LIMIT_REACHED_REPLY = [
   'Voce atingiu o limite gratis de mensagens no WhatsApp hoje.',
   'Assine um plano para continuar usando a IA sem travas e liberar o uso ilimitado.',
-  `Assine agora: ${env.webAppUrl}/app/plans`
+  `Entre no seu painel para assinar: ${env.appPanelUrl}`
 ].join('\n');
+
+const SIGNAL_CONSOLE_WARN_FILTERS = new Set([
+  'Closing open session in favor of incoming prekey bundle'
+]);
+const SIGNAL_CONSOLE_INFO_FILTERS = new Set([
+  'Closing session:'
+]);
+
+function shouldSuppressConsoleNoise(
+  args: unknown[],
+  filters: ReadonlySet<string>
+): boolean {
+  const [firstArg] = args;
+  return typeof firstArg === 'string' && filters.has(firstArg);
+}
+
+function installSignalConsoleNoiseFilter(): void {
+  const globalState = globalThis as typeof globalThis & {
+    __saldoproSignalConsoleFilterInstalled?: boolean;
+  };
+
+  if (globalState.__saldoproSignalConsoleFilterInstalled) {
+    return;
+  }
+
+  const originalWarn = console.warn.bind(console);
+  const originalInfo = console.info.bind(console);
+
+  console.warn = ((...args: unknown[]) => {
+    if (shouldSuppressConsoleNoise(args, SIGNAL_CONSOLE_WARN_FILTERS)) {
+      return;
+    }
+    originalWarn(...(args as Parameters<typeof console.warn>));
+  }) as typeof console.warn;
+
+  console.info = ((...args: unknown[]) => {
+    if (shouldSuppressConsoleNoise(args, SIGNAL_CONSOLE_INFO_FILTERS)) {
+      return;
+    }
+    originalInfo(...(args as Parameters<typeof console.info>));
+  }) as typeof console.info;
+
+  globalState.__saldoproSignalConsoleFilterInstalled = true;
+}
+
+type BaileysLogMeta = Record<string, unknown> | undefined;
+
+function normalizeBaileysLogArgs(args: unknown[]): { message: string; meta: BaileysLogMeta } {
+  if (typeof args[0] === 'string') {
+    return {
+      message: args[0],
+      meta: typeof args[1] === 'object' && args[1] !== null
+        ? args[1] as Record<string, unknown>
+        : undefined
+    };
+  }
+
+  return {
+    message: typeof args[1] === 'string' ? args[1] : '',
+    meta: typeof args[0] === 'object' && args[0] !== null
+      ? args[0] as Record<string, unknown>
+      : undefined
+  };
+}
+
+function isTransientBaileysDecryptLog(message: string, meta: BaileysLogMeta): boolean {
+  if (message === 'sent retry receipt') {
+    return true;
+  }
+
+  if (message !== 'failed to decrypt message' || !meta) {
+    return false;
+  }
+
+  const err = meta['err'];
+  if (!err || typeof err !== 'object') {
+    return false;
+  }
+
+  const errorName = typeof (err as { name?: unknown }).name === 'string'
+    ? (err as { name: string }).name
+    : '';
+  const errorMessage = typeof (err as { message?: unknown }).message === 'string'
+    ? (err as { message: string }).message
+    : '';
+
+  return (
+    errorName === 'SessionError' &&
+    errorMessage.includes('No matching sessions found for message')
+  );
+}
+
+function createBaileysLogger(): WASocket['logger'] {
+  const instance = {
+    level: 'info',
+    child: () => instance,
+    trace: () => undefined,
+    debug: () => undefined,
+    info: (...args: unknown[]) => {
+      const { message } = normalizeBaileysLogArgs(args);
+      if (isTransientBaileysDecryptLog(message, undefined)) {
+        return;
+      }
+    },
+    warn: (...args: unknown[]) => {
+      const { message, meta } = normalizeBaileysLogArgs(args);
+      if (isTransientBaileysDecryptLog(message, meta)) {
+        return;
+      }
+
+      if (message) {
+        logger.warn(`Baileys: ${message}`, meta);
+      }
+    },
+    error: (...args: unknown[]) => {
+      const { message, meta } = normalizeBaileysLogArgs(args);
+      if (isTransientBaileysDecryptLog(message, meta)) {
+        return;
+      }
+
+      if (message) {
+        logger.error(`Baileys: ${message}`, meta);
+      }
+    },
+    fatal: (...args: unknown[]) => {
+      const { message, meta } = normalizeBaileysLogArgs(args);
+      if (message) {
+        logger.error(`Baileys fatal: ${message}`, meta);
+      }
+    }
+  };
+
+  return instance as unknown as WASocket['logger'];
+}
+
+installSignalConsoleNoiseFilter();
+const BAILEYS_LOGGER = createBaileysLogger();
 
 /** Max number of messages processed concurrently by the AI pipeline. */
 const MESSAGE_QUEUE_CONCURRENCY = 5;
@@ -549,6 +686,7 @@ export class WhatsAppClient {
     const socket = makeWASocket({
       auth: state,
       version,
+      logger: BAILEYS_LOGGER,
       printQRInTerminal: false,
       // Ignore status & groups at socket level: this bot only handles 1:1 chats.
       shouldIgnoreJid: (jid) => isStatusJid(jid) || isGroupJid(jid),
@@ -1216,9 +1354,36 @@ export class WhatsAppClient {
       return true;
     }
 
-    const quotaResult = await consumeFreeWhatsAppQuota(ownerUid);
-    if (quotaResult.allowed) {
-      return true;
+    try {
+      const quotaResult = await consumeFreeWhatsAppQuota(ownerUid);
+      if (quotaResult.allowed) {
+        return true;
+      }
+    } catch (error) {
+      logger.error('WHATSAPP_FREE_QUOTA_CONSUME_FAILED', {
+        uid: ownerUid,
+        phone: remotePhone,
+        error: error instanceof Error ? error.message : 'unknown'
+      });
+
+      try {
+        const quotaState = await getFreeWhatsAppQuotaState(ownerUid, true);
+        if (quotaState.remaining > 0) {
+          logger.warn('WHATSAPP_FREE_QUOTA_FALLBACK_ALLOW', {
+            uid: ownerUid,
+            phone: remotePhone,
+            remaining: quotaState.remaining
+          });
+          return true;
+        }
+      } catch (fallbackError) {
+        logger.error('WHATSAPP_FREE_QUOTA_FALLBACK_FAILED', {
+          uid: ownerUid,
+          phone: remotePhone,
+          error: fallbackError instanceof Error ? fallbackError.message : 'unknown'
+        });
+        return true;
+      }
     }
 
     await this.sendDocumentTextReply(

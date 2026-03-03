@@ -178,8 +178,116 @@ const DOCUMENT_PLAN_REQUIRED_REPLY = 'Salvar e acessar imagens, PDFs e arquivos 
 const FREE_WHATSAPP_LIMIT_REACHED_REPLY = [
     'Voce atingiu o limite gratis de mensagens no WhatsApp hoje.',
     'Assine um plano para continuar usando a IA sem travas e liberar o uso ilimitado.',
-    `Assine agora: ${env_1.env.webAppUrl}/app/plans`
+    `Entre no seu painel para assinar: ${env_1.env.appPanelUrl}`
 ].join('\n');
+const SIGNAL_CONSOLE_WARN_FILTERS = new Set([
+    'Closing open session in favor of incoming prekey bundle'
+]);
+const SIGNAL_CONSOLE_INFO_FILTERS = new Set([
+    'Closing session:'
+]);
+function shouldSuppressConsoleNoise(args, filters) {
+    const [firstArg] = args;
+    return typeof firstArg === 'string' && filters.has(firstArg);
+}
+function installSignalConsoleNoiseFilter() {
+    const globalState = globalThis;
+    if (globalState.__saldoproSignalConsoleFilterInstalled) {
+        return;
+    }
+    const originalWarn = console.warn.bind(console);
+    const originalInfo = console.info.bind(console);
+    console.warn = ((...args) => {
+        if (shouldSuppressConsoleNoise(args, SIGNAL_CONSOLE_WARN_FILTERS)) {
+            return;
+        }
+        originalWarn(...args);
+    });
+    console.info = ((...args) => {
+        if (shouldSuppressConsoleNoise(args, SIGNAL_CONSOLE_INFO_FILTERS)) {
+            return;
+        }
+        originalInfo(...args);
+    });
+    globalState.__saldoproSignalConsoleFilterInstalled = true;
+}
+function normalizeBaileysLogArgs(args) {
+    if (typeof args[0] === 'string') {
+        return {
+            message: args[0],
+            meta: typeof args[1] === 'object' && args[1] !== null
+                ? args[1]
+                : undefined
+        };
+    }
+    return {
+        message: typeof args[1] === 'string' ? args[1] : '',
+        meta: typeof args[0] === 'object' && args[0] !== null
+            ? args[0]
+            : undefined
+    };
+}
+function isTransientBaileysDecryptLog(message, meta) {
+    if (message === 'sent retry receipt') {
+        return true;
+    }
+    if (message !== 'failed to decrypt message' || !meta) {
+        return false;
+    }
+    const err = meta['err'];
+    if (!err || typeof err !== 'object') {
+        return false;
+    }
+    const errorName = typeof err.name === 'string'
+        ? err.name
+        : '';
+    const errorMessage = typeof err.message === 'string'
+        ? err.message
+        : '';
+    return (errorName === 'SessionError' &&
+        errorMessage.includes('No matching sessions found for message'));
+}
+function createBaileysLogger() {
+    const instance = {
+        level: 'info',
+        child: () => instance,
+        trace: () => undefined,
+        debug: () => undefined,
+        info: (...args) => {
+            const { message } = normalizeBaileysLogArgs(args);
+            if (isTransientBaileysDecryptLog(message, undefined)) {
+                return;
+            }
+        },
+        warn: (...args) => {
+            const { message, meta } = normalizeBaileysLogArgs(args);
+            if (isTransientBaileysDecryptLog(message, meta)) {
+                return;
+            }
+            if (message) {
+                logger_1.logger.warn(`Baileys: ${message}`, meta);
+            }
+        },
+        error: (...args) => {
+            const { message, meta } = normalizeBaileysLogArgs(args);
+            if (isTransientBaileysDecryptLog(message, meta)) {
+                return;
+            }
+            if (message) {
+                logger_1.logger.error(`Baileys: ${message}`, meta);
+            }
+        },
+        fatal: (...args) => {
+            const { message, meta } = normalizeBaileysLogArgs(args);
+            if (message) {
+                logger_1.logger.error(`Baileys fatal: ${message}`, meta);
+            }
+        }
+    };
+    return instance;
+}
+installSignalConsoleNoiseFilter();
+const BAILEYS_LOGGER = createBaileysLogger();
 /** Max number of messages processed concurrently by the AI pipeline. */
 const MESSAGE_QUEUE_CONCURRENCY = 5;
 /** Refresh typing presence periodically while AI processing is running. */
@@ -453,6 +561,7 @@ class WhatsAppClient {
         const socket = (0, baileys_1.default)({
             auth: state,
             version,
+            logger: BAILEYS_LOGGER,
             printQRInTerminal: false,
             // Ignore status & groups at socket level: this bot only handles 1:1 chats.
             shouldIgnoreJid: (jid) => (0, events_1.isStatusJid)(jid) || (0, events_1.isGroupJid)(jid),
@@ -1047,9 +1156,37 @@ class WhatsAppClient {
         if (hasUnlimitedAi) {
             return true;
         }
-        const quotaResult = await (0, daily_ai_quota_1.consumeFreeWhatsAppQuota)(ownerUid);
-        if (quotaResult.allowed) {
-            return true;
+        try {
+            const quotaResult = await (0, daily_ai_quota_1.consumeFreeWhatsAppQuota)(ownerUid);
+            if (quotaResult.allowed) {
+                return true;
+            }
+        }
+        catch (error) {
+            logger_1.logger.error('WHATSAPP_FREE_QUOTA_CONSUME_FAILED', {
+                uid: ownerUid,
+                phone: remotePhone,
+                error: error instanceof Error ? error.message : 'unknown'
+            });
+            try {
+                const quotaState = await (0, daily_ai_quota_1.getFreeWhatsAppQuotaState)(ownerUid, true);
+                if (quotaState.remaining > 0) {
+                    logger_1.logger.warn('WHATSAPP_FREE_QUOTA_FALLBACK_ALLOW', {
+                        uid: ownerUid,
+                        phone: remotePhone,
+                        remaining: quotaState.remaining
+                    });
+                    return true;
+                }
+            }
+            catch (fallbackError) {
+                logger_1.logger.error('WHATSAPP_FREE_QUOTA_FALLBACK_FAILED', {
+                    uid: ownerUid,
+                    phone: remotePhone,
+                    error: fallbackError instanceof Error ? fallbackError.message : 'unknown'
+                });
+                return true;
+            }
         }
         await this.sendDocumentTextReply(ownerUid, remoteJid, remotePhone, FREE_WHATSAPP_LIMIT_REACHED_REPLY, '[Plano requerido] limite gratis diario');
         return false;

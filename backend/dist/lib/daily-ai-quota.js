@@ -9,8 +9,8 @@ exports.consumeDailyAiQuota = consumeDailyAiQuota;
 exports.consumeFreeWhatsAppQuota = consumeFreeWhatsAppQuota;
 const supabase_1 = require("./supabase");
 const DAILY_AI_QUOTA_TABLE = 'app_daily_ai_quotas';
-const CONSUME_DAILY_AI_QUOTA_RPC = 'consume_daily_ai_quota';
 const BRASILIA_TIMEZONE = 'America/Sao_Paulo';
+const QUOTA_UPDATE_MAX_ATTEMPTS = 3;
 exports.WHATSAPP_FREE_QUOTA_CHANNEL = 'whatsapp_free';
 exports.FREE_WHATSAPP_DAILY_LIMIT = 1;
 function assertNoError(error, context) {
@@ -74,25 +74,70 @@ async function getFreeWhatsAppQuotaState(uid, enabled) {
 }
 async function consumeDailyAiQuota(uid, channel, limit, enabled = true) {
     const quotaDate = getCurrentBrasiliaQuotaDate();
-    const { data, error } = await supabase_1.supabaseAdmin.rpc(CONSUME_DAILY_AI_QUOTA_RPC, {
-        p_uid: uid,
-        p_quota_date: quotaDate,
-        p_channel: channel,
-        p_limit: limit
+    const nowIso = new Date().toISOString();
+    const resetsAt = getNextBrasiliaMidnightUtcIso();
+    const { error: upsertError } = await supabase_1.supabaseAdmin
+        .from(DAILY_AI_QUOTA_TABLE)
+        .upsert({
+        uid,
+        quota_date: quotaDate,
+        channel,
+        used_count: 0,
+        created_at: nowIso,
+        updated_at: nowIso
+    }, {
+        onConflict: 'uid,quota_date,channel',
+        ignoreDuplicates: true
     });
-    assertNoError(error, 'consumeDailyAiQuota');
-    const row = Array.isArray(data) ? data[0] : undefined;
-    const used = Math.max(0, Number(row?.used_count ?? 0));
-    const remaining = Math.max(0, Number(row?.remaining_count ?? Math.max(limit - used, 0)));
-    return {
-        allowed: Boolean(row?.allowed),
-        enabled,
-        limit,
-        used,
-        remaining,
-        quotaDate,
-        resetsAt: getNextBrasiliaMidnightUtcIso()
-    };
+    assertNoError(upsertError, 'consumeDailyAiQuota.ensureRow');
+    for (let attempt = 0; attempt < QUOTA_UPDATE_MAX_ATTEMPTS; attempt += 1) {
+        const { data: currentRow, error: currentError } = await supabase_1.supabaseAdmin
+            .from(DAILY_AI_QUOTA_TABLE)
+            .select('used_count')
+            .eq('uid', uid)
+            .eq('quota_date', quotaDate)
+            .eq('channel', channel)
+            .maybeSingle();
+        assertNoError(currentError, 'consumeDailyAiQuota.readCurrent');
+        const currentUsed = Math.max(0, Number(currentRow?.used_count ?? 0));
+        if (currentUsed >= limit) {
+            return {
+                allowed: false,
+                enabled,
+                limit,
+                used: currentUsed,
+                remaining: 0,
+                quotaDate,
+                resetsAt
+            };
+        }
+        const nextUsed = currentUsed + 1;
+        const { data: updatedRow, error: updateError } = await supabase_1.supabaseAdmin
+            .from(DAILY_AI_QUOTA_TABLE)
+            .update({
+            used_count: nextUsed,
+            updated_at: new Date().toISOString()
+        })
+            .eq('uid', uid)
+            .eq('quota_date', quotaDate)
+            .eq('channel', channel)
+            .eq('used_count', currentUsed)
+            .select('used_count')
+            .maybeSingle();
+        assertNoError(updateError, 'consumeDailyAiQuota.compareAndSet');
+        if (updatedRow) {
+            return {
+                allowed: true,
+                enabled,
+                limit,
+                used: Math.max(0, Number(updatedRow.used_count)),
+                remaining: Math.max(limit - nextUsed, 0),
+                quotaDate,
+                resetsAt
+            };
+        }
+    }
+    throw new Error('consumeDailyAiQuota: failed to update quota after retries');
 }
 async function consumeFreeWhatsAppQuota(uid) {
     return consumeDailyAiQuota(uid, exports.WHATSAPP_FREE_QUOTA_CHANNEL, exports.FREE_WHATSAPP_DAILY_LIMIT);
