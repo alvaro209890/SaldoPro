@@ -4,8 +4,10 @@ import {
   isValidAdminPassword
 } from '../lib/admin-session';
 import {
+  adminGrantSubscription,
   clearUserPlanOverride,
   getUserPlanAccessSummaryMap,
+  listAllSubscriptions,
   setUserPlanOverride,
   type UserPlanAccessSummary
 } from '../lib/subscription-access';
@@ -451,6 +453,40 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
       res.json({
         ok: true,
         user: await loadSingleAdminUser(uid)
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/subscriptions', async (_req: Request, res: Response, next) => {
+    try {
+      const subscriptions = await listAllSubscriptions();
+      res.json({ subscriptions });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/users/:uid/subscription/grant', async (req: Request, res: Response, next) => {
+    try {
+      const uid = req.params.uid;
+      const days = typeof req.body?.days === 'number' ? req.body.days : 0;
+      const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 200) : null;
+
+      if (days < 1 || days > 3650) {
+        res.status(400).json({ error: 'Dias deve ser entre 1 e 3650.' });
+        return;
+      }
+
+      const subscription = await adminGrantSubscription(uid, days, reason);
+      const user = await loadSingleAdminUser(uid);
+
+      logger.warn('Admin granted subscription access', { uid, days, reason: reason || null });
+      res.json({
+        ok: true,
+        subscription,
+        user
       });
     } catch (error) {
       next(error);

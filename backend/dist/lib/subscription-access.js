@@ -17,6 +17,8 @@ exports.markBillingEventFailed = markBillingEventFailed;
 exports.setUserPlanOverride = setUserPlanOverride;
 exports.clearUserPlanOverride = clearUserPlanOverride;
 exports.getUserPlanAccess = getUserPlanAccess;
+exports.listAllSubscriptions = listAllSubscriptions;
+exports.adminGrantSubscription = adminGrantSubscription;
 const daily_ai_quota_1 = require("./daily-ai-quota");
 const supabase_1 = require("./supabase");
 const SUBSCRIPTIONS_TABLE = 'app_user_subscriptions';
@@ -323,4 +325,48 @@ async function getUserPlanAccess(uid) {
         features,
         freeWhatsappQuota
     };
+}
+async function listAllSubscriptions() {
+    const { data, error } = await supabase_1.supabaseAdmin
+        .from(SUBSCRIPTIONS_TABLE)
+        .select('*')
+        .order('created_at', { ascending: false });
+    assertNoError(error, 'listAllSubscriptions');
+    return (data ?? []).map(mapSubscriptionRow);
+}
+async function adminGrantSubscription(uid, days, reason = null) {
+    const nowIso = new Date().toISOString();
+    const nextBilling = new Date(Date.now() + days * 86_400_000).toISOString();
+    // Cancel existing active subscriptions before granting
+    const replaceable = await listUserSubscriptionsByStatuses(uid, ['pending', 'authorized', 'paused']);
+    for (const current of replaceable) {
+        await updateUserSubscriptionRecord(current.id, {
+            status: 'cancelled',
+            statusReason: 'replaced_by_admin_grant',
+            cancelledAt: nowIso,
+            lastPaymentStatus: 'cancelled'
+        });
+    }
+    const { data, error } = await supabase_1.supabaseAdmin
+        .from(SUBSCRIPTIONS_TABLE)
+        .insert({
+        uid,
+        plan_code: 'monthly',
+        status: 'authorized',
+        status_reason: reason || `Admin concedeu ${days} dias`,
+        mercado_pago_preapproval_id: null,
+        mercado_pago_plan_id: null,
+        external_reference: `admin_grant:${uid}|days:${days}|ts:${Date.now()}`,
+        payer_email: 'admin@saldopro.com',
+        next_billing_date: nextBilling,
+        last_payment_at: nowIso,
+        last_payment_status: 'admin_grant',
+        cancelled_at: null,
+        created_at: nowIso,
+        updated_at: nowIso
+    })
+        .select('*')
+        .single();
+    assertNoError(error, 'adminGrantSubscription');
+    return mapSubscriptionRow(data);
 }

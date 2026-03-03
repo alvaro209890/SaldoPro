@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, type FormEvent } from 'react';
 import { BACKEND_URL } from './config';
-import { LineChart, Line, XAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { format, parseISO, startOfMonth, subMonths, isAfter } from 'date-fns';
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { format, parseISO, startOfMonth, subMonths, isAfter, differenceInDays } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
 /* ───── Storage ───── */
@@ -57,7 +57,23 @@ interface StorageUsageResponse {
     users: StorageUsageItem[];
   };
 }
-type Tab = 'overview' | 'operations' | 'users' | 'storage';
+interface SubscriptionRecord {
+  id: string;
+  uid: string;
+  planCode: string;
+  status: string;
+  statusReason: string | null;
+  mercadoPagoPreapprovalId: string | null;
+  externalReference: string;
+  payerEmail: string;
+  nextBillingDate: string | null;
+  lastPaymentAt: string | null;
+  lastPaymentStatus: string | null;
+  cancelledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+type Tab = 'overview' | 'operations' | 'users' | 'storage' | 'subscriptions';
 
 /* ───── Helpers ───── */
 function fmtDate(v: string | null) {
@@ -115,6 +131,7 @@ const IconChevron = () => <Icon d="m15 18-6-6 6-6" size={16} />;
 const IconSend = () => <Icon d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" size={16} />;
 const IconPhone = () => <Icon d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6A19.79 19.79 0 012.12 4.18 2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z" />;
 const IconStorage = () => <Icon d="M20 7H4V5a2 2 0 012-2h12a2 2 0 012 2v2zM4 7h16v12a2 2 0 01-2 2H6a2 2 0 01-2-2V7zM9 11h6M9 15h6" />;
+const IconCreditCard = () => <Icon d="M1 4h22v16H1zM1 10h22M6 16h4" />;
 
 /* ───── Stat Card ───── */
 function StatCard({ label, value, sub, glow = '' }: { label: string; value: string | number; sub?: string; glow?: string }) {
@@ -158,9 +175,19 @@ export function App() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [storageUsage, setStorageUsage] = useState<StorageUsageResponse | null>(null);
+  const [subscriptions, setSubscriptions] = useState<SubscriptionRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [tab, setTab] = useState<Tab>('overview');
+
+  // Subscriptions tab
+  const [subFilter, setSubFilter] = useState<'all' | 'authorized' | 'pending' | 'cancelled' | 'admin_grant'>('all');
+  const [subSearch, setSubSearch] = useState('');
+  const [grantUid, setGrantUid] = useState('');
+  const [grantDays, setGrantDays] = useState(30);
+  const [grantReason, setGrantReason] = useState('');
+  const [grantLoading, setGrantLoading] = useState(false);
+  const [grantModalOpen, setGrantModalOpen] = useState(false);
 
   // Users tab
   const [search, setSearch] = useState('');
@@ -304,6 +331,38 @@ export function App() {
       setSubscriptionActionUid('');
     }
   }
+
+  async function loadSubscriptions() {
+    if (!token) return;
+    try {
+      const r = await apiFetch<{ subscriptions: SubscriptionRecord[] }>('/api/admin/subscriptions', token);
+      setSubscriptions(r.subscriptions);
+    } catch { }
+  }
+
+  async function grantAccess(e: FormEvent) {
+    e.preventDefault();
+    if (!token || !grantUid || grantDays < 1) return;
+    setGrantLoading(true);
+    try {
+      const r = await apiFetch<{ user: User }>(`/api/admin/users/${grantUid}/subscription/grant`, token, {
+        method: 'POST',
+        body: JSON.stringify({ days: grantDays, reason: grantReason.trim() || null })
+      });
+      setUsers(current => current.map(u => u.uid === r.user.uid ? r.user : u));
+      setSelUser(current => current?.uid === r.user.uid ? r.user : current);
+      setGrantModalOpen(false);
+      setGrantUid('');
+      setGrantDays(30);
+      setGrantReason('');
+      await loadSubscriptions();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Falha ao conceder acesso.');
+    } finally {
+      setGrantLoading(false);
+    }
+  }
+
 
   async function waAct(act: 'reset' | 'qr') {
     if (!token) return; setWaAction(act);
@@ -567,6 +626,7 @@ export function App() {
           <button onClick={() => setTab('overview')} className={`sidebar-link w-full ${tab === 'overview' ? 'active' : ''}`}><IconGrid /> Visão Geral</button>
           <button onClick={() => setTab('operations')} className={`sidebar-link w-full ${tab === 'operations' ? 'active' : ''}`}><IconServer /> Operação</button>
           <button onClick={() => setTab('users')} className={`sidebar-link w-full ${tab === 'users' ? 'active' : ''}`}><IconUsers /> Usuários</button>
+          <button onClick={() => { setTab('subscriptions'); void loadSubscriptions(); }} className={`sidebar-link w-full ${tab === 'subscriptions' ? 'active' : ''}`}><IconCreditCard /> Assinaturas</button>
           <button onClick={() => setTab('storage')} className={`sidebar-link w-full ${tab === 'storage' ? 'active' : ''}`}><IconStorage /> Storage</button>
         </nav>
         <div className="border-t border-white/6 pt-4 space-y-1">
@@ -579,9 +639,9 @@ export function App() {
       <div className="lg:hidden fixed top-0 left-0 right-0 z-50 bg-black/80 backdrop-blur-xl border-b border-white/6 px-4 py-3 flex items-center justify-between">
         <p className="text-sm font-bold text-white">💰 SaldoPro Admin</p>
         <div className="flex gap-2">
-          {(['overview', 'operations', 'users', 'storage'] as Tab[]).map(t => (
-            <button key={t} onClick={() => setTab(t)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${tab === t ? 'bg-emerald-500/20 text-emerald-300' : 'text-zinc-400'}`}>
-              {t === 'overview' ? 'Geral' : t === 'operations' ? 'Op.' : t === 'users' ? 'Users' : 'Storage'}
+          {(['overview', 'operations', 'users', 'subscriptions', 'storage'] as Tab[]).map(t => (
+            <button key={t} onClick={() => { setTab(t); if (t === 'subscriptions') void loadSubscriptions(); }} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${tab === t ? 'bg-emerald-500/20 text-emerald-300' : 'text-zinc-400'}`}>
+              {t === 'overview' ? 'Geral' : t === 'operations' ? 'Op.' : t === 'users' ? 'Users' : t === 'subscriptions' ? 'Assin.' : 'Storage'}
             </button>
           ))}
         </div>
@@ -795,6 +855,243 @@ export function App() {
                   {storageRows.length === 0 && <tr><td colSpan={7} className="text-center text-zinc-500 py-8">Nenhum arquivo encontrado no bucket.</td></tr>}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )}
+
+        {/* ──── SUBSCRIPTIONS TAB ──── */}
+        {tab === 'subscriptions' && (() => {
+          const PLAN_PRICES: Record<string, number> = { monthly: 2000, quarterly: 5400, yearly: 20000 };
+          const planLabel = (c: string) => c === 'monthly' ? 'Mensal' : c === 'quarterly' ? 'Trimestral' : c === 'yearly' ? 'Anual' : c;
+          const statusLabel = (s: string) => s === 'authorized' ? 'Ativo' : s === 'pending' ? 'Pendente' : s === 'cancelled' ? 'Cancelado' : s === 'paused' ? 'Pausado' : s === 'rejected' ? 'Rejeitado' : s;
+          const statusBadge = (s: string) => s === 'authorized' ? 'badge badge-green' : s === 'pending' ? 'badge badge-amber' : s === 'cancelled' || s === 'rejected' ? 'badge badge-rose' : 'badge badge-zinc';
+
+          const remainingDays = (nbd: string | null) => {
+            if (!nbd) return null;
+            const d = differenceInDays(parseISO(nbd), new Date());
+            return Math.max(0, d);
+          };
+
+          const isAdminGrant = (sub: SubscriptionRecord) => sub.externalReference.startsWith('admin_grant:');
+
+          const activeSubs = subscriptions.filter(s => s.status === 'authorized');
+          const cancelledSubs = subscriptions.filter(s => s.status === 'cancelled');
+          const pendingSubs = subscriptions.filter(s => s.status === 'pending');
+
+          // Estimated monthly revenue from all active subscriptions
+          const monthlyRevenue = activeSubs.reduce((total, s) => {
+            const price = PLAN_PRICES[s.planCode] ?? 0;
+            if (isAdminGrant(s)) return total; // Admin grants generate no revenue
+            if (s.planCode === 'quarterly') return total + Math.round(price / 3);
+            if (s.planCode === 'yearly') return total + Math.round(price / 12);
+            return total + price;
+          }, 0);
+
+          // Revenue data for chart (6 months)
+          const revenueData = (() => {
+            const months = Array.from({ length: 6 }, (_, i) => startOfMonth(subMonths(new Date(), 5 - i)));
+            return months.map(m => {
+              const monthSubs = subscriptions.filter(s => {
+                const created = parseISO(s.createdAt);
+                return startOfMonth(created).getTime() === m.getTime() && !isAdminGrant(s) && s.status !== 'rejected';
+              });
+              const revenue = monthSubs.reduce((t, s) => t + (PLAN_PRICES[s.planCode] ?? 0), 0);
+              return { name: format(m, 'MMM/yy', { locale: ptBR }), receita: revenue / 100 };
+            });
+          })();
+
+          // Get user info from loaded users list
+          const getUserInfo = (uid: string) => users.find(u => u.uid === uid);
+
+          // Filter subscriptions
+          const filtered = subscriptions.filter(s => {
+            if (subFilter === 'authorized' && s.status !== 'authorized') return false;
+            if (subFilter === 'pending' && s.status !== 'pending') return false;
+            if (subFilter === 'cancelled' && s.status !== 'cancelled') return false;
+            if (subFilter === 'admin_grant' && !isAdminGrant(s)) return false;
+            if (subSearch.trim()) {
+              const q = subSearch.toLowerCase();
+              const u = getUserInfo(s.uid);
+              const haystack = [s.uid, s.payerEmail, s.planCode, u?.displayName ?? '', u?.email ?? ''].join(' ').toLowerCase();
+              if (!haystack.includes(q)) return false;
+            }
+            return true;
+          });
+
+          return (
+            <div className="space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div>
+                  <h1 className="text-2xl font-bold text-white">Assinaturas</h1>
+                  <p className="text-sm text-zinc-500 mt-1">Gerenciamento completo de assinaturas e receita</p>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => void loadSubscriptions()} className="rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-white/10 transition">
+                    <IconRefresh />
+                  </button>
+                  <button onClick={() => { setGrantModalOpen(true); setGrantUid(''); }} className="rounded-lg bg-emerald-500/15 border border-emerald-500/25 px-4 py-2 text-sm font-semibold text-emerald-300 hover:bg-emerald-500/25 transition">
+                    + Conceder Acesso
+                  </button>
+                </div>
+              </div>
+
+              {/* Stat cards */}
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <StatCard label="Total Assinaturas" value={subscriptions.length} sub={`${activeSubs.length} ativas`} glow="card-glow-green" />
+                <StatCard label="Assinaturas Ativas" value={activeSubs.length} sub={`${activeSubs.filter(s => isAdminGrant(s)).length} manuais`} glow="card-glow-sky" />
+                <StatCard label="Receita Mensal Est." value={fmtCurrency(monthlyRevenue / 100)} sub="Baseado nos planos ativos" glow="card-glow-amber" />
+                <StatCard label="Cancelamentos" value={cancelledSubs.length} sub={`${pendingSubs.length} pendentes`} glow="card-glow-rose" />
+              </div>
+
+              {/* Revenue Chart */}
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="card p-5">
+                  <p className="text-xs uppercase tracking-widest text-zinc-500 mb-4">Receita por Mês (6 meses)</p>
+                  <div className="h-52">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={revenueData}>
+                        <XAxis dataKey="name" tick={{ fill: '#71717a', fontSize: 11 }} axisLine={false} tickLine={false} />
+                        <YAxis tick={{ fill: '#71717a', fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `R$${v}`} />
+                        <Tooltip contentStyle={{ background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '12px' }} formatter={(v: number) => [`R$ ${v.toFixed(2).replace('.', ',')}`, 'Receita']} />
+                        <Bar dataKey="receita" fill="#34d399" radius={[6, 6, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* Distribution */}
+                <div className="card p-5">
+                  <p className="text-xs uppercase tracking-widest text-zinc-500 mb-4">Distribuição de Status</p>
+                  <div className="space-y-3">
+                    {[
+                      { l: 'Ativas', v: activeSubs.length, c: 'bg-emerald-500', t: subscriptions.length || 1 },
+                      { l: 'Pendentes', v: pendingSubs.length, c: 'bg-amber-500', t: subscriptions.length || 1 },
+                      { l: 'Canceladas', v: cancelledSubs.length, c: 'bg-rose-500', t: subscriptions.length || 1 },
+                      { l: 'Manuais (Admin)', v: activeSubs.filter(s => isAdminGrant(s)).length, c: 'bg-sky-500', t: subscriptions.length || 1 },
+                    ].map(s => (
+                      <div key={s.l}>
+                        <div className="flex justify-between text-sm mb-1.5"><span className="text-zinc-400">{s.l}</span><span className="text-white font-semibold">{s.v}</span></div>
+                        <div className="h-1.5 rounded-full bg-white/5"><div className={`h-full rounded-full ${s.c} transition-all`} style={{ width: `${Math.min(100, (s.v / s.t) * 100)}%` }} /></div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Filters */}
+              <div className="flex flex-col sm:flex-row gap-3">
+                <div className="flex flex-wrap gap-2">
+                  {([['all', 'Todos'], ['authorized', 'Ativos'], ['pending', 'Pendentes'], ['cancelled', 'Cancelados'], ['admin_grant', 'Manuais']] as const).map(([k, l]) => (
+                    <button key={k} onClick={() => setSubFilter(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${subFilter === k ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-white/5 text-zinc-400 hover:text-white'}`}>{l}</button>
+                  ))}
+                </div>
+                <input type="text" value={subSearch} onChange={e => setSubSearch(e.target.value)} placeholder="Buscar por nome, email ou UID..."
+                  className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-white outline-none focus:border-emerald-400/40 transition flex-1 sm:max-w-xs" />
+              </div>
+
+              {/* Table */}
+              <div className="card overflow-x-auto">
+                <table className="data-table">
+                  <thead><tr><th>Usuário</th><th>Plano</th><th>Status</th><th>Dias Restantes</th><th>Próx. Cobrança</th><th>Criado em</th><th>Tipo</th><th></th></tr></thead>
+                  <tbody>
+                    {filtered.map(s => {
+                      const u = getUserInfo(s.uid);
+                      const days = remainingDays(s.nextBillingDate);
+                      const isGrant = isAdminGrant(s);
+                      return (
+                        <tr key={s.id}>
+                          <td>
+                            <div className="text-white font-medium">{u?.displayName || 'Sem Nome'}</div>
+                            <div className="text-xs text-zinc-500">{u?.email || s.payerEmail}</div>
+                          </td>
+                          <td><span className="badge badge-zinc">{planLabel(s.planCode)}</span></td>
+                          <td><span className={statusBadge(s.status)}>{statusLabel(s.status)}</span></td>
+                          <td>
+                            {s.status === 'authorized' && days !== null ? (
+                              <span className={`font-bold ${days <= 3 ? 'text-rose-400' : days <= 7 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                {days} {days === 1 ? 'dia' : 'dias'}
+                              </span>
+                            ) : (
+                              <span className="text-zinc-600">—</span>
+                            )}
+                          </td>
+                          <td className="text-xs">{fmtDate(s.nextBillingDate)}</td>
+                          <td className="text-xs">{fmtDate(s.createdAt)}</td>
+                          <td>{isGrant ? <span className="badge badge-sky">Manual</span> : <span className="badge badge-zinc">Automático</span>}</td>
+                          <td>
+                            <div className="flex gap-1.5">
+                              <button onClick={() => { setGrantUid(s.uid); setGrantModalOpen(true); }}
+                                className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold">Conceder</button>
+                              {s.status === 'authorized' && (
+                                <button onClick={() => { const user = users.find(x => x.uid === s.uid); if (user) void setSubscriptionAccess(user, 'block'); }}
+                                  className="text-xs text-rose-400 hover:text-rose-300 font-semibold">Bloquear</button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {filtered.length === 0 && <tr><td colSpan={8} className="text-center text-zinc-500 py-8">Nenhuma assinatura encontrada.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ──── GRANT MODAL ──── */}
+        {grantModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setGrantModalOpen(false)}>
+            <div className="card p-6 max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
+              <h2 className="text-lg font-bold text-white mb-1">Conceder Acesso Premium</h2>
+              <p className="text-sm text-zinc-500 mb-5">Ative a assinatura de um usuário por tempo determinado.</p>
+              <form onSubmit={e => void grantAccess(e)} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-medium text-zinc-400 mb-2 uppercase tracking-wider">UID do Usuário</label>
+                  {grantUid ? (
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 rounded-lg border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-white">
+                        {users.find(u => u.uid === grantUid)?.displayName || grantUid.slice(0, 20) + '…'}
+                      </div>
+                      <button type="button" onClick={() => setGrantUid('')} className="text-xs text-zinc-400 hover:text-white">✕</button>
+                    </div>
+                  ) : (
+                    <select value={grantUid} onChange={e => setGrantUid(e.target.value)}
+                      className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-white outline-none focus:border-emerald-400/40 transition">
+                      <option value="">Selecione um usuário...</option>
+                      {users.map(u => (
+                        <option key={u.uid} value={u.uid}>{u.displayName || u.email || u.uid}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-400 mb-2 uppercase tracking-wider">Dias de Acesso</label>
+                  <div className="flex gap-2">
+                    {[7, 15, 30, 90, 365].map(d => (
+                      <button key={d} type="button" onClick={() => setGrantDays(d)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${grantDays === d ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-white/5 text-zinc-400 hover:text-white border border-white/10'}`}>{d}d</button>
+                    ))}
+                  </div>
+                  <input type="number" min={1} max={3650} value={grantDays} onChange={e => setGrantDays(Number(e.target.value))}
+                    className="mt-2 w-full rounded-lg border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-white outline-none focus:border-emerald-400/40 transition" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-400 mb-2 uppercase tracking-wider">Motivo (opcional)</label>
+                  <input type="text" value={grantReason} onChange={e => setGrantReason(e.target.value)} placeholder="Ex: Cortesia, teste, parceria..."
+                    className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-white outline-none focus:border-emerald-400/40 transition" />
+                </div>
+                <div className="flex gap-3 pt-2">
+                  <button type="submit" disabled={grantLoading || !grantUid || grantDays < 1}
+                    className="flex-1 rounded-xl bg-emerald-500 px-4 py-3 text-sm font-bold text-black transition hover:bg-emerald-400 disabled:opacity-50">
+                    {grantLoading ? 'Ativando...' : `Ativar por ${grantDays} dias`}
+                  </button>
+                  <button type="button" onClick={() => setGrantModalOpen(false)}
+                    className="rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-sm font-semibold text-zinc-400 hover:text-white transition">
+                    Cancelar
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}

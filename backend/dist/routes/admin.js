@@ -354,6 +354,37 @@ function createAdminRouter(manager) {
             next(error);
         }
     });
+    router.get('/subscriptions', async (_req, res, next) => {
+        try {
+            const subscriptions = await (0, subscription_access_1.listAllSubscriptions)();
+            res.json({ subscriptions });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.post('/users/:uid/subscription/grant', async (req, res, next) => {
+        try {
+            const uid = req.params.uid;
+            const days = typeof req.body?.days === 'number' ? req.body.days : 0;
+            const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 200) : null;
+            if (days < 1 || days > 3650) {
+                res.status(400).json({ error: 'Dias deve ser entre 1 e 3650.' });
+                return;
+            }
+            const subscription = await (0, subscription_access_1.adminGrantSubscription)(uid, days, reason);
+            const user = await loadSingleAdminUser(uid);
+            logger_1.logger.warn('Admin granted subscription access', { uid, days, reason: reason || null });
+            res.json({
+                ok: true,
+                subscription,
+                user
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
     router.post('/users/:uid/message', async (req, res, next) => {
         try {
             const uid = req.params.uid;

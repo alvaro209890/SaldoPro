@@ -242,8 +242,11 @@ const DOCUMENT_IMAGE_READ_ERROR_REPLY =
   'Recebi seu pedido para guardar o arquivo, mas nao consegui ler o conteudo enviado. Tente reenviar em alguns instantes.';
 const DOCUMENT_PLAN_REQUIRED_REPLY =
   'Salvar e acessar imagens, PDFs e arquivos exige um plano ativo. Ative um plano no painel para liberar essa funcao.';
-const FREE_WHATSAPP_LIMIT_REACHED_REPLY =
-  'Voce ja usou sua mensagem gratis de hoje no WhatsApp. Seu limite volta a meia-noite. Para uso ilimitado, ative um plano no painel.';
+const FREE_WHATSAPP_LIMIT_REACHED_REPLY = [
+  'Voce atingiu o limite gratis de mensagens no WhatsApp hoje.',
+  'Assine um plano para continuar usando a IA sem travas e liberar o uso ilimitado.',
+  `Assine agora: ${env.webAppUrl}/app/plans`
+].join('\n');
 
 /** Max number of messages processed concurrently by the AI pipeline. */
 const MESSAGE_QUEUE_CONCURRENCY = 5;
