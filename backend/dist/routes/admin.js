@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.createAdminRouter = createAdminRouter;
 const express_1 = require("express");
 const admin_session_1 = require("../lib/admin-session");
+const subscription_access_1 = require("../lib/subscription-access");
 const firebase_user_access_1 = require("../lib/firebase-user-access");
 const firestore_1 = require("../lib/firestore");
 const document_storage_1 = require("../lib/document-storage");
@@ -24,7 +25,7 @@ function normalizeLogEntry(entry) {
         ...(entry.meta ? { meta: entry.meta } : {})
     };
 }
-function mergeAdminUsers(snapshots, firebaseStates) {
+function mergeAdminUsers(snapshots, firebaseStates, planAccessByUid) {
     const snapshotByUid = new Map(snapshots.map((item) => [item.uid, item]));
     const allUids = new Set([
         ...snapshots.map((item) => item.uid),
@@ -33,6 +34,7 @@ function mergeAdminUsers(snapshots, firebaseStates) {
     const merged = [...allUids].map((uid) => {
         const snapshot = snapshotByUid.get(uid) ?? null;
         const firebase = firebaseStates.get(uid) ?? null;
+        const planAccess = planAccessByUid.get(uid) ?? null;
         return {
             uid,
             email: snapshot?.email ?? firebase?.email ?? null,
@@ -53,6 +55,12 @@ function mergeAdminUsers(snapshots, firebaseStates) {
                 disabled: firebase?.disabled ?? true,
                 createdAt: firebase?.createdAt ?? null,
                 lastSignInAt: firebase?.lastSignInAt ?? null
+            },
+            subscription: {
+                status: planAccess?.subscriptionStatus ?? 'none',
+                premiumActive: planAccess?.hasActivePlan ?? false,
+                baseActive: planAccess?.baseHasActivePlan ?? false,
+                overrideMode: planAccess?.manualOverride ?? 'none'
             }
         };
     });
@@ -62,6 +70,29 @@ function mergeAdminUsers(snapshots, firebaseStates) {
         return bTime.localeCompare(aTime);
     });
     return merged;
+}
+async function loadMergedAdminUsers() {
+    const [snapshots, firebaseStates] = await Promise.all([
+        (0, firestore_1.listAdminUserSnapshots)(),
+        (0, firebase_user_access_1.listAllFirebaseUserAccessStates)()
+    ]);
+    const uids = [
+        ...snapshots.map((item) => item.uid),
+        ...firebaseStates.keys()
+    ];
+    const planAccess = await (0, subscription_access_1.getUserPlanAccessSummaryMap)(uids);
+    return mergeAdminUsers(snapshots, firebaseStates, planAccess);
+}
+async function loadSingleAdminUser(uid) {
+    const [snapshot, firebase] = await Promise.all([
+        (0, firestore_1.getAdminUserSnapshot)(uid),
+        (0, firebase_user_access_1.getFirebaseUserAccessState)(uid, true)
+    ]);
+    if (!snapshot && !firebase.exists) {
+        return null;
+    }
+    const planAccess = await (0, subscription_access_1.getUserPlanAccessSummaryMap)([uid]);
+    return mergeAdminUsers(snapshot ? [snapshot] : [], new Map([[uid, firebase]]), planAccess)[0] ?? null;
 }
 function createAdminRouter(manager) {
     const router = (0, express_1.Router)();
@@ -90,12 +121,10 @@ function createAdminRouter(manager) {
     });
     router.get('/overview', async (_req, res, next) => {
         try {
-            const [snapshots, firebaseStates, qrSlots] = await Promise.all([
-                (0, firestore_1.listAdminUserSnapshots)(),
-                (0, firebase_user_access_1.listAllFirebaseUserAccessStates)(),
+            const [users, qrSlots] = await Promise.all([
+                loadMergedAdminUsers(),
                 manager.getQrPayloads()
             ]);
-            const users = mergeAdminUsers(snapshots, firebaseStates);
             const logs = (0, logger_1.getRecentOperationalLogs)(80);
             const fifteenMinutesAgo = Date.now() - 15 * 60 * 1000;
             const recentAlerts = logs
@@ -134,11 +163,7 @@ function createAdminRouter(manager) {
     });
     router.get('/users', async (_req, res, next) => {
         try {
-            const [snapshots, firebaseStates] = await Promise.all([
-                (0, firestore_1.listAdminUserSnapshots)(),
-                (0, firebase_user_access_1.listAllFirebaseUserAccessStates)()
-            ]);
-            res.json({ users: mergeAdminUsers(snapshots, firebaseStates) });
+            res.json({ users: await loadMergedAdminUsers() });
         }
         catch (error) {
             next(error);
@@ -156,13 +181,12 @@ function createAdminRouter(manager) {
     router.get('/users/:uid', async (req, res, next) => {
         try {
             const uid = req.params.uid;
-            const [snapshot, firebase, recentTransactions, reminders] = await Promise.all([
-                (0, firestore_1.getAdminUserSnapshot)(uid),
-                (0, firebase_user_access_1.getFirebaseUserAccessState)(uid),
+            const [user, recentTransactions, reminders] = await Promise.all([
+                loadSingleAdminUser(uid),
                 (0, firestore_1.getRecentTransactions)(uid, 5),
                 (0, firestore_1.getUserReminders)(uid)
             ]);
-            if (!snapshot && !firebase.exists) {
+            if (!user) {
                 const payload = {
                     user: null,
                     recentTransactions: [],
@@ -172,9 +196,8 @@ function createAdminRouter(manager) {
                 res.json(payload);
                 return;
             }
-            const merged = mergeAdminUsers(snapshot ? [snapshot] : [], new Map([[uid, firebase]]))[0];
             const payload = {
-                user: merged,
+                user,
                 recentTransactions,
                 recentReminders: reminders.slice(0, 5)
             };
@@ -242,7 +265,7 @@ function createAdminRouter(manager) {
             });
             res.json({
                 ok: true,
-                user: mergeAdminUsers(snapshot ? [snapshot] : [], new Map([[uid, refreshed]]))[0]
+                user: mergeAdminUsers(snapshot ? [snapshot] : [], new Map([[uid, refreshed]]), await (0, subscription_access_1.getUserPlanAccessSummaryMap)([uid]))[0]
             });
         }
         catch (error) {
@@ -265,7 +288,66 @@ function createAdminRouter(manager) {
             logger_1.logger.warn('Admin unblocked user', { uid });
             res.json({
                 ok: true,
-                user: mergeAdminUsers(snapshot ? [snapshot] : [], new Map([[uid, refreshed]]))[0]
+                user: mergeAdminUsers(snapshot ? [snapshot] : [], new Map([[uid, refreshed]]), await (0, subscription_access_1.getUserPlanAccessSummaryMap)([uid]))[0]
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.post('/users/:uid/subscription/block', async (req, res, next) => {
+        try {
+            const uid = req.params.uid;
+            const user = await loadSingleAdminUser(uid);
+            if (!user) {
+                res.status(404).json({ error: 'Usuario nao encontrado.' });
+                return;
+            }
+            const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 200) : null;
+            await (0, subscription_access_1.setUserPlanOverride)(uid, 'deny', reason || 'Admin bloqueou assinatura');
+            logger_1.logger.warn('Admin blocked subscription access', { uid, reason: reason || null });
+            res.json({
+                ok: true,
+                user: await loadSingleAdminUser(uid)
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.post('/users/:uid/subscription/unblock', async (req, res, next) => {
+        try {
+            const uid = req.params.uid;
+            const user = await loadSingleAdminUser(uid);
+            if (!user) {
+                res.status(404).json({ error: 'Usuario nao encontrado.' });
+                return;
+            }
+            const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 200) : null;
+            await (0, subscription_access_1.setUserPlanOverride)(uid, 'allow', reason || 'Admin liberou assinatura');
+            logger_1.logger.warn('Admin unblocked subscription access', { uid, reason: reason || null });
+            res.json({
+                ok: true,
+                user: await loadSingleAdminUser(uid)
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.post('/users/:uid/subscription/reset', async (req, res, next) => {
+        try {
+            const uid = req.params.uid;
+            const user = await loadSingleAdminUser(uid);
+            if (!user) {
+                res.status(404).json({ error: 'Usuario nao encontrado.' });
+                return;
+            }
+            await (0, subscription_access_1.clearUserPlanOverride)(uid);
+            logger_1.logger.info('Admin reset subscription override', { uid });
+            res.json({
+                ok: true,
+                user: await loadSingleAdminUser(uid)
             });
         }
         catch (error) {

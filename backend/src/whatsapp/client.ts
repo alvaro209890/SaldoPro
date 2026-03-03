@@ -21,7 +21,9 @@ import {
   MAX_STORED_DOCUMENT_BYTES,
   uploadPendingDocument
 } from '../lib/document-storage';
+import { consumeFreeWhatsAppQuota } from '../lib/daily-ai-quota';
 import { isFirebaseUserActive } from '../lib/firebase-user-access';
+import { getUserPlanAccess } from '../lib/subscription-access';
 import type { GroqChatMessage } from '../ai/groq';
 import { env } from '../config/env';
 import {
@@ -238,6 +240,10 @@ const DOCUMENT_SAVE_ERROR_REPLY =
   'Nao consegui concluir essa operacao com arquivos agora. Tente novamente em instantes.';
 const DOCUMENT_IMAGE_READ_ERROR_REPLY =
   'Recebi seu pedido para guardar o arquivo, mas nao consegui ler o conteudo enviado. Tente reenviar em alguns instantes.';
+const DOCUMENT_PLAN_REQUIRED_REPLY =
+  'Salvar e acessar imagens, PDFs e arquivos exige um plano ativo. Ative um plano no painel para liberar essa funcao.';
+const FREE_WHATSAPP_LIMIT_REACHED_REPLY =
+  'Voce ja usou sua mensagem gratis de hoje no WhatsApp. Seu limite volta a meia-noite. Para uso ilimitado, ative um plano no painel.';
 
 /** Max number of messages processed concurrently by the AI pipeline. */
 const MESSAGE_QUEUE_CONCURRENCY = 5;
@@ -1175,6 +1181,53 @@ export class WhatsAppClient {
     );
   }
 
+  private isPlanBlockedDocumentAttempt(
+    inboundText: string,
+    imageDataUrl: string | null,
+    hasImageAttachment: boolean,
+    documentDataUrl: string | null,
+    hasPendingDraft: boolean
+  ): boolean {
+    if (documentDataUrl || imageDataUrl || hasImageAttachment) {
+      return true;
+    }
+
+    if (hasPendingDraft && inboundText.trim().length > 0) {
+      return true;
+    }
+
+    if (detectDocumentSaveIntent(inboundText).matched) {
+      return true;
+    }
+
+    return detectDocumentFetchIntent(inboundText).matched;
+  }
+
+  private async tryConsumeFreeWhatsAppQuotaOrReply(
+    ownerUid: string,
+    remoteJid: string,
+    remotePhone: string,
+    hasUnlimitedAi: boolean
+  ): Promise<boolean> {
+    if (hasUnlimitedAi) {
+      return true;
+    }
+
+    const quotaResult = await consumeFreeWhatsAppQuota(ownerUid);
+    if (quotaResult.allowed) {
+      return true;
+    }
+
+    await this.sendDocumentTextReply(
+      ownerUid,
+      remoteJid,
+      remotePhone,
+      FREE_WHATSAPP_LIMIT_REACHED_REPLY,
+      '[Plano requerido] limite gratis diario'
+    );
+    return false;
+  }
+
   private async sendSmartReply(
     ownerUid: string,
     remoteJid: string,
@@ -1186,8 +1239,31 @@ export class WhatsAppClient {
     documentDataUrl: string | null = null
   ): Promise<void> {
     const hasInboundInput = inboundText.trim().length > 0 || Boolean(imageDataUrl) || Boolean(audioDataUrl) || Boolean(documentDataUrl);
+    const planAccess = await getUserPlanAccess(ownerUid);
 
-    if (hasInboundInput) {
+    if (!planAccess.features.whatsappDocumentStorage && hasInboundInput) {
+      const activeDraft = await this.getUsablePendingDocumentDraft(ownerUid, remotePhone);
+      if (
+        this.isPlanBlockedDocumentAttempt(
+          inboundText,
+          imageDataUrl,
+          hasImageAttachment,
+          documentDataUrl,
+          Boolean(activeDraft)
+        )
+      ) {
+        await this.sendDocumentTextReply(
+          ownerUid,
+          remoteJid,
+          remotePhone,
+          DOCUMENT_PLAN_REQUIRED_REPLY,
+          '[Plano requerido] documentos bloqueados'
+        );
+        return;
+      }
+    }
+
+    if (planAccess.features.whatsappDocumentStorage && hasInboundInput) {
       try {
         const handledByDocumentFlow = await this.handleDocumentRouting(
           ownerUid,
@@ -1236,6 +1312,17 @@ export class WhatsAppClient {
         return;
       }
 
+      if (!planAccess.features.whatsappUnlimitedAi && planAccess.freeWhatsappQuota.remaining <= 0) {
+        await this.sendDocumentTextReply(
+          ownerUid,
+          remoteJid,
+          remotePhone,
+          FREE_WHATSAPP_LIMIT_REACHED_REPLY,
+          '[Plano requerido] limite gratis diario'
+        );
+        return;
+      }
+
       // Rate limiting check
       if (this.isRateLimited(ownerUid)) {
         logger.warn('MSG_RATE_LIMITED: AI processing skipped due to rate limit', {
@@ -1256,6 +1343,15 @@ export class WhatsAppClient {
       if (isUndoMessage(inboundText)) {
         try {
           const undoReply = await undoLastAction(ownerUid);
+          if (!(await this.tryConsumeFreeWhatsAppQuotaOrReply(
+            ownerUid,
+            remoteJid,
+            remotePhone,
+            planAccess.features.whatsappUnlimitedAi
+          ))) {
+            return;
+          }
+
           await this.sendWithRetry(remoteJid, undoReply, 'auto_reply', ownerUid);
           await this.appendConversationMessage(ownerUid, remotePhone, { role: 'user', content: inboundText.trim() });
           await this.appendConversationMessage(ownerUid, remotePhone, { role: 'assistant', content: undoReply });
@@ -1268,6 +1364,15 @@ export class WhatsAppClient {
       try {
         const reminderShortcutReply = await handleReminderShortcut(ownerUid, inboundText);
         if (reminderShortcutReply) {
+          if (!(await this.tryConsumeFreeWhatsAppQuotaOrReply(
+            ownerUid,
+            remoteJid,
+            remotePhone,
+            planAccess.features.whatsappUnlimitedAi
+          ))) {
+            return;
+          }
+
           await this.sendWithRetry(remoteJid, reminderShortcutReply, 'auto_reply', ownerUid);
           await this.appendConversationMessage(ownerUid, remotePhone, { role: 'user', content: inboundText.trim() });
           await this.appendConversationMessage(ownerUid, remotePhone, {
@@ -1292,6 +1397,15 @@ export class WhatsAppClient {
         ]);
 
         if (aiPipelineResult.mediaUrl) {
+          if (!(await this.tryConsumeFreeWhatsAppQuotaOrReply(
+            ownerUid,
+            remoteJid,
+            remotePhone,
+            planAccess.features.whatsappUnlimitedAi
+          ))) {
+            return;
+          }
+
           const payload = aiPipelineResult.aiReply.trim() || 'Aqui está a imagem solicitada:';
           await this.sendWithRetry(remoteJid, payload, 'auto_reply', ownerUid, { image: { url: aiPipelineResult.mediaUrl } });
           await this.appendConversationMessage(ownerUid, remotePhone, {
@@ -1302,6 +1416,15 @@ export class WhatsAppClient {
         }
 
         if (aiPipelineResult.aiReply.trim()) {
+          if (!(await this.tryConsumeFreeWhatsAppQuotaOrReply(
+            ownerUid,
+            remoteJid,
+            remotePhone,
+            planAccess.features.whatsappUnlimitedAi
+          ))) {
+            return;
+          }
+
           await this.sendWithRetry(remoteJid, aiPipelineResult.aiReply.trim(), 'auto_reply', ownerUid);
           await this.appendConversationMessage(ownerUid, remotePhone, {
             role: 'assistant',

@@ -8,6 +8,8 @@ export const BACKEND_URL = rawBackendUrl
   ? normalizeUrl(rawBackendUrl)
   : (import.meta.env.DEV ? 'http://localhost:10000' : defaultProductionBackendUrl);
 
+export const MERCADO_PAGO_PUBLIC_KEY = (import.meta.env.VITE_MERCADO_PAGO_PUBLIC_KEY ?? '').trim();
+
 if (import.meta.env.PROD && isLocalhostUrl(BACKEND_URL)) {
   throw new Error('Invalid VITE_BACKEND_URL in production: localhost is not allowed.');
 }

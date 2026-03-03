@@ -4,6 +4,12 @@ import {
   isValidAdminPassword
 } from '../lib/admin-session';
 import {
+  clearUserPlanOverride,
+  getUserPlanAccessSummaryMap,
+  setUserPlanOverride,
+  type UserPlanAccessSummary
+} from '../lib/subscription-access';
+import {
   listAllFirebaseUserAccessStates,
   getFirebaseUserAccessState,
   setFirebaseUserDisabled
@@ -35,6 +41,12 @@ interface AdminApiUser {
     disabled: boolean;
     createdAt: string | null;
     lastSignInAt: string | null;
+  };
+  subscription: {
+    status: 'none' | 'pending' | 'authorized' | 'paused' | 'cancelled' | 'rejected';
+    premiumActive: boolean;
+    baseActive: boolean;
+    overrideMode: 'none' | 'allow' | 'deny';
   };
 }
 
@@ -72,7 +84,8 @@ function normalizeLogEntry(entry: OperationalLogEntry): {
 
 function mergeAdminUsers(
   snapshots: AdminUserSnapshot[],
-  firebaseStates: Map<string, Awaited<ReturnType<typeof getFirebaseUserAccessState>>>
+  firebaseStates: Map<string, Awaited<ReturnType<typeof getFirebaseUserAccessState>>>,
+  planAccessByUid: Map<string, UserPlanAccessSummary>
 ): AdminApiUser[] {
   const snapshotByUid = new Map(snapshots.map((item) => [item.uid, item] as const));
   const allUids = new Set<string>([
@@ -83,6 +96,7 @@ function mergeAdminUsers(
   const merged = [...allUids].map((uid) => {
     const snapshot = snapshotByUid.get(uid) ?? null;
     const firebase = firebaseStates.get(uid) ?? null;
+    const planAccess = planAccessByUid.get(uid) ?? null;
     return {
       uid,
       email: snapshot?.email ?? firebase?.email ?? null,
@@ -103,6 +117,12 @@ function mergeAdminUsers(
         disabled: firebase?.disabled ?? true,
         createdAt: firebase?.createdAt ?? null,
         lastSignInAt: firebase?.lastSignInAt ?? null
+      },
+      subscription: {
+        status: planAccess?.subscriptionStatus ?? 'none',
+        premiumActive: planAccess?.hasActivePlan ?? false,
+        baseActive: planAccess?.baseHasActivePlan ?? false,
+        overrideMode: planAccess?.manualOverride ?? 'none'
       }
     };
   });
@@ -114,6 +134,33 @@ function mergeAdminUsers(
   });
 
   return merged;
+}
+
+async function loadMergedAdminUsers(): Promise<AdminApiUser[]> {
+  const [snapshots, firebaseStates] = await Promise.all([
+    listAdminUserSnapshots(),
+    listAllFirebaseUserAccessStates()
+  ]);
+  const uids = [
+    ...snapshots.map((item) => item.uid),
+    ...firebaseStates.keys()
+  ];
+  const planAccess = await getUserPlanAccessSummaryMap(uids);
+  return mergeAdminUsers(snapshots, firebaseStates, planAccess);
+}
+
+async function loadSingleAdminUser(uid: string): Promise<AdminApiUser | null> {
+  const [snapshot, firebase] = await Promise.all([
+    getAdminUserSnapshot(uid),
+    getFirebaseUserAccessState(uid, true)
+  ]);
+
+  if (!snapshot && !firebase.exists) {
+    return null;
+  }
+
+  const planAccess = await getUserPlanAccessSummaryMap([uid]);
+  return mergeAdminUsers(snapshot ? [snapshot] : [], new Map([[uid, firebase]]), planAccess)[0] ?? null;
 }
 
 export function createAdminRouter(manager: WhatsAppClientsManager): Router {
@@ -150,12 +197,10 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
 
   router.get('/overview', async (_req: Request, res: Response, next) => {
     try {
-      const [snapshots, firebaseStates, qrSlots] = await Promise.all([
-        listAdminUserSnapshots(),
-        listAllFirebaseUserAccessStates(),
+      const [users, qrSlots] = await Promise.all([
+        loadMergedAdminUsers(),
         manager.getQrPayloads()
       ]);
-      const users = mergeAdminUsers(snapshots, firebaseStates);
       const logs = getRecentOperationalLogs(80);
       const fifteenMinutesAgo = Date.now() - 15 * 60 * 1000;
       const recentAlerts = logs
@@ -199,11 +244,7 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
 
   router.get('/users', async (_req: Request, res: Response, next) => {
     try {
-      const [snapshots, firebaseStates] = await Promise.all([
-        listAdminUserSnapshots(),
-        listAllFirebaseUserAccessStates()
-      ]);
-      res.json({ users: mergeAdminUsers(snapshots, firebaseStates) });
+      res.json({ users: await loadMergedAdminUsers() });
     } catch (error) {
       next(error);
     }
@@ -221,14 +262,13 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
   router.get('/users/:uid', async (req: Request, res: Response, next) => {
     try {
       const uid = req.params.uid;
-      const [snapshot, firebase, recentTransactions, reminders] = await Promise.all([
-        getAdminUserSnapshot(uid),
-        getFirebaseUserAccessState(uid),
+      const [user, recentTransactions, reminders] = await Promise.all([
+        loadSingleAdminUser(uid),
         getRecentTransactions(uid, 5),
         getUserReminders(uid)
       ]);
 
-      if (!snapshot && !firebase.exists) {
+      if (!user) {
         const payload: AdminUserDetailsResponse = {
           user: null,
           recentTransactions: [],
@@ -239,9 +279,8 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
         return;
       }
 
-      const merged = mergeAdminUsers(snapshot ? [snapshot] : [], new Map([[uid, firebase]]))[0];
       const payload: AdminUserDetailsResponse = {
-        user: merged,
+        user,
         recentTransactions,
         recentReminders: reminders.slice(0, 5)
       };
@@ -312,7 +351,11 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
 
       res.json({
         ok: true,
-        user: mergeAdminUsers(snapshot ? [snapshot] : [], new Map([[uid, refreshed]]))[0]
+        user: mergeAdminUsers(
+          snapshot ? [snapshot] : [],
+          new Map([[uid, refreshed]]),
+          await getUserPlanAccessSummaryMap([uid])
+        )[0]
       });
     } catch (error) {
       next(error);
@@ -338,7 +381,76 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
 
       res.json({
         ok: true,
-        user: mergeAdminUsers(snapshot ? [snapshot] : [], new Map([[uid, refreshed]]))[0]
+        user: mergeAdminUsers(
+          snapshot ? [snapshot] : [],
+          new Map([[uid, refreshed]]),
+          await getUserPlanAccessSummaryMap([uid])
+        )[0]
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/users/:uid/subscription/block', async (req: Request, res: Response, next) => {
+    try {
+      const uid = req.params.uid;
+      const user = await loadSingleAdminUser(uid);
+      if (!user) {
+        res.status(404).json({ error: 'Usuario nao encontrado.' });
+        return;
+      }
+
+      const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 200) : null;
+      await setUserPlanOverride(uid, 'deny', reason || 'Admin bloqueou assinatura');
+
+      logger.warn('Admin blocked subscription access', { uid, reason: reason || null });
+      res.json({
+        ok: true,
+        user: await loadSingleAdminUser(uid)
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/users/:uid/subscription/unblock', async (req: Request, res: Response, next) => {
+    try {
+      const uid = req.params.uid;
+      const user = await loadSingleAdminUser(uid);
+      if (!user) {
+        res.status(404).json({ error: 'Usuario nao encontrado.' });
+        return;
+      }
+
+      const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 200) : null;
+      await setUserPlanOverride(uid, 'allow', reason || 'Admin liberou assinatura');
+
+      logger.warn('Admin unblocked subscription access', { uid, reason: reason || null });
+      res.json({
+        ok: true,
+        user: await loadSingleAdminUser(uid)
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/users/:uid/subscription/reset', async (req: Request, res: Response, next) => {
+    try {
+      const uid = req.params.uid;
+      const user = await loadSingleAdminUser(uid);
+      if (!user) {
+        res.status(404).json({ error: 'Usuario nao encontrado.' });
+        return;
+      }
+
+      await clearUserPlanOverride(uid);
+
+      logger.info('Admin reset subscription override', { uid });
+      res.json({
+        ok: true,
+        user: await loadSingleAdminUser(uid)
       });
     } catch (error) {
       next(error);

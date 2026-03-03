@@ -11,6 +11,7 @@ const health_1 = require("./routes/health");
 const qr_page_1 = require("./routes/qr-page");
 const whatsapp_1 = require("./routes/whatsapp");
 const admin_1 = require("./routes/admin");
+const billing_1 = require("./routes/billing");
 const ai_chat_1 = require("./routes/ai-chat");
 const data_1 = require("./routes/data");
 const manager_1 = require("./whatsapp/manager");
@@ -21,11 +22,19 @@ const whatsappManager = new manager_1.WhatsAppClientsManager();
 const stopReminderNotifier = (0, reminder_notifier_1.startWhatsAppReminderNotifier)(whatsappManager);
 const signupWelcomeDispatcher = (0, signup_welcome_dispatcher_1.startSignupWelcomeDispatcher)(whatsappManager);
 app.use((0, cors_1.default)());
-app.use(express_1.default.json({ limit: '10mb' }));
+app.use(express_1.default.json({
+    limit: '10mb',
+    verify: (req, _res, buf) => {
+        if (buf.length > 0) {
+            req.rawBody = buf.toString('utf8');
+        }
+    }
+}));
 app.use(health_1.healthRouter);
 app.use((0, qr_page_1.createQrPageRouter)(whatsappManager));
 app.use('/api/whatsapp', (0, whatsapp_1.createWhatsAppRouter)(whatsappManager));
 app.use('/api/admin', (0, admin_1.createAdminRouter)(whatsappManager));
+app.use('/api/billing', (0, billing_1.createBillingRouter)());
 app.use('/api/ai', (0, ai_chat_1.createAiChatRouter)());
 app.use('/api/data', (0, data_1.createDataRouter)(signupWelcomeDispatcher));
 app.use((error, _req, res, _next) => {

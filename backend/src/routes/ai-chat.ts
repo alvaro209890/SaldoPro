@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { requireFirebaseAuth } from '../middleware/firebase-auth';
+import { requirePlanFeature } from '../middleware/plan-access';
 import { queryGroqAssistant, type GroqChatMessage, type UserFinancialContext } from '../ai/groq';
 import { getUserCategories, getRecentTransactions, getUserSettings, getUserProfile } from '../lib/firestore';
 import { logger } from '../lib/logger';
@@ -30,7 +31,13 @@ export function createAiChatRouter(): Router {
     // All routes require Firebase Auth
     router.use(requireFirebaseAuth);
 
-    router.post('/chat', async (req: Request, res: Response): Promise<void> => {
+    router.post(
+        '/chat',
+        requirePlanFeature('web_ai_chat', {
+            code: 'PLAN_REQUIRED_FOR_WEB_AI',
+            message: 'O chat com IA exige um plano ativo.'
+        }),
+        async (req: Request, res: Response): Promise<void> => {
         const uid = (req as Request & { uid: string }).uid;
         const body = req.body as WebChatRequestBody;
 
@@ -134,7 +141,8 @@ export function createAiChatRouter(): Router {
                 error: 'Erro ao processar mensagem com a IA. Tente novamente.'
             });
         }
-    });
+        }
+    );
 
     return router;
 }

@@ -6,6 +6,7 @@ import { healthRouter } from './routes/health';
 import { createQrPageRouter } from './routes/qr-page';
 import { createWhatsAppRouter } from './routes/whatsapp';
 import { createAdminRouter } from './routes/admin';
+import { createBillingRouter } from './routes/billing';
 import { createAiChatRouter } from './routes/ai-chat';
 import { createDataRouter } from './routes/data';
 import { WhatsAppClientsManager } from './whatsapp/manager';
@@ -18,11 +19,19 @@ const stopReminderNotifier = startWhatsAppReminderNotifier(whatsappManager);
 const signupWelcomeDispatcher = startSignupWelcomeDispatcher(whatsappManager);
 
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({
+  limit: '10mb',
+  verify: (req, _res, buf) => {
+    if (buf.length > 0) {
+      (req as Request & { rawBody?: string }).rawBody = buf.toString('utf8');
+    }
+  }
+}));
 app.use(healthRouter);
 app.use(createQrPageRouter(whatsappManager));
 app.use('/api/whatsapp', createWhatsAppRouter(whatsappManager));
 app.use('/api/admin', createAdminRouter(whatsappManager));
+app.use('/api/billing', createBillingRouter());
 app.use('/api/ai', createAiChatRouter());
 app.use('/api/data', createDataRouter(signupWelcomeDispatcher));
 

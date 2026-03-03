@@ -19,6 +19,12 @@ interface User {
   firebaseExists: boolean; whatsappAllowedNumbers: string[]; settings: Settings | null;
   metrics: { transactions: number; reminders: number; categories: number; whatsappMessages: number; lastWhatsAppMessageAt: string | null; };
   firebase: { disabled: boolean; createdAt: string | null; lastSignInAt: string | null; };
+  subscription: {
+    status: 'none' | 'pending' | 'authorized' | 'paused' | 'cancelled' | 'rejected';
+    premiumActive: boolean;
+    baseActive: boolean;
+    overrideMode: 'none' | 'allow' | 'deny';
+  };
 }
 interface Overview {
   backend: { ok: boolean; uptime: number; timestamp: string; alerts: { warnings15m: number; errors15m: number; recent: LogEntry[]; }; };
@@ -73,6 +79,22 @@ function fmtBytes(v: number) {
   return `${value.toFixed(digits).replace('.', ',')} ${units[unitIndex]}`;
 }
 function isInactive(v: string | null) { if (!v) return true; const p = Date.parse(v); return !Number.isFinite(p) || p < Date.now() - 7 * 86400000; }
+function subscriptionLabel(u: User) {
+  if (u.subscription.overrideMode === 'allow') return 'Liberada manual';
+  if (u.subscription.overrideMode === 'deny') return 'Bloqueada manual';
+  if (u.subscription.premiumActive) return 'Premium ativo';
+  if (u.subscription.status === 'pending') return 'Pagamento pendente';
+  if (u.subscription.status === 'paused') return 'Pausada';
+  if (u.subscription.status === 'cancelled') return 'Cancelada';
+  if (u.subscription.status === 'rejected') return 'Rejeitada';
+  return 'Sem plano';
+}
+function subscriptionBadgeCls(u: User) {
+  if (u.subscription.overrideMode === 'allow' || u.subscription.premiumActive) return 'badge badge-green';
+  if (u.subscription.status === 'pending') return 'badge badge-amber';
+  if (u.subscription.overrideMode === 'deny') return 'badge badge-rose';
+  return 'badge';
+}
 async function parseErr(r: Response) { const p = await r.json().catch(() => null) as { error?: string } | null; return p?.error || 'Erro inesperado.'; }
 async function apiFetch<T>(path: string, token: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${BACKEND_URL}${path}`, { ...init, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(init?.headers ?? {}) } });
@@ -155,6 +177,7 @@ export function App() {
   const [dmOk, setDmOk] = useState(false);
   const [waAction, setWaAction] = useState<'reset' | 'qr' | ''>('');
   const [blockingUid, setBlockingUid] = useState('');
+  const [subscriptionActionUid, setSubscriptionActionUid] = useState('');
 
   /* Session check */
   useEffect(() => {
@@ -255,6 +278,31 @@ export function App() {
     try { await apiFetch(`/api/admin/users/${u.uid}/${u.blocked ? 'unblock' : 'block'}`, token, { method: 'POST', body: JSON.stringify({ reason: u.blocked ? null : 'Admin' }) }); await refresh(); }
     catch (e) { setError(e instanceof Error ? e.message : 'Falha.'); }
     finally { setBlockingUid(''); }
+  }
+
+  async function setSubscriptionAccess(u: User, action: 'block' | 'unblock' | 'reset') {
+    if (!token) return;
+    setSubscriptionActionUid(u.uid);
+    try {
+      const next = await apiFetch<{ user: User }>(`/api/admin/users/${u.uid}/subscription/${action}`, token, {
+        method: 'POST',
+        body: JSON.stringify({
+          reason:
+            action === 'block'
+              ? 'Admin bloqueou assinatura'
+              : action === 'unblock'
+                ? 'Admin liberou assinatura'
+                : null
+        })
+      });
+
+      setUsers(current => current.map(item => item.uid === next.user.uid ? next.user : item));
+      setSelUser(current => current?.uid === next.user.uid ? next.user : current);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Falha.');
+    } finally {
+      setSubscriptionActionUid('');
+    }
   }
 
   async function waAct(act: 'reset' | 'qr') {
@@ -370,11 +418,28 @@ export function App() {
             </button>
             <h1 className="text-lg font-bold text-white">{selUser.displayName || 'Sem Nome'}</h1>
             <span className={selUser.blocked ? 'badge badge-rose' : 'badge badge-green'}>{selUser.blocked ? 'Bloqueado' : 'Ativo'}</span>
+            <span className={subscriptionBadgeCls(selUser)}>{subscriptionLabel(selUser)}</span>
           </div>
-          <button onClick={() => void toggleBlock(selUser)} disabled={blockingUid === selUser.uid}
-            className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${selUser.blocked ? 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25' : 'bg-rose-500/15 text-rose-300 hover:bg-rose-500/25'}`}>
-            {blockingUid === selUser.uid ? '...' : selUser.blocked ? 'Desbloquear' : 'Bloquear'}
-          </button>
+          <div className="flex flex-wrap gap-2 justify-end">
+            <button onClick={() => void toggleBlock(selUser)} disabled={blockingUid === selUser.uid}
+              className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${selUser.blocked ? 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25' : 'bg-rose-500/15 text-rose-300 hover:bg-rose-500/25'}`}>
+              {blockingUid === selUser.uid ? '...' : selUser.blocked ? 'Desbloquear conta' : 'Bloquear conta'}
+            </button>
+            <button onClick={() => void setSubscriptionAccess(selUser, 'block')} disabled={subscriptionActionUid === selUser.uid}
+              className="rounded-lg px-4 py-2 text-sm font-semibold transition bg-rose-500/15 text-rose-300 hover:bg-rose-500/25 disabled:opacity-50">
+              {subscriptionActionUid === selUser.uid ? '...' : 'Bloquear assinatura'}
+            </button>
+            <button onClick={() => void setSubscriptionAccess(selUser, 'unblock')} disabled={subscriptionActionUid === selUser.uid}
+              className="rounded-lg px-4 py-2 text-sm font-semibold transition bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 disabled:opacity-50">
+              {subscriptionActionUid === selUser.uid ? '...' : 'Liberar assinatura'}
+            </button>
+            {selUser.subscription.overrideMode !== 'none' && (
+              <button onClick={() => void setSubscriptionAccess(selUser, 'reset')} disabled={subscriptionActionUid === selUser.uid}
+                className="rounded-lg px-4 py-2 text-sm font-semibold transition bg-sky-500/15 text-sky-300 hover:bg-sky-500/25 disabled:opacity-50">
+                {subscriptionActionUid === selUser.uid ? '...' : 'Modo automático'}
+              </button>
+            )}
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-6 py-6 grid gap-5 lg:grid-cols-3">
@@ -388,6 +453,8 @@ export function App() {
               <div className="flex justify-between"><dt className="text-zinc-500">Cadastro</dt><dd className="text-white">{fmtDate(selUser.createdAt)}</dd></div>
               <div className="flex justify-between"><dt className="text-zinc-500">Último login</dt><dd className="text-white">{fmtDate(selUser.firebase.lastSignInAt)}</dd></div>
               <div className="flex justify-between"><dt className="text-zinc-500">Última msg</dt><dd className="text-white">{fmtDate(selUser.metrics.lastWhatsAppMessageAt)}</dd></div>
+              <div className="flex justify-between"><dt className="text-zinc-500">Assinatura</dt><dd className="text-white text-right ml-4">{subscriptionLabel(selUser)}</dd></div>
+              <div className="flex justify-between"><dt className="text-zinc-500">Override</dt><dd className="text-white">{selUser.subscription.overrideMode === 'none' ? 'Automatico' : selUser.subscription.overrideMode === 'allow' ? 'Liberado manual' : 'Bloqueado manual'}</dd></div>
             </dl>
             {selUser.whatsappAllowedNumbers.length > 0 && (
               <div className="mt-4 pt-4 border-t border-white/6">
@@ -753,13 +820,14 @@ export function App() {
             {/* Users table */}
             <div className="card overflow-x-auto">
               <table className="data-table">
-                <thead><tr><th>Nome</th><th>Email</th><th>Status</th><th>Txs</th><th>Msgs</th><th>WhatsApp</th><th>Última Atividade</th><th></th></tr></thead>
+                <thead><tr><th>Nome</th><th>Email</th><th>Conta</th><th>Assinatura</th><th>Txs</th><th>Msgs</th><th>WhatsApp</th><th>Última Atividade</th><th></th></tr></thead>
                 <tbody>
                   {filtered.map(u => (
                     <tr key={u.uid} className={`cursor-pointer ${selUid === u.uid ? 'bg-emerald-500/5' : ''}`} onClick={() => setSelUid(u.uid)}>
                       <td className="text-white font-medium">{u.displayName || '—'}</td>
                       <td className="text-zinc-400 text-xs">{u.email || '—'}</td>
                       <td><span className={u.blocked ? 'badge badge-rose' : 'badge badge-green'}>{u.blocked ? 'Bloqueado' : 'Ativo'}</span></td>
+                      <td><span className={subscriptionBadgeCls(u)}>{subscriptionLabel(u)}</span></td>
                       <td className="text-white">{u.metrics.transactions}</td>
                       <td className="text-white">{u.metrics.whatsappMessages}</td>
                       <td>{u.whatsappAllowedNumbers.length > 0 ? <span className="badge badge-green">{u.whatsappAllowedNumbers[0]}</span> : <span className="text-zinc-600">—</span>}</td>
@@ -770,7 +838,7 @@ export function App() {
                       </td>
                     </tr>
                   ))}
-                  {filtered.length === 0 && <tr><td colSpan={8} className="text-center text-zinc-500 py-8">Nenhum usuário encontrado.</td></tr>}
+                  {filtered.length === 0 && <tr><td colSpan={9} className="text-center text-zinc-500 py-8">Nenhum usuário encontrado.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -782,8 +850,12 @@ export function App() {
                   <div>
                     <h3 className="text-lg font-bold text-white">{selUser.displayName || '—'}</h3>
                     <p className="text-xs text-zinc-500">{selUser.email || selUser.uid}</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <span className={selUser.blocked ? 'badge badge-rose' : 'badge badge-green'}>{selUser.blocked ? 'Conta bloqueada' : 'Conta ativa'}</span>
+                      <span className={subscriptionBadgeCls(selUser)}>{subscriptionLabel(selUser)}</span>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2 justify-end">
                     <button onClick={() => { setDetailUid(selUser.uid); }}
                       className="rounded-lg bg-emerald-500/15 border border-emerald-500/25 px-3 py-2 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/25 transition">
                       Ver Detalhes
@@ -792,12 +864,27 @@ export function App() {
                       className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${selUser.blocked ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300'}`}>
                       {blockingUid === selUser.uid ? '...' : selUser.blocked ? 'Desbloquear' : 'Bloquear'}
                     </button>
+                    <button onClick={() => void setSubscriptionAccess(selUser, 'block')} disabled={subscriptionActionUid === selUser.uid}
+                      className="rounded-lg px-3 py-2 text-xs font-semibold transition bg-rose-500/15 text-rose-300 hover:bg-rose-500/25 disabled:opacity-50">
+                      {subscriptionActionUid === selUser.uid ? '...' : 'Bloquear assinatura'}
+                    </button>
+                    <button onClick={() => void setSubscriptionAccess(selUser, 'unblock')} disabled={subscriptionActionUid === selUser.uid}
+                      className="rounded-lg px-3 py-2 text-xs font-semibold transition bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 disabled:opacity-50">
+                      {subscriptionActionUid === selUser.uid ? '...' : 'Liberar assinatura'}
+                    </button>
+                    {selUser.subscription.overrideMode !== 'none' && (
+                      <button onClick={() => void setSubscriptionAccess(selUser, 'reset')} disabled={subscriptionActionUid === selUser.uid}
+                        className="rounded-lg px-3 py-2 text-xs font-semibold transition bg-sky-500/15 text-sky-300 hover:bg-sky-500/25 disabled:opacity-50">
+                        {subscriptionActionUid === selUser.uid ? '...' : 'Modo automático'}
+                      </button>
+                    )}
                   </div>
                 </div>
-                <div className="grid sm:grid-cols-4 gap-3">
+                <div className="grid sm:grid-cols-5 gap-3">
                   <div className="rounded-lg bg-white/4 p-3"><p className="text-xs text-zinc-500">Transações</p><p className="text-lg font-bold text-white">{selUser.metrics.transactions}</p></div>
                   <div className="rounded-lg bg-white/4 p-3"><p className="text-xs text-zinc-500">Lembretes</p><p className="text-lg font-bold text-white">{selUser.metrics.reminders}</p></div>
                   <div className="rounded-lg bg-white/4 p-3"><p className="text-xs text-zinc-500">Mensagens</p><p className="text-lg font-bold text-white">{selUser.metrics.whatsappMessages}</p></div>
+                  <div className="rounded-lg bg-white/4 p-3"><p className="text-xs text-zinc-500">Plano</p><p className="text-sm font-semibold text-white mt-0.5">{subscriptionLabel(selUser)}</p></div>
                   <div className="rounded-lg bg-white/4 p-3"><p className="text-xs text-zinc-500">Cadastro</p><p className="text-sm font-semibold text-white mt-0.5">{fmtDate(selUser.createdAt)}</p></div>
                 </div>
                 {/* Direct message */}

@@ -16,6 +16,7 @@ import { Reminders } from '@/pages/Reminders';
 import { RecurringTransactions } from '@/pages/RecurringTransactions';
 import { Documents } from '@/pages/Documents';
 import { Goals } from '@/pages/Goals';
+import { Plans } from '@/pages/Plans';
 
 export function App() {
     return (
@@ -38,6 +39,7 @@ export function App() {
                     <Route path="recurring" element={<RecurringTransactions />} />
                     <Route path="documents" element={<Documents />} />
                     <Route path="goals" element={<Goals />} />
+                    <Route path="plans" element={<Plans />} />
                 </Route>
             </Route>
 

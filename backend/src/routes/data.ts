@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { requireFirebaseAuth } from '../middleware/firebase-auth';
+import { requirePlanFeature } from '../middleware/plan-access';
 import {
   addRecurringTransaction,
   addUserCategory,
@@ -395,13 +396,13 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
     res.json({ ok: true });
   });
 
-  router.get('/chat-sessions', async (req: Request, res: Response) => {
+  router.get('/chat-sessions', requirePlanFeature('web_ai_chat_history'), async (req: Request, res: Response) => {
     const uid = getUid(req);
     const sessions = await getUserChatSessions(uid);
     res.json(sessions);
   });
 
-  router.post('/chat-sessions', async (req: Request, res: Response) => {
+  router.post('/chat-sessions', requirePlanFeature('web_ai_chat_history'), async (req: Request, res: Response) => {
     const uid = getUid(req);
     const title = asString((req.body ?? {})['title']);
     if (!title) {
@@ -412,7 +413,7 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
     res.json({ id });
   });
 
-  router.patch('/chat-sessions/:id', async (req: Request, res: Response) => {
+  router.patch('/chat-sessions/:id', requirePlanFeature('web_ai_chat_history'), async (req: Request, res: Response) => {
     const uid = getUid(req);
     const title = asString((req.body ?? {})['title']);
     if (!title) {
@@ -423,19 +424,19 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
     res.json({ ok: true });
   });
 
-  router.delete('/chat-sessions/:id', async (req: Request, res: Response) => {
+  router.delete('/chat-sessions/:id', requirePlanFeature('web_ai_chat_history'), async (req: Request, res: Response) => {
     const uid = getUid(req);
     await deleteUserChatSession(uid, req.params.id);
     res.json({ ok: true });
   });
 
-  router.get('/chat-sessions/:id/messages', async (req: Request, res: Response) => {
+  router.get('/chat-sessions/:id/messages', requirePlanFeature('web_ai_chat_history'), async (req: Request, res: Response) => {
     const uid = getUid(req);
     const messages = await getUserChatMessages(uid, req.params.id);
     res.json(messages);
   });
 
-  router.post('/chat-sessions/:id/messages', async (req: Request, res: Response) => {
+  router.post('/chat-sessions/:id/messages', requirePlanFeature('web_ai_chat_history'), async (req: Request, res: Response) => {
     const uid = getUid(req);
     const body = (req.body ?? {}) as { role?: unknown; content?: unknown; imageUrl?: unknown };
     const role = body.role === 'user' || body.role === 'assistant' || body.role === 'system' ? body.role : null;
@@ -454,7 +455,7 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
     res.json({ id });
   });
 
-  router.get('/documents', async (req: Request, res: Response, next: NextFunction) => {
+  router.get('/documents', requirePlanFeature('document_storage'), async (req: Request, res: Response, next: NextFunction) => {
     try {
       const uid = getUid(req);
       const documents = await listUserDocuments(uid);
@@ -471,7 +472,7 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
     }
   });
 
-  router.post('/documents', async (req: Request, res: Response, next: NextFunction) => {
+  router.post('/documents', requirePlanFeature('document_storage'), async (req: Request, res: Response, next: NextFunction) => {
     try {
       const uid = getUid(req);
       const body = (req.body ?? {}) as Record<string, unknown>;
@@ -527,7 +528,7 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
     }
   });
 
-  router.patch('/documents/:id', async (req: Request, res: Response, next: NextFunction) => {
+  router.patch('/documents/:id', requirePlanFeature('document_storage'), async (req: Request, res: Response, next: NextFunction) => {
     try {
       const uid = getUid(req);
       const current = await getUserDocument(uid, req.params.id);
@@ -559,7 +560,7 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
     }
   });
 
-  router.get('/documents/:id/download-url', async (req: Request, res: Response, next: NextFunction) => {
+  router.get('/documents/:id/download-url', requirePlanFeature('document_storage'), async (req: Request, res: Response, next: NextFunction) => {
     try {
       const uid = getUid(req);
       const document = await getUserDocument(uid, req.params.id);
@@ -583,7 +584,7 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
     }
   });
 
-  router.delete('/documents/:id', async (req: Request, res: Response, next: NextFunction) => {
+  router.delete('/documents/:id', requirePlanFeature('document_storage'), async (req: Request, res: Response, next: NextFunction) => {
     try {
       const uid = getUid(req);
       const document = await getUserDocument(uid, req.params.id);
@@ -826,7 +827,7 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
 
   // ─── Goals ─────────────────────────────────────────────────────────────
 
-  router.get('/goals', async (req: Request, res: Response, next: NextFunction) => {
+  router.get('/goals', requirePlanFeature('goals'), async (req: Request, res: Response, next: NextFunction) => {
     try {
       const uid = getUid(req);
       const goals = await getUserGoals(uid);
@@ -836,7 +837,7 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
     }
   });
 
-  router.post('/goals', async (req: Request, res: Response, next: NextFunction) => {
+  router.post('/goals', requirePlanFeature('goals'), async (req: Request, res: Response, next: NextFunction) => {
     try {
       const uid = getUid(req);
       const body = (req.body ?? {}) as Record<string, unknown>;
@@ -866,7 +867,7 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
     }
   });
 
-  router.post('/goals/generate', async (req: Request, res: Response, next: NextFunction) => {
+  router.post('/goals/generate', requirePlanFeature('goals'), async (req: Request, res: Response, next: NextFunction) => {
     try {
       const uid = getUid(req);
       const profile = await getUserFinancialProfile(uid);
@@ -900,7 +901,7 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
     }
   });
 
-  router.patch('/goals/:id', async (req: Request, res: Response, next: NextFunction) => {
+  router.patch('/goals/:id', requirePlanFeature('goals'), async (req: Request, res: Response, next: NextFunction) => {
     try {
       const uid = getUid(req);
       const body = (req.body ?? {}) as Record<string, unknown>;
@@ -919,7 +920,7 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
     }
   });
 
-  router.delete('/goals/:id', async (req: Request, res: Response, next: NextFunction) => {
+  router.delete('/goals/:id', requirePlanFeature('goals'), async (req: Request, res: Response, next: NextFunction) => {
     try {
       const uid = getUid(req);
       await deleteUserGoal(uid, req.params.id);

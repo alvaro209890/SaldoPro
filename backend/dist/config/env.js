@@ -52,10 +52,17 @@ function getOptional(name) {
 }
 const whatsappAuthDirBase = process.env.WHATSAPP_AUTH_DIR?.trim() ||
     '/opt/render/project/src/backend/.baileys_auth';
+const webAppBaseUrl = (() => {
+    const base = getOptional('WEB_APP_URL') || 'https://saldopro-98049.web.app';
+    return normalizeUrl(base);
+})();
 exports.env = {
     port: parsePort(process.env.PORT, 10000),
     nodeEnv: process.env.NODE_ENV ?? 'development',
     whatsappApiToken: getRequired('WHATSAPP_API_TOKEN'),
+    mercadoPagoAccessToken: getRequired('MERCADO_PAGO_ACCESS_TOKEN'),
+    mercadoPagoWebhookSecret: getRequired('MERCADO_PAGO_WEBHOOK_SECRET'),
+    mercadoPagoStatementDescriptor: getOptional('MERCADO_PAGO_STATEMENT_DESCRIPTOR'),
     adminPanelPassword: process.env.ADMIN_PANEL_PASSWORD?.trim() || '7464584657364dccddc',
     adminPanelSessionSecret: process.env.ADMIN_PANEL_SESSION_SECRET?.trim() || `${getRequired('WHATSAPP_API_TOKEN')}:admin-panel`,
     adminPanelSessionTtlHours: parseInteger(process.env.ADMIN_PANEL_SESSION_TTL_HOURS, 12),
@@ -85,19 +92,18 @@ exports.env = {
     whatsappAiRateLimitPerMinute: parseInteger(process.env.WHATSAPP_AI_RATE_LIMIT_PER_MINUTE, 10),
     geminiApiKey: getOptional('GEMINI_API_KEY'),
     geminiModel: process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash',
+    webAppUrl: webAppBaseUrl,
     appRegisterUrl: (() => {
         const explicit = getOptional('APP_REGISTER_URL');
         if (explicit)
             return normalizeUrl(explicit);
-        const base = getOptional('WEB_APP_URL') || 'https://saldopro-98049.web.app';
-        return `${normalizeUrl(base)}/register`;
+        return `${webAppBaseUrl}/register`;
     })(),
     appPanelUrl: (() => {
         const explicit = getOptional('APP_PANEL_URL');
         if (explicit)
             return normalizeUrl(explicit);
-        const base = getOptional('WEB_APP_URL') || 'https://saldopro-98049.web.app';
-        return `${normalizeUrl(base)}/app/dashboard`;
+        return `${webAppBaseUrl}/app/dashboard`;
     })()
 };
 if (exports.env.whatsappAiEnabled) {
