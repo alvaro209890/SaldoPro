@@ -17,6 +17,14 @@ interface StorageObjectRow {
   } | null;
 }
 
+interface StorageListItem {
+  name: string;
+  id?: string | null;
+  metadata?: {
+    size?: number | string | null;
+  } | null;
+}
+
 export interface PendingDocumentUpload {
   draftId: string;
   storagePath: string;
@@ -46,6 +54,8 @@ export interface DocumentStorageUsageSummary {
   unassignedObjects: number;
   users: UserDocumentStorageUsage[];
 }
+
+const STORAGE_LIST_PAGE_SIZE = 100;
 
 function extensionFromMimeType(mimeType: string): string {
   const normalized = mimeType.toLowerCase();
@@ -119,17 +129,71 @@ function parseStorageOwner(path: string): { uid: string; group: 'ready' | 'pendi
   return null;
 }
 
-export async function getDocumentStorageUsageSummary(): Promise<DocumentStorageUsageSummary> {
-  const { data, error } = await supabaseAdmin
-    .schema('storage')
-    .from('objects')
-    .select('name, metadata')
-    .eq('bucket_id', DOCUMENT_BUCKET_NAME);
+async function listStorageDirectory(path: string): Promise<StorageListItem[]> {
+  const items: StorageListItem[] = [];
+  let offset = 0;
 
-  if (error) {
-    logger.error('Failed to read Supabase Storage usage summary', { bucketName: DOCUMENT_BUCKET_NAME, error });
-    throw new Error(`getDocumentStorageUsageSummary: ${error.message}`);
+  while (true) {
+    const { data, error } = await supabaseAdmin.storage
+      .from(DOCUMENT_BUCKET_NAME)
+      .list(path, {
+        limit: STORAGE_LIST_PAGE_SIZE,
+        offset,
+        sortBy: { column: 'name', order: 'asc' }
+      });
+
+    if (error) {
+      logger.error('Failed to list Supabase Storage directory', {
+        bucketName: DOCUMENT_BUCKET_NAME,
+        path,
+        error
+      });
+      throw new Error(`listStorageDirectory(${path || '/'}): ${error.message}`);
+    }
+
+    const page = (data ?? []) as StorageListItem[];
+    items.push(...page);
+
+    if (page.length < STORAGE_LIST_PAGE_SIZE) {
+      break;
+    }
+
+    offset += STORAGE_LIST_PAGE_SIZE;
   }
+
+  return items;
+}
+
+async function listTrackedStorageObjects(): Promise<StorageObjectRow[]> {
+  const rows: StorageObjectRow[] = [];
+
+  for (const prefix of ['documents', 'pending'] as const) {
+    const ownerFolders = await listStorageDirectory(prefix);
+
+    for (const ownerFolder of ownerFolders) {
+      const ownerName = ownerFolder.name?.trim();
+      if (!ownerName) continue;
+
+      const ownerPath = `${prefix}/${ownerName}`;
+      const files = await listStorageDirectory(ownerPath);
+
+      for (const file of files) {
+        const fileName = file.name?.trim();
+        if (!fileName) continue;
+
+        rows.push({
+          name: `${ownerPath}/${fileName}`,
+          metadata: file.metadata ?? null
+        });
+      }
+    }
+  }
+
+  return rows;
+}
+
+export async function getDocumentStorageUsageSummary(): Promise<DocumentStorageUsageSummary> {
+  const data = await listTrackedStorageObjects();
 
   const summary: DocumentStorageUsageSummary = {
     bucketName: DOCUMENT_BUCKET_NAME,

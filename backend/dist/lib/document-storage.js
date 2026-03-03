@@ -10,6 +10,7 @@ const logger_1 = require("./logger");
 const supabase_1 = require("./supabase");
 const DOCUMENT_BUCKET_NAME = 'user-documents';
 const SIGNED_URL_TTL_SECONDS = 5 * 60;
+const STORAGE_LIST_PAGE_SIZE = 100;
 function extensionFromMimeType(mimeType) {
     const normalized = mimeType.toLowerCase();
     if (normalized === 'application/pdf')
@@ -75,16 +76,59 @@ function parseStorageOwner(path) {
     }
     return null;
 }
-async function getDocumentStorageUsageSummary() {
-    const { data, error } = await supabase_1.supabaseAdmin
-        .schema('storage')
-        .from('objects')
-        .select('name, metadata')
-        .eq('bucket_id', DOCUMENT_BUCKET_NAME);
-    if (error) {
-        logger_1.logger.error('Failed to read Supabase Storage usage summary', { bucketName: DOCUMENT_BUCKET_NAME, error });
-        throw new Error(`getDocumentStorageUsageSummary: ${error.message}`);
+async function listStorageDirectory(path) {
+    const items = [];
+    let offset = 0;
+    while (true) {
+        const { data, error } = await supabase_1.supabaseAdmin.storage
+            .from(DOCUMENT_BUCKET_NAME)
+            .list(path, {
+            limit: STORAGE_LIST_PAGE_SIZE,
+            offset,
+            sortBy: { column: 'name', order: 'asc' }
+        });
+        if (error) {
+            logger_1.logger.error('Failed to list Supabase Storage directory', {
+                bucketName: DOCUMENT_BUCKET_NAME,
+                path,
+                error
+            });
+            throw new Error(`listStorageDirectory(${path || '/'}): ${error.message}`);
+        }
+        const page = (data ?? []);
+        items.push(...page);
+        if (page.length < STORAGE_LIST_PAGE_SIZE) {
+            break;
+        }
+        offset += STORAGE_LIST_PAGE_SIZE;
     }
+    return items;
+}
+async function listTrackedStorageObjects() {
+    const rows = [];
+    for (const prefix of ['documents', 'pending']) {
+        const ownerFolders = await listStorageDirectory(prefix);
+        for (const ownerFolder of ownerFolders) {
+            const ownerName = ownerFolder.name?.trim();
+            if (!ownerName)
+                continue;
+            const ownerPath = `${prefix}/${ownerName}`;
+            const files = await listStorageDirectory(ownerPath);
+            for (const file of files) {
+                const fileName = file.name?.trim();
+                if (!fileName)
+                    continue;
+                rows.push({
+                    name: `${ownerPath}/${fileName}`,
+                    metadata: file.metadata ?? null
+                });
+            }
+        }
+    }
+    return rows;
+}
+async function getDocumentStorageUsageSummary() {
+    const data = await listTrackedStorageObjects();
     const summary = {
         bucketName: DOCUMENT_BUCKET_NAME,
         totalBytes: 0,
