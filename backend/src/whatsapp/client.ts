@@ -151,13 +151,17 @@ function isPanelLinkIntentMessage(text: string): boolean {
   if (!normalized) return false;
 
   return (
-    /\b(link|site|acesso|url)\b/.test(normalized) &&
-    /\b(painel|dashboard|app)\b/.test(normalized)
-  ) || /\bme\s+passe\s+o\s+link\s+do\s+painel\b/.test(normalized);
+    /\b(link|url|acesso)\b/.test(normalized) &&
+    /\b(site|painel|dashboard|app|sistema|plataforma|saldopro|saldo pro)\b/.test(normalized)
+  ) || /\bme\s+(mande|manda|passa|passe)\s+o\s+link\s+d[oa]\s+(site|painel|dashboard|app|sistema|plataforma)\b/.test(normalized);
 }
 
 function buildPanelLinkReply(): string {
-  return `Acesse seu painel aqui: ${env.appPanelUrl}`;
+  return [
+    'Aqui estao os links do SaldoPro:',
+    `Site: ${env.webAppUrl}`,
+    `Painel: ${env.appPanelUrl}`
+  ].join('\n');
 }
 
 function buildRegistrationRequiredReply(): string {
@@ -1407,6 +1411,18 @@ export class WhatsAppClient {
     documentDataUrl: string | null = null
   ): Promise<void> {
     const hasInboundInput = inboundText.trim().length > 0 || Boolean(imageDataUrl) || Boolean(audioDataUrl) || Boolean(documentDataUrl);
+
+    if (hasInboundInput && isPanelLinkIntentMessage(inboundText)) {
+      const panelLinkReply = buildPanelLinkReply();
+      await this.sendWithRetry(remoteJid, panelLinkReply, 'auto_reply', ownerUid);
+      await this.appendConversationMessage(ownerUid, remotePhone, { role: 'user', content: inboundText.trim() });
+      await this.appendConversationMessage(ownerUid, remotePhone, {
+        role: 'assistant',
+        content: panelLinkReply
+      });
+      return;
+    }
+
     const planAccess = await getUserPlanAccess(ownerUid);
 
     if (!planAccess.features.whatsappDocumentStorage && hasInboundInput) {
@@ -1469,17 +1485,6 @@ export class WhatsAppClient {
     }
 
     if (env.whatsappAiEnabled && hasInboundInput) {
-      if (isPanelLinkIntentMessage(inboundText)) {
-        const panelLinkReply = buildPanelLinkReply();
-        await this.sendWithRetry(remoteJid, panelLinkReply, 'auto_reply', ownerUid);
-        await this.appendConversationMessage(ownerUid, remotePhone, { role: 'user', content: inboundText.trim() });
-        await this.appendConversationMessage(ownerUid, remotePhone, {
-          role: 'assistant',
-          content: panelLinkReply
-        });
-        return;
-      }
-
       if (!planAccess.features.whatsappUnlimitedAi && planAccess.freeWhatsappQuota.remaining <= 0) {
         await this.sendDocumentTextReply(
           ownerUid,

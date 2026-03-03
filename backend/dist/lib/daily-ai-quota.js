@@ -12,7 +12,7 @@ const DAILY_AI_QUOTA_TABLE = 'app_daily_ai_quotas';
 const BRASILIA_TIMEZONE = 'America/Sao_Paulo';
 const QUOTA_UPDATE_MAX_ATTEMPTS = 3;
 exports.WHATSAPP_FREE_QUOTA_CHANNEL = 'whatsapp_free';
-exports.FREE_WHATSAPP_DAILY_LIMIT = 1;
+exports.FREE_WHATSAPP_DAILY_LIMIT = 2;
 function assertNoError(error, context) {
     if (!error)
         return;
