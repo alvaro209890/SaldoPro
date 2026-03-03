@@ -49,7 +49,7 @@ async function requestMercadoPago(path, context, options = {}) {
             throw new MercadoPagoRequestError({
                 status: 400,
                 code: 'MERCADO_PAGO_CARD_TOKEN_MISMATCH',
-                message: 'O token do cartao foi gerado em um app ou ambiente diferente do configurado no backend. Use a mesma conta e o mesmo ambiente no VITE_MERCADO_PAGO_PUBLIC_KEY e no MERCADO_PAGO_ACCESS_TOKEN (TEST com TEST ou producao com producao).',
+                message: 'O token do cartao nao foi aceito pelo Mercado Pago. Em modo teste, gere um novo token no frontend com a mesma Public Key da integracao e use um comprador de teste (@testuser.com). Tambem confirme se VITE_MERCADO_PAGO_PUBLIC_KEY e MERCADO_PAGO_ACCESS_TOKEN pertencem ao mesmo app e ao mesmo ambiente.',
                 providerStatus: response.status,
                 providerBody: errorText
             });

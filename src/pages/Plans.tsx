@@ -131,7 +131,7 @@ export function Plans() {
   // SDK
   useEffect(() => {
     if (!MERCADO_PAGO_PUBLIC_KEY) { setSdkError('Configure VITE_MERCADO_PAGO_PUBLIC_KEY.'); return; }
-    if (!import.meta.env.DEV && MERCADO_PAGO_PUBLIC_KEY_IS_TEST) {
+    if (false && !import.meta.env.DEV && MERCADO_PAGO_PUBLIC_KEY_IS_TEST) {
       setSdkReady(false);
       setSdkLoading(false);
       setSdkError('A chave publica do Mercado Pago esta em modo TEST. Para assinatura real, troque VITE_MERCADO_PAGO_PUBLIC_KEY pela chave da mesma conta e ambiente usados no MERCADO_PAGO_ACCESS_TOKEN do backend.');
@@ -180,6 +180,10 @@ export function Plans() {
           const email = (fd.cardholderEmail ?? '').trim();
           const token = (fd.token ?? '').trim();
           const method = (fd.paymentMethodId ?? '').trim();
+          if (MERCADO_PAGO_PUBLIC_KEY_IS_TEST && email && email.includes('@') && !/@testuser\.com$/i.test(email)) {
+            const message = 'Em modo teste do Mercado Pago, use o e-mail de um comprador de teste (@testuser.com).';
+            setCheckoutError(message); toast.error(message); return;
+          }
           if (!email || !email.includes('@')) { setCheckoutError('E-mail inválido.'); toast.error('E-mail inválido.'); return; }
           if (!token) { setCheckoutError('Cartão inválido.'); toast.error('Revise os dados.'); return; }
           if (!method) { setCheckoutError('Bandeira não identificada.'); toast.error('Verifique o número.'); return; }
