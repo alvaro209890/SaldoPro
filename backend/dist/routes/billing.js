@@ -306,6 +306,19 @@ function createBillingRouter() {
         }
     });
     router.use((error, _req, res, _next) => {
+        if (error instanceof mercado_pago_1.MercadoPagoRequestError) {
+            logger_1.logger.error('Billing Mercado Pago error', {
+                code: error.code,
+                status: error.status,
+                providerStatus: error.providerStatus,
+                providerBody: error.providerBody
+            });
+            res.status(error.status).json({
+                error: error.message,
+                code: error.code
+            });
+            return;
+        }
         logger_1.logger.error('Billing route error', error);
         const message = error instanceof Error ? error.message : 'Unexpected error';
         res.status(500).json({ error: message });

@@ -1,7 +1,7 @@
 import type { LucideIcon } from 'lucide-react';
 import type { BillingPlanCode, BillingStatusResponse } from '@/services/billing';
 
-export type CheckoutStage = 'select' | 'checkout';
+export type CheckoutStage = 'select' | 'checkout' | 'success';
 
 export type BillingSubscriptionStatus = BillingStatusResponse['subscription']['status'];
 

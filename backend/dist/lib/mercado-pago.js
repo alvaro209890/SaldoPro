@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.MercadoPagoRequestError = void 0;
 exports.getMercadoPagoNotificationUrl = getMercadoPagoNotificationUrl;
 exports.getMercadoPagoBackUrl = getMercadoPagoBackUrl;
 exports.mapMercadoPagoSubscriptionStatus = mapMercadoPagoSubscriptionStatus;
@@ -10,6 +11,21 @@ exports.getMercadoPagoSubscription = getMercadoPagoSubscription;
 exports.validateMercadoPagoWebhookSignature = validateMercadoPagoWebhookSignature;
 const node_crypto_1 = require("node:crypto");
 const env_1 = require("../config/env");
+class MercadoPagoRequestError extends Error {
+    status;
+    code;
+    providerStatus;
+    providerBody;
+    constructor(input) {
+        super(input.message);
+        this.name = 'MercadoPagoRequestError';
+        this.status = input.status ?? 502;
+        this.code = input.code ?? 'MERCADO_PAGO_API_ERROR';
+        this.providerStatus = input.providerStatus;
+        this.providerBody = input.providerBody;
+    }
+}
+exports.MercadoPagoRequestError = MercadoPagoRequestError;
 function safeCompare(left, right) {
     const leftBuffer = Buffer.from(left);
     const rightBuffer = Buffer.from(right);
@@ -28,7 +44,21 @@ async function requestMercadoPago(path, context, options = {}) {
     });
     if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`${context}: ${response.status} ${response.statusText} - ${errorText}`);
+        if (context === 'createMercadoPagoSubscription' &&
+            errorText.includes('Card token service not found')) {
+            throw new MercadoPagoRequestError({
+                status: 400,
+                code: 'MERCADO_PAGO_CARD_TOKEN_MISMATCH',
+                message: 'O token do cartao foi gerado em um app ou ambiente diferente do configurado no backend. Use a mesma conta e o mesmo ambiente no VITE_MERCADO_PAGO_PUBLIC_KEY e no MERCADO_PAGO_ACCESS_TOKEN (TEST com TEST ou producao com producao).',
+                providerStatus: response.status,
+                providerBody: errorText
+            });
+        }
+        throw new MercadoPagoRequestError({
+            message: `${context}: ${response.status} ${response.statusText} - ${errorText}`,
+            providerStatus: response.status,
+            providerBody: errorText
+        });
     }
     if (response.status === 204) {
         return {};

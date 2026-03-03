@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowRight,
   Bot,
+  CalendarCheck,
   Check,
   CreditCard,
   Crown,
@@ -10,6 +12,7 @@ import {
   LockKeyhole,
   MessageCircle,
   Mic,
+  PartyPopper,
   RefreshCw,
   ShieldCheck,
   Sparkles,
@@ -19,7 +22,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { MERCADO_PAGO_PUBLIC_KEY } from '@/config/backend';
+import { MERCADO_PAGO_PUBLIC_KEY, MERCADO_PAGO_PUBLIC_KEY_IS_TEST } from '@/config/backend';
 import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/Button';
 import {
@@ -51,14 +54,14 @@ type MercadoPagoCardFormController = {
 type MercadoPagoInstance = {
   cardForm: (config: {
     amount: string; iframe: boolean;
-    form: { id: string; cardNumber: { id: string; placeholder?: string }; expirationDate: { id: string; placeholder?: string }; securityCode: { id: string; placeholder?: string }; cardholderName: { id: string; placeholder?: string }; cardholderEmail: { id: string; placeholder?: string }; issuer: { id: string; placeholder?: string }; installments: { id: string; placeholder?: string }; identificationType: { id: string; placeholder?: string }; identificationNumber: { id: string; placeholder?: string }; };
+    form: { id: string; cardNumber: { id: string; placeholder?: string; style?: Record<string, unknown> }; expirationDate: { id: string; placeholder?: string; style?: Record<string, unknown> }; securityCode: { id: string; placeholder?: string; style?: Record<string, unknown> }; cardholderName: { id: string; placeholder?: string }; cardholderEmail: { id: string; placeholder?: string }; issuer: { id: string; placeholder?: string }; installments: { id: string; placeholder?: string }; identificationType: { id: string; placeholder?: string }; identificationNumber: { id: string; placeholder?: string }; };
     callbacks: { onFormMounted?: (error?: unknown) => void; onSubmit: (event: Event) => void; onFetching?: (_resource: string) => (() => void) | void; };
   }) => MercadoPagoCardFormController;
 };
 declare global { interface Window { MercadoPago?: new (publicKey: string, options?: { locale?: string }) => MercadoPagoInstance; } }
 
 /* ──── style tokens ──── */
-const iframeCls = 'h-[42px] max-h-[42px] overflow-hidden rounded-lg border border-white/10 bg-white px-3';
+const iframeCls = 'h-[42px] max-h-[42px] overflow-hidden rounded-lg border border-white/10 bg-white/[0.04] px-3';
 const inputCls = 'h-[42px] w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-emerald-400/40';
 const selectCls = inputCls;
 const labelCls = 'block text-[11px] font-medium uppercase tracking-wider text-slate-500 mb-1';
@@ -66,6 +69,7 @@ const labelCls = 'block text-[11px] font-medium uppercase tracking-wider text-sl
 /* ══════════════════════════════════ */
 export function Plans() {
   const { user, displayName } = useAuth();
+  const navigate = useNavigate();
   const [plans, setPlans] = useState<BillingPlan[]>([]);
   const [billingStatus, setBillingStatus] = useState<BillingStatusResponse | null>(null);
   const [selectedPlanCode, setSelectedPlanCode] = useState<BillingPlanCode>('quarterly');
@@ -94,6 +98,7 @@ export function Plans() {
   const statusCls = statusTone(subStatus);
   const quota = billingStatus?.freeWhatsappQuota;
   const showCheckout = hasPlans && stage === 'checkout';
+  const showSuccess = stage === 'success';
 
   function destroyCardForm() { cardFormRef.current?.unmount?.(); cardFormRef.current?.destroy?.(); cardFormRef.current = null; }
 
@@ -126,6 +131,12 @@ export function Plans() {
   // SDK
   useEffect(() => {
     if (!MERCADO_PAGO_PUBLIC_KEY) { setSdkError('Configure VITE_MERCADO_PAGO_PUBLIC_KEY.'); return; }
+    if (!import.meta.env.DEV && MERCADO_PAGO_PUBLIC_KEY_IS_TEST) {
+      setSdkReady(false);
+      setSdkLoading(false);
+      setSdkError('A chave publica do Mercado Pago esta em modo TEST. Para assinatura real, troque VITE_MERCADO_PAGO_PUBLIC_KEY pela chave da mesma conta e ambiente usados no MERCADO_PAGO_ACCESS_TOKEN do backend.');
+      return;
+    }
     if (typeof window === 'undefined') return;
     if (window.MercadoPago) { setSdkReady(true); return; }
     let c = false; setSdkLoading(true);
@@ -149,9 +160,9 @@ export function Plans() {
       amount: (selectedPlan.priceCents / 100).toFixed(2), iframe: true,
       form: {
         id: 'plans-checkout-form',
-        cardNumber: { id: 'plans-card-number', placeholder: 'Numero do cartao' },
-        expirationDate: { id: 'plans-card-expiration', placeholder: 'MM/AA' },
-        securityCode: { id: 'plans-card-cvc', placeholder: 'CVV' },
+        cardNumber: { id: 'plans-card-number', placeholder: 'Numero do cartao', style: { color: '#ffffff', 'font-size': '14px', 'font-family': 'system-ui, sans-serif', placeholderColor: '#64748b' } },
+        expirationDate: { id: 'plans-card-expiration', placeholder: 'MM/AA', style: { color: '#ffffff', 'font-size': '14px', 'font-family': 'system-ui, sans-serif', placeholderColor: '#64748b' } },
+        securityCode: { id: 'plans-card-cvc', placeholder: 'CVV', style: { color: '#ffffff', 'font-size': '14px', 'font-family': 'system-ui, sans-serif', placeholderColor: '#64748b' } },
         cardholderName: { id: 'plans-cardholder-name', placeholder: 'Nome impresso no cartao' },
         cardholderEmail: { id: 'plans-cardholder-email', placeholder: 'voce@email.com' },
         issuer: { id: 'plans-issuer', placeholder: 'Banco emissor' },
@@ -178,7 +189,7 @@ export function Plans() {
             ...(fd.issuerId ? { issuerId: fd.issuerId } : {}),
             ...(fd.identificationType ? { identificationType: fd.identificationType } : {}),
             ...(fd.identificationNumber ? { identificationNumber: fd.identificationNumber } : {}),
-          }).then(ns => { setBillingStatus(ns); toast.success(ns.subscription.status === 'authorized' ? 'Plano ativado!' : 'Pagamento enviado.'); })
+          }).then(ns => { setBillingStatus(ns); setStage('success'); toast.success(ns.subscription.status === 'authorized' ? 'Plano ativado!' : 'Pagamento enviado.'); })
             .catch((e: unknown) => { const m = e instanceof Error ? e.message : 'Erro.'; setCheckoutError(m); toast.error(m); })
             .finally(() => setCheckoutLoading(false));
         },
@@ -571,6 +582,87 @@ export function Plans() {
           ) : (
             <div className="rounded-lg border border-amber-400/20 bg-amber-500/10 p-3 text-sm text-amber-100">Selecione um plano.</div>
           )}
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════ */}
+      {/*         STEP 3: SUCCESS                     */}
+      {/* ═══════════════════════════════════════════ */}
+      {showSuccess && (
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <div className="max-w-md w-full text-center space-y-5">
+            {/* Icon */}
+            <div className="relative mx-auto w-fit">
+              <div className="absolute -inset-4 rounded-full bg-emerald-400/10 animate-pulse" />
+              <div className="relative flex h-20 w-20 items-center justify-center rounded-full border border-emerald-400/30 bg-gradient-to-br from-emerald-500/20 to-teal-500/10">
+                <PartyPopper className="h-10 w-10 text-emerald-300" />
+              </div>
+            </div>
+
+            {/* Title */}
+            <div>
+              <h1 className="text-2xl font-bold text-white">Pagamento concluído!</h1>
+              <p className="text-sm text-slate-300 mt-1.5">
+                {sub?.status === 'authorized'
+                  ? 'Seu premium já está ativo. Aproveite todos os recursos!'
+                  : 'Pagamento enviado. O premium será ativado assim que o Mercado Pago confirmar.'}
+              </p>
+            </div>
+
+            {/* Plan info card */}
+            <div className="rounded-xl border border-emerald-400/20 bg-emerald-500/[0.05] p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-left">
+                  <p className="text-[10px] uppercase tracking-wider text-slate-500">Plano ativo</p>
+                  <p className="text-sm font-bold text-white">{currentPlan?.name ?? selectedPlan?.name ?? 'Premium'}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-lg font-bold text-white">{currentPlan?.priceFormatted ?? selectedPlan?.priceFormatted}</p>
+                  <p className="text-[10px] text-emerald-300">{currentPlan ? getPlanMonthlyEquivalent(currentPlan) : selectedPlan ? getPlanMonthlyEquivalent(selectedPlan) : ''}</p>
+                </div>
+              </div>
+
+              {sub?.nextBillingDate && (
+                <div className="flex items-center gap-2 rounded-lg bg-white/[0.04] border border-white/8 px-3 py-2">
+                  <CalendarCheck className="h-4 w-4 text-emerald-300 shrink-0" />
+                  <div className="text-left">
+                    <p className="text-[10px] text-slate-500 uppercase">Próxima renovação</p>
+                    <p className="text-sm font-semibold text-white">{formatDate(sub.nextBillingDate)}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* What's unlocked */}
+            <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4">
+              <p className="text-xs font-semibold text-white mb-2">Agora você tem acesso a:</p>
+              <div className="grid grid-cols-2 gap-1.5">
+                {[
+                  { icon: MessageCircle, label: 'WhatsApp ilimitado' },
+                  { icon: Bot, label: 'IA no painel' },
+                  { icon: Target, label: 'Metas inteligentes' },
+                  { icon: FileText, label: 'Arquivos e PDFs' },
+                ].map(item => (
+                  <div key={item.label} className="flex items-center gap-1.5 rounded-lg bg-emerald-500/[0.06] px-2.5 py-1.5 text-[11px] text-emerald-200">
+                    <item.icon className="h-3 w-3 shrink-0" />
+                    {item.label}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="space-y-2">
+              <Button onClick={() => navigate('/app/dashboard')} size="lg"
+                className="w-full h-11 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-sm font-bold text-white shadow-lg shadow-emerald-500/15 hover:brightness-110">
+                Ir para o painel
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+              <button onClick={() => setStage('select')} className="w-full h-9 rounded-lg border border-white/10 bg-white/[0.02] text-xs font-medium text-slate-400 hover:bg-white/[0.05] transition">
+                Ver planos
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

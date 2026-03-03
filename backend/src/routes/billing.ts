@@ -4,6 +4,7 @@ import { FREE_WHATSAPP_DAILY_LIMIT } from '../lib/daily-ai-quota';
 import {
   cancelMercadoPagoSubscription,
   createMercadoPagoPlan,
+  MercadoPagoRequestError,
   createMercadoPagoSubscription,
   getMercadoPagoSubscription,
   mapMercadoPagoSubscriptionStatus,
@@ -397,6 +398,20 @@ export function createBillingRouter(): Router {
       res: Response,
       _next: NextFunction
     ): void => {
+      if (error instanceof MercadoPagoRequestError) {
+        logger.error('Billing Mercado Pago error', {
+          code: error.code,
+          status: error.status,
+          providerStatus: error.providerStatus,
+          providerBody: error.providerBody
+        });
+        res.status(error.status).json({
+          error: error.message,
+          code: error.code
+        });
+        return;
+      }
+
       logger.error('Billing route error', error);
       const message = error instanceof Error ? error.message : 'Unexpected error';
       res.status(500).json({ error: message });
