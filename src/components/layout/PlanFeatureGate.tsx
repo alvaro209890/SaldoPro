@@ -16,8 +16,6 @@ interface PlanFeatureGateProps {
     redirectPath?: string;
 }
 
-const REDIRECT_DELAY_MS = 1800;
-
 export function PlanFeatureGate({
     feature,
     title,
@@ -66,21 +64,6 @@ export function PlanFeatureGate({
             cancelled = true;
         };
     }, [description, feature, user]);
-
-    useEffect(() => {
-        if (accessState !== 'blocked') return undefined;
-
-        const timer = window.setTimeout(() => {
-            navigate(redirectPath, {
-                replace: true,
-                state: { redirectedFrom: location.pathname },
-            });
-        }, REDIRECT_DELAY_MS);
-
-        return () => {
-            window.clearTimeout(timer);
-        };
-    }, [accessState, location.pathname, navigate, redirectPath]);
 
     if (accessState === 'allowed') {
         return <>{children}</>;
@@ -142,7 +125,7 @@ export function PlanFeatureGate({
                                     <ArrowRight className="ml-2 h-4 w-4" />
                                 </Button>
                                 <p className="text-xs leading-6 text-slate-400 sm:text-sm">
-                                    Esta aba vai te levar para a tela de planos automaticamente em alguns segundos.
+                                    Esta area fica bloqueada ate voce clicar para ir para a tela de planos.
                                 </p>
                             </div>
                         </div>
