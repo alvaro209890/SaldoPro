@@ -18,7 +18,7 @@ const stopReminderNotifier = startWhatsAppReminderNotifier(whatsappManager);
 const signupWelcomeDispatcher = startSignupWelcomeDispatcher(whatsappManager);
 
 app.use(cors());
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '10mb' }));
 app.use(healthRouter);
 app.use(createQrPageRouter(whatsappManager));
 app.use('/api/whatsapp', createWhatsAppRouter(whatsappManager));

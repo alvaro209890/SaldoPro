@@ -13,6 +13,7 @@ import {
     Sparkles,
     Bell,
     Repeat,
+    Images,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -28,6 +29,7 @@ const NAV_ITEMS = [
     { label: 'Relatórios', path: '/app/reports', icon: PieChart },
     { label: 'Lembretes', path: '/app/reminders', icon: Bell },
     { label: 'Recorrentes', path: '/app/recurring', icon: Repeat },
+    { label: 'Imagens', path: '/app/documents', icon: Images },
     { label: 'Configurações', path: '/app/settings', icon: Settings },
 ];
 

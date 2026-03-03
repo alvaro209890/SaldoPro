@@ -21,7 +21,7 @@ const whatsappManager = new manager_1.WhatsAppClientsManager();
 const stopReminderNotifier = (0, reminder_notifier_1.startWhatsAppReminderNotifier)(whatsappManager);
 const signupWelcomeDispatcher = (0, signup_welcome_dispatcher_1.startSignupWelcomeDispatcher)(whatsappManager);
 app.use((0, cors_1.default)());
-app.use(express_1.default.json({ limit: '2mb' }));
+app.use(express_1.default.json({ limit: '10mb' }));
 app.use(health_1.healthRouter);
 app.use((0, qr_page_1.createQrPageRouter)(whatsappManager));
 app.use('/api/whatsapp', (0, whatsapp_1.createWhatsAppRouter)(whatsappManager));

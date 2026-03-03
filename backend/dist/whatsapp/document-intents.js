@@ -1,10 +1,12 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.normalizeDocumentText = normalizeDocumentText;
+exports.parseDocumentLabelInput = parseDocumentLabelInput;
 exports.detectDocumentSaveIntent = detectDocumentSaveIntent;
 exports.detectDocumentFetchIntent = detectDocumentFetchIntent;
 exports.tokenizeDocumentSearch = tokenizeDocumentSearch;
 exports.isMeaningfulDocumentLabel = isMeaningfulDocumentLabel;
+exports.scoreRecentDocuments = scoreRecentDocuments;
 const SAVE_KEYWORDS = ['guardar', 'guarda', 'guarde', 'salvar', 'salva', 'salve', 'arquivar', 'arquiva', 'arquive'];
 const FETCH_VERBS = [
     'me manda de volta',
@@ -35,6 +37,8 @@ const FETCH_VERBS = [
     'onde esta'
 ];
 const DOCUMENT_NOUNS = ['imagem', 'foto', 'arquivo', 'documento', 'doc'];
+const LABEL_HINT_WORDS = new Set(['titulo', 'nome']);
+const DESCRIPTION_HINT_WORDS = new Set(['descricao', 'desc', 'observacao', 'obs']);
 const STOPWORDS = new Set([
     'a',
     'as',
@@ -68,6 +72,10 @@ const GENERIC_LABEL_WORDS = new Set([
     'doc',
     'foto',
     'imagem',
+    'titulo',
+    'nome',
+    'descricao',
+    'desc',
     'isso',
     'essa',
     'esse',
@@ -90,9 +98,47 @@ const LEADING_LABEL_FILLER_WORDS = new Set([
     'doc',
     'documento',
     'arquivo',
+    'titulo',
+    'nome',
+    'descricao',
+    'desc',
     'uma',
     'um',
     'como'
+]);
+const LEADING_LABEL_CONNECTOR_WORDS = new Set([
+    'com',
+    'como',
+    'e',
+    'eh',
+    'para',
+    'pra',
+    'por',
+    'ser',
+    'seria',
+    'fica',
+    'ficar',
+    'vai'
+]);
+const POST_MARKER_SKIP_WORDS = new Set([
+    'a',
+    'as',
+    'da',
+    'das',
+    'de',
+    'do',
+    'dos',
+    'e',
+    'eh',
+    'esta',
+    'este',
+    'o',
+    'os',
+    'ser',
+    'seria',
+    'um',
+    'uma',
+    'vai'
 ]);
 function collapseWhitespace(value) {
     return value.replace(/\s+/g, ' ').trim();
@@ -107,6 +153,71 @@ function normalizeDocumentText(text) {
 function removeKeywordOnce(value, keyword) {
     const pattern = new RegExp(`\\b${keyword}\\b`, 'i');
     return collapseWhitespace(value.replace(pattern, ' '));
+}
+function trimWrappedQuotes(value) {
+    return value
+        .replace(/^[`"']+/, '')
+        .replace(/[`"']+$/, '')
+        .trim();
+}
+function cleanExtractedSegment(value) {
+    return trimWrappedQuotes(collapseWhitespace(value)
+        .replace(/^[:\-.,;]+/, '')
+        .replace(/[:\-.,;]+$/, ''));
+}
+function findFirstTokenIndex(normalizedTokens, matcher, startIndex = 0) {
+    for (let index = startIndex; index < normalizedTokens.length; index += 1) {
+        if (matcher(normalizedTokens[index])) {
+            return index;
+        }
+    }
+    return -1;
+}
+function skipIgnorableLabelTokens(normalizedTokens, startIndex, extraWords) {
+    let currentIndex = startIndex;
+    while (currentIndex < normalizedTokens.length) {
+        const token = normalizedTokens[currentIndex];
+        if (!token ||
+            LEADING_LABEL_FILLER_WORDS.has(token) ||
+            LEADING_LABEL_CONNECTOR_WORDS.has(token) ||
+            (extraWords?.has(token) ?? false)) {
+            currentIndex += 1;
+            continue;
+        }
+        break;
+    }
+    return currentIndex;
+}
+function parseDocumentLabelTokens(rawTokens) {
+    if (rawTokens.length === 0) {
+        return { title: '', description: '' };
+    }
+    const normalizedTokens = rawTokens.map((token) => normalizeDocumentText(token));
+    const explicitTitleIndex = findFirstTokenIndex(normalizedTokens, (token) => LABEL_HINT_WORDS.has(token));
+    const titleStartIndex = explicitTitleIndex === -1
+        ? skipIgnorableLabelTokens(normalizedTokens, 0)
+        : skipIgnorableLabelTokens(normalizedTokens, explicitTitleIndex + 1, POST_MARKER_SKIP_WORDS);
+    const explicitDescriptionIndex = findFirstTokenIndex(normalizedTokens, (token) => DESCRIPTION_HINT_WORDS.has(token), titleStartIndex);
+    const rawTitle = rawTokens.slice(titleStartIndex, explicitDescriptionIndex === -1 ? rawTokens.length : explicitDescriptionIndex).join(' ');
+    const rawDescription = explicitDescriptionIndex === -1
+        ? ''
+        : rawTokens.slice(skipIgnorableLabelTokens(normalizedTokens, explicitDescriptionIndex + 1, POST_MARKER_SKIP_WORDS)).join(' ');
+    const title = cleanExtractedSegment(rawTitle);
+    const description = cleanExtractedSegment(rawDescription);
+    if (!title && description) {
+        return { title: description, description: '' };
+    }
+    return { title, description };
+}
+function extractRelevantLabelText(rawTokens) {
+    if (rawTokens.length === 0)
+        return '';
+    const normalizedTokens = rawTokens.map((token) => normalizeDocumentText(token));
+    const explicitTitleIndex = findFirstTokenIndex(normalizedTokens, (token) => LABEL_HINT_WORDS.has(token));
+    const startIndex = explicitTitleIndex === -1
+        ? skipIgnorableLabelTokens(normalizedTokens, 0)
+        : skipIgnorableLabelTokens(normalizedTokens, explicitTitleIndex + 1, POST_MARKER_SKIP_WORDS);
+    return cleanExtractedSegment(rawTokens.slice(startIndex).join(' '));
 }
 function isSingleEditOrAdjacentSwap(a, b) {
     if (!a || !b || Math.abs(a.length - b.length) > 1)
@@ -199,17 +310,9 @@ function findFetchVerbMatch(normalizedTokens) {
     }
     return null;
 }
-function stripLeadingLabelFillers(rawTokens) {
-    let startIndex = 0;
-    while (startIndex < rawTokens.length) {
-        const normalizedToken = normalizeDocumentText(rawTokens[startIndex]);
-        if (!normalizedToken || LEADING_LABEL_FILLER_WORDS.has(normalizedToken)) {
-            startIndex += 1;
-            continue;
-        }
-        break;
-    }
-    return collapseWhitespace(rawTokens.slice(startIndex).join(' '));
+function parseDocumentLabelInput(text) {
+    const rawTokens = collapseWhitespace(text).split(' ').filter(Boolean);
+    return parseDocumentLabelTokens(rawTokens);
 }
 function detectDocumentSaveIntent(text) {
     const trimmed = text.trim();
@@ -224,7 +327,7 @@ function detectDocumentSaveIntent(text) {
     }
     return {
         matched: true,
-        labelCandidate: stripLeadingLabelFillers(rawTokens.slice(matchedIndex + 1))
+        labelCandidate: extractRelevantLabelText(rawTokens.slice(matchedIndex + 1))
     };
 }
 function detectDocumentFetchIntent(text) {
@@ -267,11 +370,14 @@ function tokenizeDocumentSearch(text) {
         .filter((token) => token.length >= 2)
         .filter((token) => !STOPWORDS.has(token))
         .filter((token) => !SAVE_KEYWORDS.includes(token))
+        .filter((token) => !LABEL_HINT_WORDS.has(token))
+        .filter((token) => !DESCRIPTION_HINT_WORDS.has(token))
         .filter((token) => !FETCH_VERBS.includes(token))
         .filter((token) => !DOCUMENT_NOUNS.includes(token));
 }
 function isMeaningfulDocumentLabel(text) {
-    const rawNormalized = normalizeDocumentText(text);
+    const { title } = parseDocumentLabelInput(text);
+    const rawNormalized = normalizeDocumentText(title);
     if (!rawNormalized)
         return false;
     const rawTokens = rawNormalized.split(' ').filter(Boolean);
@@ -280,5 +386,44 @@ function isMeaningfulDocumentLabel(text) {
     if (rawTokens.every((token) => GENERIC_LABEL_WORDS.has(token) || STOPWORDS.has(token))) {
         return false;
     }
-    return tokenizeDocumentSearch(text).length > 0;
+    return tokenizeDocumentSearch(title).length > 0;
+}
+const DOCUMENT_RECENCY_BONUS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+function scoreRecentDocuments(documents, query) {
+    const normalizedQuery = normalizeDocumentText(query);
+    const queryTokens = [...new Set(tokenizeDocumentSearch(query))];
+    const now = Date.now();
+    return documents
+        .map((document) => {
+        let score = 0;
+        const normalizedTitle = document.normalizedTitle;
+        const normalizedDescription = document.normalizedDescription ?? '';
+        const tokenSet = new Set(document.searchTokens);
+        if (normalizedQuery) {
+            if (normalizedTitle === normalizedQuery) {
+                score += 100;
+            }
+            else if (normalizedTitle.includes(normalizedQuery)) {
+                score += 60;
+            }
+        }
+        for (const token of queryTokens) {
+            if (normalizedTitle.includes(token))
+                score += 25;
+            if (normalizedDescription.includes(token))
+                score += 15;
+            if (tokenSet.has(token))
+                score += 10;
+        }
+        const createdAt = Date.parse(document.createdAt);
+        if (Number.isFinite(createdAt) && now - createdAt <= DOCUMENT_RECENCY_BONUS_WINDOW_MS) {
+            score += 10;
+        }
+        return { document, score };
+    })
+        .sort((a, b) => {
+        if (b.score !== a.score)
+            return b.score - a.score;
+        return b.document.createdAt.localeCompare(a.document.createdAt);
+    });
 }

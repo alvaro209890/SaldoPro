@@ -122,10 +122,16 @@ function isUndoMessage(text) {
 }
 function buildDocumentSavedReply(title) {
     return [
-        `Arquivo salvo como "${title}".`,
+        `Imagem salva com sucesso como "${title}".`,
         '',
-        `Para pedir depois, voce pode enviar: "me manda ${title}".`,
-        `Tambem funciona: "manda de volta ${title}".`
+        `Quando quiser receber de volta, voce pode enviar: "me manda a imagem ${title}".`,
+        `Tambem funciona: "procura ${title}" ou "manda de volta ${title}".`
+    ].join('\n');
+}
+function buildDocumentFetchReply(title) {
+    return [
+        `Encontrei a imagem "${title}" e estou te enviando agora.`,
+        'Se quiser outra, me diga uma parte do nome ou da descricao.'
     ].join('\n');
 }
 const IMAGE_ONLY_FALLBACK_TEXT = 'Analise a imagem enviada e registre o lancamento corretamente.';
@@ -136,7 +142,7 @@ const DOCUMENT_AMBIGUOUS_MIN_SCORE = 25;
 const DOCUMENT_RESULT_GAP_MIN = 15;
 const DOCUMENT_RECENCY_BONUS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const DOCUMENT_UNSUPPORTED_MEDIA_REPLY = 'Por enquanto so consigo guardar imagens. PDF e outros tipos ainda nao estao disponiveis.';
-const DOCUMENT_PENDING_PROMPT_REPLY = 'Recebi a imagem. Qual nome ou descricao voce quer usar para salvar? Exemplo: logo da empresa ou contrato aluguel.';
+const DOCUMENT_PENDING_PROMPT_REPLY = 'Recebi a imagem. Me diga o titulo que voce quer usar para salvar. Exemplo: "titulo comprovante de luz". Se quiser, voce tambem pode mandar: "comprovante de luz descricao conta de marco".';
 const DOCUMENT_PENDING_CANCELLED_REPLY = 'Salvamento cancelado.';
 const DOCUMENT_SAVE_ERROR_REPLY = 'Nao consegui concluir essa operacao com arquivos agora. Tente novamente em instantes.';
 const DOCUMENT_IMAGE_READ_ERROR_REPLY = 'Recebi seu pedido para guardar a imagem, mas nao consegui ler o arquivo enviado. Tente reenviar a imagem em alguns instantes.';
@@ -1184,13 +1190,14 @@ class WhatsAppClient {
     }
     buildDocumentMetadata(labelSource) {
         const cleaned = labelSource.trim().replace(/\s+/g, ' ');
-        const title = cleaned.slice(0, 80);
-        const description = cleaned.slice(0, 300);
+        const parsed = (0, document_intents_1.parseDocumentLabelInput)(cleaned);
+        const title = (parsed.title || cleaned).slice(0, 80);
+        const description = (parsed.description || '').slice(0, 300) || null;
         const normalizedTitle = (0, document_intents_1.normalizeDocumentText)(title);
-        const normalizedDescription = (0, document_intents_1.normalizeDocumentText)(description);
+        const normalizedDescription = description ? (0, document_intents_1.normalizeDocumentText)(description) : null;
         const searchTokens = [...new Set([
                 ...(0, document_intents_1.tokenizeDocumentSearch)(title),
-                ...(0, document_intents_1.tokenizeDocumentSearch)(description)
+                ...(0, document_intents_1.tokenizeDocumentSearch)(description ?? '')
             ])];
         return {
             title,
@@ -1368,44 +1375,6 @@ class WhatsAppClient {
         const title = await this.finalizePendingDocumentDraft(ownerUid, draft, inboundText);
         await this.sendDocumentTextReply(ownerUid, remoteJid, remotePhone, buildDocumentSavedReply(title), `[Arquivo salvo] ${title}`);
     }
-    scoreRecentDocuments(documents, query) {
-        const normalizedQuery = (0, document_intents_1.normalizeDocumentText)(query);
-        const queryTokens = [...new Set((0, document_intents_1.tokenizeDocumentSearch)(query))];
-        const now = Date.now();
-        return documents
-            .map((document) => {
-            let score = 0;
-            const normalizedTitle = document.normalizedTitle;
-            const normalizedDescription = document.normalizedDescription ?? '';
-            const tokenSet = new Set(document.searchTokens);
-            if (normalizedQuery) {
-                if (normalizedTitle === normalizedQuery) {
-                    score += 100;
-                }
-                else if (normalizedTitle.includes(normalizedQuery)) {
-                    score += 60;
-                }
-            }
-            for (const token of queryTokens) {
-                if (normalizedTitle.includes(token))
-                    score += 25;
-                if (normalizedDescription.includes(token))
-                    score += 15;
-                if (tokenSet.has(token))
-                    score += 10;
-            }
-            const createdAt = Date.parse(document.createdAt);
-            if (Number.isFinite(createdAt) && now - createdAt <= DOCUMENT_RECENCY_BONUS_WINDOW_MS) {
-                score += 10;
-            }
-            return { document, score };
-        })
-            .sort((a, b) => {
-            if (b.score !== a.score)
-                return b.score - a.score;
-            return b.document.createdAt.localeCompare(a.document.createdAt);
-        });
-    }
     async handleDocumentFetchRequest(ownerUid, remoteJid, remotePhone, query) {
         logger_1.logger.info('DOC_FETCH_START', {
             uid: ownerUid,
@@ -1429,7 +1398,7 @@ class WhatsAppClient {
             shouldSendDirect = documents.length === 1;
         }
         else {
-            const ranked = this.scoreRecentDocuments(documents, query);
+            const ranked = (0, document_intents_1.scoreRecentDocuments)(documents, query);
             const top = ranked[0];
             const second = ranked[1];
             const diffToSecond = top ? top.score - (second?.score ?? 0) : 0;
@@ -1503,7 +1472,7 @@ class WhatsAppClient {
                 error: error instanceof Error ? error.message : 'unknown'
             });
         }
-        const reply = `Aqui está: "${selected.title}".`;
+        const reply = buildDocumentFetchReply(selected.title);
         await this.sendWithRetry(remoteJid, reply, 'auto_reply', ownerUid, { image: { url: signedUrl } });
         logger_1.logger.info('DOC_FETCH_SEND_SUCCESS', {
             uid: ownerUid,

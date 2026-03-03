@@ -1,16 +1,130 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createDataRouter = createDataRouter;
+const node_crypto_1 = require("node:crypto");
 const express_1 = require("express");
 const firebase_auth_1 = require("../middleware/firebase-auth");
 const firestore_1 = require("../lib/firestore");
+const document_storage_1 = require("../lib/document-storage");
 const logger_1 = require("../lib/logger");
+const document_intents_1 = require("../whatsapp/document-intents");
 const events_1 = require("../whatsapp/events");
+const USER_DOCUMENT_SIGNED_URL_TTL_SECONDS = 60 * 60;
+const USER_DOCUMENT_DOWNLOAD_TTL_SECONDS = 10 * 60;
+const MAX_DOCUMENT_TITLE_LENGTH = 80;
+const MAX_DOCUMENT_DESCRIPTION_LENGTH = 300;
+const MAX_DOCUMENT_TAGS = 12;
 function getUid(req) {
     return req.uid;
 }
 function asString(value) {
     return typeof value === 'string' ? value.trim() : '';
+}
+function collapseWhitespace(value) {
+    return value.replace(/\s+/g, ' ').trim();
+}
+function parseDocumentTags(value) {
+    const source = Array.isArray(value)
+        ? value
+        : typeof value === 'string'
+            ? value.split(',')
+            : [];
+    const unique = new Set();
+    for (const item of source) {
+        if (typeof item !== 'string')
+            continue;
+        const normalized = (0, document_intents_1.normalizeDocumentText)(item);
+        if (!normalized)
+            continue;
+        for (const token of normalized.split(' ')) {
+            if (!token)
+                continue;
+            unique.add(token);
+            if (unique.size >= MAX_DOCUMENT_TAGS) {
+                return [...unique];
+            }
+        }
+    }
+    return [...unique];
+}
+function buildDocumentSearchTokens(title, description, tags) {
+    return [...new Set([
+            ...(0, document_intents_1.tokenizeDocumentSearch)(title),
+            ...(0, document_intents_1.tokenizeDocumentSearch)(description ?? ''),
+            ...tags
+        ])];
+}
+function getManualDocumentTags(document) {
+    const automaticTokens = new Set([
+        ...(0, document_intents_1.tokenizeDocumentSearch)(document.title),
+        ...(0, document_intents_1.tokenizeDocumentSearch)(document.description ?? '')
+    ]);
+    return document.searchTokens.filter((token) => !automaticTokens.has(token));
+}
+function getDocumentExtension(mimeType) {
+    const normalized = mimeType.toLowerCase();
+    if (normalized === 'application/pdf')
+        return 'pdf';
+    if (normalized === 'application/zip' ||
+        normalized === 'application/x-zip-compressed' ||
+        normalized === 'multipart/x-zip') {
+        return 'zip';
+    }
+    if (normalized.includes('png'))
+        return 'png';
+    if (normalized.includes('webp'))
+        return 'webp';
+    if (normalized.includes('gif'))
+        return 'gif';
+    if (normalized.includes('bmp'))
+        return 'bmp';
+    if (normalized.includes('heic'))
+        return 'heic';
+    if (normalized.includes('heif'))
+        return 'heif';
+    return 'jpg';
+}
+function buildDocumentDownloadName(document) {
+    const baseName = document.title
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9_-]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60)
+        .toLowerCase();
+    return `${baseName || `arquivo-${document.id.slice(0, 8)}`}.${getDocumentExtension(document.mimeType)}`;
+}
+function buildDocumentPayload(document, previewUrl) {
+    return {
+        id: document.id,
+        title: document.title,
+        description: document.description ?? null,
+        tags: getManualDocumentTags(document),
+        previewUrl,
+        mimeType: document.mimeType,
+        sizeBytes: document.sizeBytes,
+        source: document.source,
+        createdAt: document.createdAt,
+        updatedAt: document.updatedAt,
+        lastAccessedAt: document.lastAccessedAt ?? null
+    };
+}
+function getDocumentMetadata(body) {
+    const title = collapseWhitespace(asString(body.title)).slice(0, MAX_DOCUMENT_TITLE_LENGTH);
+    const rawDescription = collapseWhitespace(asString(body.description)).slice(0, MAX_DOCUMENT_DESCRIPTION_LENGTH);
+    const description = rawDescription || null;
+    const tags = parseDocumentTags(body.tags);
+    if (!title) {
+        throw new Error('`title` e obrigatorio.');
+    }
+    return {
+        title,
+        description,
+        tags,
+        normalizedTitle: (0, document_intents_1.normalizeDocumentText)(title),
+        normalizedDescription: description ? (0, document_intents_1.normalizeDocumentText)(description) : null,
+        searchTokens: buildDocumentSearchTokens(title, description, tags)
+    };
 }
 function createDataRouter(signupWelcomeDispatcher) {
     const router = (0, express_1.Router)();
@@ -203,6 +317,140 @@ function createDataRouter(signupWelcomeDispatcher) {
             ...(imageUrl ? { imageUrl } : {})
         });
         res.json({ id });
+    });
+    router.get('/documents', async (req, res, next) => {
+        try {
+            const uid = getUid(req);
+            const documents = await (0, firestore_1.listUserDocuments)(uid);
+            const items = await Promise.all(documents.map(async (document) => {
+                const previewUrl = await (0, document_storage_1.createSignedDocumentUrl)(document.storagePath, USER_DOCUMENT_SIGNED_URL_TTL_SECONDS);
+                return buildDocumentPayload(document, previewUrl);
+            }));
+            res.json(items);
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.post('/documents', async (req, res, next) => {
+        try {
+            const uid = getUid(req);
+            const body = (req.body ?? {});
+            const fileDataUrl = asString(body.fileDataUrl) || asString(body.imageDataUrl);
+            if (!fileDataUrl.startsWith('data:')) {
+                res.status(400).json({ error: '`fileDataUrl` deve ser um arquivo em base64.' });
+                return;
+            }
+            let metadata;
+            try {
+                metadata = getDocumentMetadata(body);
+            }
+            catch (error) {
+                res.status(400).json({ error: error instanceof Error ? error.message : 'Metadados invalidos.' });
+                return;
+            }
+            const documentId = (0, node_crypto_1.randomUUID)();
+            const upload = await (0, document_storage_1.uploadPendingDocument)(uid, fileDataUrl);
+            let finalStoragePath = upload.storagePath;
+            try {
+                finalStoragePath = await (0, document_storage_1.finalizePendingDocumentMove)(uid, upload.storagePath, documentId, upload.mimeType);
+                await (0, firestore_1.createUserDocument)(uid, {
+                    id: documentId,
+                    source: 'manual_upload',
+                    title: metadata.title,
+                    description: metadata.description,
+                    normalizedTitle: metadata.normalizedTitle,
+                    normalizedDescription: metadata.normalizedDescription,
+                    searchTokens: metadata.searchTokens,
+                    storagePath: finalStoragePath,
+                    mimeType: upload.mimeType,
+                    sizeBytes: upload.sizeBytes
+                });
+                res.status(201).json({ ok: true, id: documentId });
+            }
+            catch (error) {
+                try {
+                    await (0, document_storage_1.deleteStoredDocument)(finalStoragePath);
+                }
+                catch (cleanupError) {
+                    logger_1.logger.warn('Failed to cleanup uploaded document after API error', {
+                        uid,
+                        storagePath: finalStoragePath,
+                        error: cleanupError instanceof Error ? cleanupError.message : 'unknown'
+                    });
+                }
+                next(error);
+            }
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.patch('/documents/:id', async (req, res, next) => {
+        try {
+            const uid = getUid(req);
+            const current = await (0, firestore_1.getUserDocument)(uid, req.params.id);
+            if (!current) {
+                res.status(404).json({ error: 'Imagem nao encontrada.' });
+                return;
+            }
+            let metadata;
+            try {
+                metadata = getDocumentMetadata((req.body ?? {}));
+            }
+            catch (error) {
+                res.status(400).json({ error: error instanceof Error ? error.message : 'Metadados invalidos.' });
+                return;
+            }
+            await (0, firestore_1.updateUserDocument)(uid, current.id, {
+                title: metadata.title,
+                description: metadata.description,
+                normalizedTitle: metadata.normalizedTitle,
+                normalizedDescription: metadata.normalizedDescription,
+                searchTokens: metadata.searchTokens
+            });
+            res.json({ ok: true });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.get('/documents/:id/download-url', async (req, res, next) => {
+        try {
+            const uid = getUid(req);
+            const document = await (0, firestore_1.getUserDocument)(uid, req.params.id);
+            if (!document) {
+                res.status(404).json({ error: 'Imagem nao encontrada.' });
+                return;
+            }
+            const [url] = await Promise.all([
+                (0, document_storage_1.createSignedDocumentUrl)(document.storagePath, USER_DOCUMENT_DOWNLOAD_TTL_SECONDS),
+                (0, firestore_1.touchUserDocumentAccess)(uid, document.id)
+            ]);
+            res.json({
+                url,
+                fileName: buildDocumentDownloadName(document)
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.delete('/documents/:id', async (req, res, next) => {
+        try {
+            const uid = getUid(req);
+            const document = await (0, firestore_1.getUserDocument)(uid, req.params.id);
+            if (!document) {
+                res.status(404).json({ error: 'Imagem nao encontrada.' });
+                return;
+            }
+            await (0, document_storage_1.deleteStoredDocument)(document.storagePath);
+            await (0, firestore_1.markUserDocumentDeleted)(uid, document.id);
+            res.json({ ok: true });
+        }
+        catch (error) {
+            next(error);
+        }
     });
     router.get('/reminders', async (req, res) => {
         const uid = getUid(req);

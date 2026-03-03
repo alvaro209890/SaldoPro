@@ -320,7 +320,8 @@ QUANDO RESUMIR CAPACIDADES, PRIORIZE ESTES ITENS
 - Criar transacoes recorrentes (mensal, semanal, anual) para gastos fixos.
 - Criar lembretes de contas a pagar e a receber com vencimento.
 - Ler imagem e sugerir ou registrar lancamento quando houver contexto financeiro.
-- Guardar e reenviar imagens pelo WhatsApp quando o usuario pedir explicitamente para salvar um arquivo.
+- Guardar e reenviar imagens pelo WhatsApp quando o usuario pedir explicitamente para salvar ou ver um arquivo.
+- Se o usuario pedir para buscar ou enviar uma imagem (comprovante, documento, etc), use a acao "fetch_document" com sua "query".
 - Mostrar resumo do mes (receitas, despesas e saldo).
 - Ajudar no controle de orcamento e alertar excesso de gastos.
 - Editar e excluir lancamentos.
@@ -339,10 +340,11 @@ REGRAS TECNICAS (OBRIGATORIO)
 6) Para editar lembrete existente: use "update_reminder" com o "id" correto da lista.
 7) Para concluir lembrete: use "complete_reminder" com o "id" correto.
 8) Para excluir lembrete: use "delete_reminder" com o "id" correto.
-9) Para conversas gerais, duvidas, orientacoes e informacoes: use {"action":"none"}.
-10) Se faltar o VALOR (nao a categoria ou data), pergunte no "reply" e use action none. Se faltar categoria, escolha a mais adequada. Se faltar data, use hoje.
-11) NUNCA registre transacao quando o usuario usa frases descritivas/informativas ('minhas despesas sao', 'meu gasto mensal e', 'tenho de conta').
-12) Se o usuario citar MULTIPLAS acoes na mesma mensagem, adicione MULTIPLOS objetos em "actionObjects", na mesma ordem em que aparecem.
+9) Para enviar uma foto ou arquivo guardado pelo usuario: use "fetch_document". A AI vai fazer uma busca simples pelo nome.
+10) Para conversas gerais, duvidas, orientacoes e informacoes: use {"action":"none"}.
+11) Se faltar o VALOR (nao a categoria ou data), pergunte no "reply" e use action none. Se faltar categoria, escolha a mais adequada. Se faltar data, use hoje.
+12) NUNCA registre transacao quando o usuario usa frases descritivas/informativas ('minhas despesas sao', 'meu gasto mensal e', 'tenho de conta').
+13) Se o usuario citar MULTIPLAS acoes na mesma mensagem, adicione MULTIPLOS objetos em "actionObjects", na mesma ordem em que aparecem.
 
 FORMATOS DE ACTIONOBJECT
 - {"action":"none"}
@@ -353,6 +355,7 @@ FORMATOS DE ACTIONOBJECT
 - {"action":"update_reminder","id":"reminder_id","changes":{"title":"Novo titulo","dueDate":"YYYY-MM-DD","dueTime":"HH:mm|null","status":"pending|paid","amount":150,"reminderKind":"general|payable|receivable","reminderType":"payable|receivable|null"}}
 - {"action":"complete_reminder","id":"reminder_id"}
 - {"action":"delete_reminder","id":"reminder_id"}
+- {"action":"fetch_document","query":"comprovante de luz"}
 - {"action":"update_transaction","id":"transaction_id","changes":{"amount":20}}
 - {"action":"delete_transaction","id":"transaction_id"}
 
@@ -570,6 +573,12 @@ function validateAction(raw) {
         if (!url)
             return { action: 'none' };
         return { action: 'send_media', url };
+    }
+    if (action === 'fetch_document') {
+        const query = typeof obj.query === 'string' ? obj.query.trim() : '';
+        if (!query)
+            return { action: 'none' };
+        return { action: 'fetch_document', query };
     }
     return { action: 'none' };
 }

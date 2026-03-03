@@ -23,6 +23,33 @@ export interface StoredChatMessage {
     createdAt: string;
 }
 
+export interface UserDocumentAsset {
+    id: string;
+    title: string;
+    description: string | null;
+    tags: string[];
+    previewUrl: string;
+    mimeType: string;
+    sizeBytes: number;
+    source: string;
+    createdAt: string;
+    updatedAt: string;
+    lastAccessedAt: string | null;
+}
+
+export interface UserDocumentInput {
+    title: string;
+    description: string;
+    tags: string[];
+    fileDataUrl: string;
+}
+
+export interface UserDocumentUpdateInput {
+    title: string;
+    description: string;
+    tags: string[];
+}
+
 export interface Transaction {
     id: string;
     type: 'income' | 'expense';

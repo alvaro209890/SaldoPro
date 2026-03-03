@@ -390,6 +390,15 @@ export interface CreateUserDocumentInput {
   status?: 'ready' | 'deleted';
 }
 
+export interface UpdateUserDocumentInput {
+  title?: string;
+  description?: string | null;
+  normalizedTitle?: string;
+  normalizedDescription?: string | null;
+  searchTokens?: string[];
+  status?: 'ready' | 'deleted';
+}
+
 export interface CreatePendingWhatsAppDocumentDraftInput {
   id: string;
   storagePath: string;
@@ -2283,6 +2292,68 @@ export async function createUserDocument(uid: string, input: CreateUserDocumentI
   return data.id;
 }
 
+export async function getUserDocument(uid: string, documentId: string): Promise<UserDocument | null> {
+  const { data, error } = await db
+    .from('app_user_documents')
+    .select('id, uid, source, title, description, normalized_title, normalized_description, search_tokens, storage_path, mime_type, size_bytes, status, created_at, updated_at, last_accessed_at')
+    .eq('uid', uid)
+    .eq('id', documentId)
+    .eq('status', 'ready')
+    .maybeSingle<DbUserDocumentRow>();
+  assertNoError(error, 'getUserDocument');
+  return data ? mapUserDocument(data) : null;
+}
+
+export async function updateUserDocument(
+  uid: string,
+  documentId: string,
+  input: UpdateUserDocumentInput
+): Promise<void> {
+  const updates: Record<string, unknown> = {
+    updated_at: new Date().toISOString()
+  };
+
+  if (typeof input.title === 'string') {
+    updates.title = input.title;
+  }
+  if (input.description === null || typeof input.description === 'string') {
+    updates.description = input.description;
+  }
+  if (typeof input.normalizedTitle === 'string') {
+    updates.normalized_title = input.normalizedTitle;
+  }
+  if (input.normalizedDescription === null || typeof input.normalizedDescription === 'string') {
+    updates.normalized_description = input.normalizedDescription;
+  }
+  if (Array.isArray(input.searchTokens)) {
+    updates.search_tokens = input.searchTokens;
+  }
+  if (input.status === 'ready' || input.status === 'deleted') {
+    updates.status = input.status;
+  }
+
+  const { error } = await db
+    .from('app_user_documents')
+    .update(updates)
+    .eq('uid', uid)
+    .eq('id', documentId)
+    .eq('status', 'ready');
+  assertNoError(error, 'updateUserDocument');
+}
+
+export async function markUserDocumentDeleted(uid: string, documentId: string): Promise<void> {
+  const { error } = await db
+    .from('app_user_documents')
+    .update({
+      status: 'deleted',
+      updated_at: new Date().toISOString()
+    })
+    .eq('uid', uid)
+    .eq('id', documentId)
+    .eq('status', 'ready');
+  assertNoError(error, 'markUserDocumentDeleted');
+}
+
 export async function touchUserDocumentAccess(uid: string, documentId: string): Promise<void> {
   const now = new Date().toISOString();
   const { error } = await db
@@ -2306,5 +2377,18 @@ export async function listRecentUserDocuments(uid: string, limitCount: number): 
     .order('created_at', { ascending: false })
     .limit(safeLimit);
   assertNoError(error, 'listRecentUserDocuments');
+  return ((data ?? []) as DbUserDocumentRow[]).map(mapUserDocument);
+}
+
+export async function listUserDocuments(uid: string, limitCount = 200): Promise<UserDocument[]> {
+  const safeLimit = Math.max(1, Math.min(limitCount, 500));
+  const { data, error } = await db
+    .from('app_user_documents')
+    .select('id, uid, source, title, description, normalized_title, normalized_description, search_tokens, storage_path, mime_type, size_bytes, status, created_at, updated_at, last_accessed_at')
+    .eq('uid', uid)
+    .eq('status', 'ready')
+    .order('created_at', { ascending: false })
+    .limit(safeLimit);
+  assertNoError(error, 'listUserDocuments');
   return ((data ?? []) as DbUserDocumentRow[]).map(mapUserDocument);
 }

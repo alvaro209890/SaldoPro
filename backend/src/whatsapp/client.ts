@@ -63,6 +63,7 @@ import {
   detectDocumentSaveIntent,
   isMeaningfulDocumentLabel,
   normalizeDocumentText,
+  parseDocumentLabelInput,
   tokenizeDocumentSearch,
   scoreRecentDocuments,
   type RankedDocumentMatch
@@ -155,10 +156,17 @@ function isUndoMessage(text: string): boolean {
 
 function buildDocumentSavedReply(title: string): string {
   return [
-    `Arquivo salvo como "${title}".`,
+    `Imagem salva com sucesso como "${title}".`,
     '',
-    `Para pedir depois, voce pode enviar: "me manda ${title}".`,
-    `Tambem funciona: "manda de volta ${title}".`
+    `Quando quiser receber de volta, voce pode enviar: "me manda a imagem ${title}".`,
+    `Tambem funciona: "procura ${title}" ou "manda de volta ${title}".`
+  ].join('\n');
+}
+
+function buildDocumentFetchReply(title: string): string {
+  return [
+    `Encontrei a imagem "${title}" e estou te enviando agora.`,
+    'Se quiser outra, me diga uma parte do nome ou da descricao.'
   ].join('\n');
 }
 
@@ -184,7 +192,7 @@ const DOCUMENT_RECENCY_BONUS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const DOCUMENT_UNSUPPORTED_MEDIA_REPLY =
   'Por enquanto so consigo guardar imagens. PDF e outros tipos ainda nao estao disponiveis.';
 const DOCUMENT_PENDING_PROMPT_REPLY =
-  'Recebi a imagem. Qual nome ou descricao voce quer usar para salvar? Exemplo: logo da empresa ou contrato aluguel.';
+  'Recebi a imagem. Me diga o titulo que voce quer usar para salvar. Exemplo: "titulo comprovante de luz". Se quiser, voce tambem pode mandar: "comprovante de luz descricao conta de marco".';
 const DOCUMENT_PENDING_CANCELLED_REPLY = 'Salvamento cancelado.';
 const DOCUMENT_SAVE_ERROR_REPLY =
   'Nao consegui concluir essa operacao com arquivos agora. Tente novamente em instantes.';
@@ -1367,19 +1375,20 @@ export class WhatsAppClient {
 
   private buildDocumentMetadata(labelSource: string): {
     title: string;
-    description: string;
+    description: string | null;
     normalizedTitle: string;
-    normalizedDescription: string;
+    normalizedDescription: string | null;
     searchTokens: string[];
   } {
     const cleaned = labelSource.trim().replace(/\s+/g, ' ');
-    const title = cleaned.slice(0, 80);
-    const description = cleaned.slice(0, 300);
+    const parsed = parseDocumentLabelInput(cleaned);
+    const title = (parsed.title || cleaned).slice(0, 80);
+    const description = (parsed.description || '').slice(0, 300) || null;
     const normalizedTitle = normalizeDocumentText(title);
-    const normalizedDescription = normalizeDocumentText(description);
+    const normalizedDescription = description ? normalizeDocumentText(description) : null;
     const searchTokens = [...new Set([
       ...tokenizeDocumentSearch(title),
-      ...tokenizeDocumentSearch(description)
+      ...tokenizeDocumentSearch(description ?? '')
     ])];
 
     return {
@@ -1762,7 +1771,7 @@ export class WhatsAppClient {
       });
     }
 
-    const reply = `Aqui está: "${selected.title}".`;
+    const reply = buildDocumentFetchReply(selected.title);
     await this.sendWithRetry(remoteJid, reply, 'auto_reply', ownerUid, { image: { url: signedUrl } });
     logger.info('DOC_FETCH_SEND_SUCCESS', {
       uid: ownerUid,

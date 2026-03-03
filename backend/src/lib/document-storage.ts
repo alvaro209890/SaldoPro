@@ -19,6 +19,14 @@ export interface PendingDocumentUpload {
 
 function extensionFromMimeType(mimeType: string): string {
   const normalized = mimeType.toLowerCase();
+  if (normalized === 'application/pdf') return 'pdf';
+  if (
+    normalized === 'application/zip' ||
+    normalized === 'application/x-zip-compressed' ||
+    normalized === 'multipart/x-zip'
+  ) {
+    return 'zip';
+  }
   if (normalized.includes('png')) return 'png';
   if (normalized.includes('webp')) return 'webp';
   if (normalized.includes('gif')) return 'gif';
@@ -28,16 +36,31 @@ function extensionFromMimeType(mimeType: string): string {
   return 'jpg';
 }
 
+function isAllowedDocumentMimeType(mimeType: string): boolean {
+  const normalized = mimeType.toLowerCase();
+  return (
+    normalized.startsWith('image/') ||
+    normalized === 'application/pdf' ||
+    normalized === 'application/zip' ||
+    normalized === 'application/x-zip-compressed' ||
+    normalized === 'multipart/x-zip'
+  );
+}
+
 function parseImageDataUrl(imageDataUrl: string): ParsedImageDataUrl {
-  const match = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(imageDataUrl.trim());
+  const match = /^data:([a-z0-9.+-]+\/[a-z0-9.+-]+);base64,(.+)$/i.exec(imageDataUrl.trim());
   if (!match) {
-    throw new Error('Invalid image data URL.');
+    throw new Error('Invalid file data URL.');
   }
 
   const mimeType = match[1].toLowerCase();
+  if (!isAllowedDocumentMimeType(mimeType)) {
+    throw new Error(`Unsupported file mime type: ${mimeType}`);
+  }
+
   const buffer = Buffer.from(match[2], 'base64');
   if (!buffer || buffer.length === 0) {
-    throw new Error('Image payload is empty.');
+    throw new Error('File payload is empty.');
   }
 
   return { mimeType, buffer };
@@ -136,4 +159,3 @@ export async function createSignedDocumentUrl(
 
   return data.signedUrl;
 }
-

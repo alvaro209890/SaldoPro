@@ -30,6 +30,8 @@ const FETCH_VERBS = [
   'onde esta'
 ];
 const DOCUMENT_NOUNS = ['imagem', 'foto', 'arquivo', 'documento', 'doc'];
+const LABEL_HINT_WORDS = new Set(['titulo', 'nome']);
+const DESCRIPTION_HINT_WORDS = new Set(['descricao', 'desc', 'observacao', 'obs']);
 const STOPWORDS = new Set([
   'a',
   'as',
@@ -63,6 +65,10 @@ const GENERIC_LABEL_WORDS = new Set([
   'doc',
   'foto',
   'imagem',
+  'titulo',
+  'nome',
+  'descricao',
+  'desc',
   'isso',
   'essa',
   'esse',
@@ -85,9 +91,47 @@ const LEADING_LABEL_FILLER_WORDS = new Set([
   'doc',
   'documento',
   'arquivo',
+  'titulo',
+  'nome',
+  'descricao',
+  'desc',
   'uma',
   'um',
   'como'
+]);
+const LEADING_LABEL_CONNECTOR_WORDS = new Set([
+  'com',
+  'como',
+  'e',
+  'eh',
+  'para',
+  'pra',
+  'por',
+  'ser',
+  'seria',
+  'fica',
+  'ficar',
+  'vai'
+]);
+const POST_MARKER_SKIP_WORDS = new Set([
+  'a',
+  'as',
+  'da',
+  'das',
+  'de',
+  'do',
+  'dos',
+  'e',
+  'eh',
+  'esta',
+  'este',
+  'o',
+  'os',
+  'ser',
+  'seria',
+  'um',
+  'uma',
+  'vai'
 ]);
 
 function collapseWhitespace(value: string): string {
@@ -107,6 +151,108 @@ export function normalizeDocumentText(text: string): string {
 function removeKeywordOnce(value: string, keyword: string): string {
   const pattern = new RegExp(`\\b${keyword}\\b`, 'i');
   return collapseWhitespace(value.replace(pattern, ' '));
+}
+
+function trimWrappedQuotes(value: string): string {
+  return value
+    .replace(/^[`"']+/, '')
+    .replace(/[`"']+$/, '')
+    .trim();
+}
+
+function cleanExtractedSegment(value: string): string {
+  return trimWrappedQuotes(
+    collapseWhitespace(value)
+      .replace(/^[:\-.,;]+/, '')
+      .replace(/[:\-.,;]+$/, '')
+  );
+}
+
+function findFirstTokenIndex(
+  normalizedTokens: string[],
+  matcher: (token: string) => boolean,
+  startIndex = 0
+): number {
+  for (let index = startIndex; index < normalizedTokens.length; index += 1) {
+    if (matcher(normalizedTokens[index])) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function skipIgnorableLabelTokens(
+  normalizedTokens: string[],
+  startIndex: number,
+  extraWords?: Set<string>
+): number {
+  let currentIndex = startIndex;
+
+  while (currentIndex < normalizedTokens.length) {
+    const token = normalizedTokens[currentIndex];
+    if (
+      !token ||
+      LEADING_LABEL_FILLER_WORDS.has(token) ||
+      LEADING_LABEL_CONNECTOR_WORDS.has(token) ||
+      (extraWords?.has(token) ?? false)
+    ) {
+      currentIndex += 1;
+      continue;
+    }
+    break;
+  }
+
+  return currentIndex;
+}
+
+function parseDocumentLabelTokens(rawTokens: string[]): { title: string; description: string } {
+  if (rawTokens.length === 0) {
+    return { title: '', description: '' };
+  }
+
+  const normalizedTokens = rawTokens.map((token) => normalizeDocumentText(token));
+  const explicitTitleIndex = findFirstTokenIndex(normalizedTokens, (token) => LABEL_HINT_WORDS.has(token));
+  const titleStartIndex = explicitTitleIndex === -1
+    ? skipIgnorableLabelTokens(normalizedTokens, 0)
+    : skipIgnorableLabelTokens(normalizedTokens, explicitTitleIndex + 1, POST_MARKER_SKIP_WORDS);
+
+  const explicitDescriptionIndex = findFirstTokenIndex(
+    normalizedTokens,
+    (token) => DESCRIPTION_HINT_WORDS.has(token),
+    titleStartIndex
+  );
+
+  const rawTitle = rawTokens.slice(
+    titleStartIndex,
+    explicitDescriptionIndex === -1 ? rawTokens.length : explicitDescriptionIndex
+  ).join(' ');
+  const rawDescription = explicitDescriptionIndex === -1
+    ? ''
+    : rawTokens.slice(
+      skipIgnorableLabelTokens(normalizedTokens, explicitDescriptionIndex + 1, POST_MARKER_SKIP_WORDS)
+    ).join(' ');
+
+  const title = cleanExtractedSegment(rawTitle);
+  const description = cleanExtractedSegment(rawDescription);
+
+  if (!title && description) {
+    return { title: description, description: '' };
+  }
+
+  return { title, description };
+}
+
+function extractRelevantLabelText(rawTokens: string[]): string {
+  if (rawTokens.length === 0) return '';
+
+  const normalizedTokens = rawTokens.map((token) => normalizeDocumentText(token));
+  const explicitTitleIndex = findFirstTokenIndex(normalizedTokens, (token) => LABEL_HINT_WORDS.has(token));
+  const startIndex = explicitTitleIndex === -1
+    ? skipIgnorableLabelTokens(normalizedTokens, 0)
+    : skipIgnorableLabelTokens(normalizedTokens, explicitTitleIndex + 1, POST_MARKER_SKIP_WORDS);
+
+  return cleanExtractedSegment(rawTokens.slice(startIndex).join(' '));
 }
 
 function isSingleEditOrAdjacentSwap(a: string, b: string): boolean {
@@ -207,18 +353,9 @@ function findFetchVerbMatch(normalizedTokens: string[]): { phrase: string; start
   return null;
 }
 
-function stripLeadingLabelFillers(rawTokens: string[]): string {
-  let startIndex = 0;
-  while (startIndex < rawTokens.length) {
-    const normalizedToken = normalizeDocumentText(rawTokens[startIndex]);
-    if (!normalizedToken || LEADING_LABEL_FILLER_WORDS.has(normalizedToken)) {
-      startIndex += 1;
-      continue;
-    }
-    break;
-  }
-
-  return collapseWhitespace(rawTokens.slice(startIndex).join(' '));
+export function parseDocumentLabelInput(text: string): { title: string; description: string } {
+  const rawTokens = collapseWhitespace(text).split(' ').filter(Boolean);
+  return parseDocumentLabelTokens(rawTokens);
 }
 
 export function detectDocumentSaveIntent(text: string): { matched: boolean; labelCandidate: string } {
@@ -237,7 +374,7 @@ export function detectDocumentSaveIntent(text: string): { matched: boolean; labe
 
   return {
     matched: true,
-    labelCandidate: stripLeadingLabelFillers(rawTokens.slice(matchedIndex + 1))
+    labelCandidate: extractRelevantLabelText(rawTokens.slice(matchedIndex + 1))
   };
 }
 
@@ -288,12 +425,15 @@ export function tokenizeDocumentSearch(text: string): string[] {
     .filter((token) => token.length >= 2)
     .filter((token) => !STOPWORDS.has(token))
     .filter((token) => !SAVE_KEYWORDS.includes(token))
+    .filter((token) => !LABEL_HINT_WORDS.has(token))
+    .filter((token) => !DESCRIPTION_HINT_WORDS.has(token))
     .filter((token) => !FETCH_VERBS.includes(token))
     .filter((token) => !DOCUMENT_NOUNS.includes(token));
 }
 
 export function isMeaningfulDocumentLabel(text: string): boolean {
-  const rawNormalized = normalizeDocumentText(text);
+  const { title } = parseDocumentLabelInput(text);
+  const rawNormalized = normalizeDocumentText(title);
   if (!rawNormalized) return false;
 
   const rawTokens = rawNormalized.split(' ').filter(Boolean);
@@ -302,7 +442,7 @@ export function isMeaningfulDocumentLabel(text: string): boolean {
     return false;
   }
 
-  return tokenizeDocumentSearch(text).length > 0;
+  return tokenizeDocumentSearch(title).length > 0;
 }
 
 export interface RankedDocumentMatch {

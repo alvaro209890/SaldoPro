@@ -14,6 +14,7 @@ import { Settings } from '@/pages/Settings';
 import { AIAssistant } from '@/pages/AIAssistant';
 import { Reminders } from '@/pages/Reminders';
 import { RecurringTransactions } from '@/pages/RecurringTransactions';
+import { Documents } from '@/pages/Documents';
 
 export function App() {
     return (
@@ -34,6 +35,7 @@ export function App() {
                     <Route path="ai" element={<AIAssistant />} />
                     <Route path="reminders" element={<Reminders />} />
                     <Route path="recurring" element={<RecurringTransactions />} />
+                    <Route path="documents" element={<Documents />} />
                 </Route>
             </Route>
 

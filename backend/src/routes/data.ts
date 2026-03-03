@@ -1,4 +1,5 @@
-import { Router, type Request, type Response } from 'express';
+import { randomUUID } from 'node:crypto';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import { requireFirebaseAuth } from '../middleware/firebase-auth';
 import {
   addRecurringTransaction,
@@ -7,29 +8,66 @@ import {
   addUserReminder,
   addUserTransaction,
   bootstrapUserData,
+  createUserDocument,
   createUserChatSession,
   deleteRecurringTransaction,
   deleteUserCategory,
   deleteUserChatSession,
   deleteUserReminder,
   deleteUserTransaction,
+  getUserDocument,
   getRecurringTransactions,
   getTransactionsByMonth,
   getUserCategories,
   getUserChatMessages,
   getUserChatSessions,
+  listUserDocuments,
+  markUserDocumentDeleted,
+  touchUserDocumentAccess,
+  type UserDocument,
   getUserReminders,
   getUserSettings,
   updateRecurringTransactionBackend,
   updateUserCategory,
   updateUserChatSessionTitle,
+  updateUserDocument,
   updateUserReminder,
   updateUserSettings,
   updateUserTransaction
 } from '../lib/firestore';
+import {
+  createSignedDocumentUrl,
+  deleteStoredDocument,
+  finalizePendingDocumentMove,
+  uploadPendingDocument
+} from '../lib/document-storage';
 import { logger } from '../lib/logger';
+import {
+  normalizeDocumentText,
+  tokenizeDocumentSearch
+} from '../whatsapp/document-intents';
 import { normalizePhoneNumber } from '../whatsapp/events';
 import type { SignupWelcomeDispatcher } from '../whatsapp/signup-welcome-dispatcher';
+
+const USER_DOCUMENT_SIGNED_URL_TTL_SECONDS = 60 * 60;
+const USER_DOCUMENT_DOWNLOAD_TTL_SECONDS = 10 * 60;
+const MAX_DOCUMENT_TITLE_LENGTH = 80;
+const MAX_DOCUMENT_DESCRIPTION_LENGTH = 300;
+const MAX_DOCUMENT_TAGS = 12;
+
+interface ApiUserDocument {
+  id: string;
+  title: string;
+  description: string | null;
+  tags: string[];
+  previewUrl: string;
+  mimeType: string;
+  sizeBytes: number;
+  source: string;
+  createdAt: string;
+  updatedAt: string;
+  lastAccessedAt: string | null;
+}
 
 function getUid(req: Request): string {
   return (req as Request & { uid: string }).uid;
@@ -37,6 +75,127 @@ function getUid(req: Request): string {
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function collapseWhitespace(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function parseDocumentTags(value: unknown): string[] {
+  const source = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(',')
+      : [];
+
+  const unique = new Set<string>();
+  for (const item of source) {
+    if (typeof item !== 'string') continue;
+
+    const normalized = normalizeDocumentText(item);
+    if (!normalized) continue;
+
+    for (const token of normalized.split(' ')) {
+      if (!token) continue;
+      unique.add(token);
+      if (unique.size >= MAX_DOCUMENT_TAGS) {
+        return [...unique];
+      }
+    }
+  }
+
+  return [...unique];
+}
+
+function buildDocumentSearchTokens(title: string, description: string | null, tags: string[]): string[] {
+  return [...new Set([
+    ...tokenizeDocumentSearch(title),
+    ...tokenizeDocumentSearch(description ?? ''),
+    ...tags
+  ])];
+}
+
+function getManualDocumentTags(document: UserDocument): string[] {
+  const automaticTokens = new Set<string>([
+    ...tokenizeDocumentSearch(document.title),
+    ...tokenizeDocumentSearch(document.description ?? '')
+  ]);
+
+  return document.searchTokens.filter((token) => !automaticTokens.has(token));
+}
+
+function getDocumentExtension(mimeType: string): string {
+  const normalized = mimeType.toLowerCase();
+  if (normalized === 'application/pdf') return 'pdf';
+  if (
+    normalized === 'application/zip' ||
+    normalized === 'application/x-zip-compressed' ||
+    normalized === 'multipart/x-zip'
+  ) {
+    return 'zip';
+  }
+  if (normalized.includes('png')) return 'png';
+  if (normalized.includes('webp')) return 'webp';
+  if (normalized.includes('gif')) return 'gif';
+  if (normalized.includes('bmp')) return 'bmp';
+  if (normalized.includes('heic')) return 'heic';
+  if (normalized.includes('heif')) return 'heif';
+  return 'jpg';
+}
+
+function buildDocumentDownloadName(document: UserDocument): string {
+  const baseName = document.title
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60)
+    .toLowerCase();
+
+  return `${baseName || `arquivo-${document.id.slice(0, 8)}`}.${getDocumentExtension(document.mimeType)}`;
+}
+
+function buildDocumentPayload(document: UserDocument, previewUrl: string): ApiUserDocument {
+  return {
+    id: document.id,
+    title: document.title,
+    description: document.description ?? null,
+    tags: getManualDocumentTags(document),
+    previewUrl,
+    mimeType: document.mimeType,
+    sizeBytes: document.sizeBytes,
+    source: document.source,
+    createdAt: document.createdAt,
+    updatedAt: document.updatedAt,
+    lastAccessedAt: document.lastAccessedAt ?? null
+  };
+}
+
+function getDocumentMetadata(body: Record<string, unknown>): {
+  title: string;
+  description: string | null;
+  tags: string[];
+  normalizedTitle: string;
+  normalizedDescription: string | null;
+  searchTokens: string[];
+} {
+  const title = collapseWhitespace(asString(body.title)).slice(0, MAX_DOCUMENT_TITLE_LENGTH);
+  const rawDescription = collapseWhitespace(asString(body.description)).slice(0, MAX_DOCUMENT_DESCRIPTION_LENGTH);
+  const description = rawDescription || null;
+  const tags = parseDocumentTags(body.tags);
+
+  if (!title) {
+    throw new Error('`title` e obrigatorio.');
+  }
+
+  return {
+    title,
+    description,
+    tags,
+    normalizedTitle: normalizeDocumentText(title),
+    normalizedDescription: description ? normalizeDocumentText(description) : null,
+    searchTokens: buildDocumentSearchTokens(title, description, tags)
+  };
 }
 
 export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatcher): Router {
@@ -286,6 +445,153 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
       ...(imageUrl ? { imageUrl } : {})
     });
     res.json({ id });
+  });
+
+  router.get('/documents', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const uid = getUid(req);
+      const documents = await listUserDocuments(uid);
+      const items = await Promise.all(
+        documents.map(async (document) => {
+          const previewUrl = await createSignedDocumentUrl(document.storagePath, USER_DOCUMENT_SIGNED_URL_TTL_SECONDS);
+          return buildDocumentPayload(document, previewUrl);
+        })
+      );
+
+      res.json(items);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/documents', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const uid = getUid(req);
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const fileDataUrl = asString(body.fileDataUrl) || asString(body.imageDataUrl);
+
+      if (!fileDataUrl.startsWith('data:')) {
+        res.status(400).json({ error: '`fileDataUrl` deve ser um arquivo em base64.' });
+        return;
+      }
+
+      let metadata;
+      try {
+        metadata = getDocumentMetadata(body);
+      } catch (error) {
+        res.status(400).json({ error: error instanceof Error ? error.message : 'Metadados invalidos.' });
+        return;
+      }
+
+      const documentId = randomUUID();
+      const upload = await uploadPendingDocument(uid, fileDataUrl);
+      let finalStoragePath = upload.storagePath;
+
+      try {
+        finalStoragePath = await finalizePendingDocumentMove(uid, upload.storagePath, documentId, upload.mimeType);
+        await createUserDocument(uid, {
+          id: documentId,
+          source: 'manual_upload',
+          title: metadata.title,
+          description: metadata.description,
+          normalizedTitle: metadata.normalizedTitle,
+          normalizedDescription: metadata.normalizedDescription,
+          searchTokens: metadata.searchTokens,
+          storagePath: finalStoragePath,
+          mimeType: upload.mimeType,
+          sizeBytes: upload.sizeBytes
+        });
+        res.status(201).json({ ok: true, id: documentId });
+      } catch (error) {
+        try {
+          await deleteStoredDocument(finalStoragePath);
+        } catch (cleanupError) {
+          logger.warn('Failed to cleanup uploaded document after API error', {
+            uid,
+            storagePath: finalStoragePath,
+            error: cleanupError instanceof Error ? cleanupError.message : 'unknown'
+          });
+        }
+
+        next(error);
+      }
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch('/documents/:id', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const uid = getUid(req);
+      const current = await getUserDocument(uid, req.params.id);
+
+      if (!current) {
+        res.status(404).json({ error: 'Imagem nao encontrada.' });
+        return;
+      }
+
+      let metadata;
+      try {
+        metadata = getDocumentMetadata((req.body ?? {}) as Record<string, unknown>);
+      } catch (error) {
+        res.status(400).json({ error: error instanceof Error ? error.message : 'Metadados invalidos.' });
+        return;
+      }
+
+      await updateUserDocument(uid, current.id, {
+        title: metadata.title,
+        description: metadata.description,
+        normalizedTitle: metadata.normalizedTitle,
+        normalizedDescription: metadata.normalizedDescription,
+        searchTokens: metadata.searchTokens
+      });
+
+      res.json({ ok: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/documents/:id/download-url', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const uid = getUid(req);
+      const document = await getUserDocument(uid, req.params.id);
+
+      if (!document) {
+        res.status(404).json({ error: 'Imagem nao encontrada.' });
+        return;
+      }
+
+      const [url] = await Promise.all([
+        createSignedDocumentUrl(document.storagePath, USER_DOCUMENT_DOWNLOAD_TTL_SECONDS),
+        touchUserDocumentAccess(uid, document.id)
+      ]);
+
+      res.json({
+        url,
+        fileName: buildDocumentDownloadName(document)
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete('/documents/:id', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const uid = getUid(req);
+      const document = await getUserDocument(uid, req.params.id);
+
+      if (!document) {
+        res.status(404).json({ error: 'Imagem nao encontrada.' });
+        return;
+      }
+
+      await deleteStoredDocument(document.storagePath);
+      await markUserDocumentDeleted(uid, document.id);
+      res.json({ ok: true });
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.get('/reminders', async (req: Request, res: Response) => {

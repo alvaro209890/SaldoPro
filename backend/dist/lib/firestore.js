@@ -58,8 +58,12 @@ exports.getActivePendingWhatsAppDocumentDraft = getActivePendingWhatsAppDocument
 exports.deletePendingWhatsAppDocumentDraft = deletePendingWhatsAppDocumentDraft;
 exports.deleteExpiredPendingWhatsAppDocumentDrafts = deleteExpiredPendingWhatsAppDocumentDrafts;
 exports.createUserDocument = createUserDocument;
+exports.getUserDocument = getUserDocument;
+exports.updateUserDocument = updateUserDocument;
+exports.markUserDocumentDeleted = markUserDocumentDeleted;
 exports.touchUserDocumentAccess = touchUserDocumentAccess;
 exports.listRecentUserDocuments = listRecentUserDocuments;
+exports.listUserDocuments = listUserDocuments;
 const supabase_1 = require("./supabase");
 const logger_1 = require("./logger");
 const events_1 = require("../whatsapp/events");
@@ -1770,6 +1774,59 @@ async function createUserDocument(uid, input) {
         throw new Error('createUserDocument: response sem id');
     return data.id;
 }
+async function getUserDocument(uid, documentId) {
+    const { data, error } = await supabase_1.supabaseAdmin
+        .from('app_user_documents')
+        .select('id, uid, source, title, description, normalized_title, normalized_description, search_tokens, storage_path, mime_type, size_bytes, status, created_at, updated_at, last_accessed_at')
+        .eq('uid', uid)
+        .eq('id', documentId)
+        .eq('status', 'ready')
+        .maybeSingle();
+    assertNoError(error, 'getUserDocument');
+    return data ? mapUserDocument(data) : null;
+}
+async function updateUserDocument(uid, documentId, input) {
+    const updates = {
+        updated_at: new Date().toISOString()
+    };
+    if (typeof input.title === 'string') {
+        updates.title = input.title;
+    }
+    if (input.description === null || typeof input.description === 'string') {
+        updates.description = input.description;
+    }
+    if (typeof input.normalizedTitle === 'string') {
+        updates.normalized_title = input.normalizedTitle;
+    }
+    if (input.normalizedDescription === null || typeof input.normalizedDescription === 'string') {
+        updates.normalized_description = input.normalizedDescription;
+    }
+    if (Array.isArray(input.searchTokens)) {
+        updates.search_tokens = input.searchTokens;
+    }
+    if (input.status === 'ready' || input.status === 'deleted') {
+        updates.status = input.status;
+    }
+    const { error } = await supabase_1.supabaseAdmin
+        .from('app_user_documents')
+        .update(updates)
+        .eq('uid', uid)
+        .eq('id', documentId)
+        .eq('status', 'ready');
+    assertNoError(error, 'updateUserDocument');
+}
+async function markUserDocumentDeleted(uid, documentId) {
+    const { error } = await supabase_1.supabaseAdmin
+        .from('app_user_documents')
+        .update({
+        status: 'deleted',
+        updated_at: new Date().toISOString()
+    })
+        .eq('uid', uid)
+        .eq('id', documentId)
+        .eq('status', 'ready');
+    assertNoError(error, 'markUserDocumentDeleted');
+}
 async function touchUserDocumentAccess(uid, documentId) {
     const now = new Date().toISOString();
     const { error } = await supabase_1.supabaseAdmin
@@ -1792,5 +1849,17 @@ async function listRecentUserDocuments(uid, limitCount) {
         .order('created_at', { ascending: false })
         .limit(safeLimit);
     assertNoError(error, 'listRecentUserDocuments');
+    return (data ?? []).map(mapUserDocument);
+}
+async function listUserDocuments(uid, limitCount = 200) {
+    const safeLimit = Math.max(1, Math.min(limitCount, 500));
+    const { data, error } = await supabase_1.supabaseAdmin
+        .from('app_user_documents')
+        .select('id, uid, source, title, description, normalized_title, normalized_description, search_tokens, storage_path, mime_type, size_bytes, status, created_at, updated_at, last_accessed_at')
+        .eq('uid', uid)
+        .eq('status', 'ready')
+        .order('created_at', { ascending: false })
+        .limit(safeLimit);
+    assertNoError(error, 'listUserDocuments');
     return (data ?? []).map(mapUserDocument);
 }

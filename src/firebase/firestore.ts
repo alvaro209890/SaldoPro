@@ -1,5 +1,16 @@
 import { auth } from './config';
-import type { Transaction, Category, UserSettings, StoredChatMessage, ChatSession, Reminder, RecurringTransaction } from '@/types';
+import type {
+    Transaction,
+    Category,
+    UserSettings,
+    StoredChatMessage,
+    ChatSession,
+    Reminder,
+    RecurringTransaction,
+    UserDocumentAsset,
+    UserDocumentInput,
+    UserDocumentUpdateInput,
+} from '@/types';
 import { BACKEND_URL } from '@/config/backend';
 
 export type Unsubscribe = () => void;
@@ -266,6 +277,35 @@ export async function addChatMessage(
     });
     notifyRefresh();
     return result;
+}
+
+export async function getUserDocuments(_uid: string) {
+    return apiRequest<UserDocumentAsset[]>('/api/data/documents');
+}
+
+export async function createUserDocumentAsset(_uid: string, data: UserDocumentInput) {
+    const result = await apiRequest<{ id: string }>('/api/data/documents', {
+        method: 'POST',
+        body: JSON.stringify(data)
+    });
+    return result;
+}
+
+export async function updateUserDocumentAsset(_uid: string, documentId: string, data: UserDocumentUpdateInput) {
+    await apiRequest<{ ok: true }>(`/api/data/documents/${documentId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data)
+    });
+}
+
+export async function deleteUserDocumentAsset(_uid: string, documentId: string) {
+    await apiRequest<{ ok: true }>(`/api/data/documents/${documentId}`, {
+        method: 'DELETE'
+    });
+}
+
+export async function getUserDocumentDownloadUrl(_uid: string, documentId: string) {
+    return apiRequest<{ url: string; fileName: string }>(`/api/data/documents/${documentId}/download-url`);
 }
 
 export function onRemindersSnapshot(
