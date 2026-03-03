@@ -6,6 +6,7 @@ import {
   CreditCard,
   Crown,
   LockKeyhole,
+  MessageCircle,
   RefreshCw,
   ShieldCheck,
   Star,
@@ -21,6 +22,7 @@ import {
   PREMIUM_BENEFITS,
   PREMIUM_PLAN_FEATURES,
   PREMIUM_UNLOCK_ITEMS,
+  WHATSAPP_FEATURES,
 } from '@/components/plans/constants';
 import {
   formatBillingStatus,
@@ -367,21 +369,77 @@ export function Plans() {
               <span className="text-slate-500">Renovação: </span>
               <span className="text-white font-medium">{nextBillingDateLabel}</span>
             </div>
-            <div className="rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2">
-              <span className="text-slate-500">WhatsApp grátis: </span>
-              <span className="text-white font-medium">
-                {billingStatus?.freeWhatsappQuota.remaining ?? 0}/{billingStatus?.freeWhatsappQuota.limit ?? 1}
-              </span>
-            </div>
           </div>
+        </div>
+
+        {/* WhatsApp Quota Bar */}
+        <div className="mt-4 rounded-xl border border-emerald-400/15 bg-emerald-500/[0.06] p-4">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <MessageCircle className="h-4 w-4 text-emerald-300" />
+              <span className="text-sm font-semibold text-white">WhatsApp IA</span>
+            </div>
+            <span className="text-sm font-bold text-emerald-300">
+              {billingStatus?.freeWhatsappQuota.remaining ?? 0} / {billingStatus?.freeWhatsappQuota.limit ?? 1} msgs restantes
+            </span>
+          </div>
+          <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all ${hasPremium ? 'bg-emerald-400' : (billingStatus?.freeWhatsappQuota.remaining ?? 0) <= 1 ? 'bg-rose-400' : 'bg-amber-400'}`}
+              style={{ width: `${Math.min(100, ((billingStatus?.freeWhatsappQuota.remaining ?? 0) / (billingStatus?.freeWhatsappQuota.limit ?? 1)) * 100)}%` }}
+            />
+          </div>
+          <p className="mt-2 text-xs text-slate-400">
+            {hasPremium
+              ? '✅ Premium ativo — uso ilimitado no WhatsApp.'
+              : (billingStatus?.freeWhatsappQuota.remaining ?? 0) === 0
+                ? '⚠️ Limite atingido! Ative o premium para continuar usando a IA no WhatsApp.'
+                : 'Sem premium, você tem poucas mensagens por dia. Com premium, o limite desaparece.'}
+          </p>
         </div>
 
         {!hasPremium && (
           <p className="mt-3 text-sm text-slate-400 leading-relaxed max-w-2xl">
-            Destrave a IA sem limite no WhatsApp, metas inteligentes, armazenamento de arquivos e todo o fluxo premium.
+            Com o premium, a IA no WhatsApp fica ilimitada. Registre gastos, consulte saldo, peça documentos e acompanhe metas — tudo por mensagem.
           </p>
         )}
       </section>
+
+      {/* ═══════════════════════════════════ */}
+      {/* ── WHATSAPP HIGHLIGHT ── */}
+      {/* ═══════════════════════════════════ */}
+      {!showCheckout && !hasPremium && (
+        <section className="rounded-2xl border border-emerald-400/20 bg-gradient-to-br from-emerald-950/40 to-slate-950/90 p-5 sm:p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/20 border border-emerald-400/25">
+              <MessageCircle className="h-5 w-5 text-emerald-300" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-white">WhatsApp + IA Financeira</h2>
+              <p className="text-xs text-emerald-200/70">O recurso mais usado pelos assinantes premium</p>
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {WHATSAPP_FEATURES.map((f) => {
+              const Icon = f.icon;
+              return (
+                <div key={f.title} className="rounded-xl border border-emerald-400/10 bg-white/[0.03] p-3.5 hover:bg-white/[0.05] transition">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 border border-emerald-400/15">
+                      <Icon className="h-4 w-4 text-emerald-300" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-white">{f.title}</p>
+                      <p className="mt-0.5 text-xs text-slate-400 leading-relaxed">{f.description}</p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {/* ═══════════════════════════════════ */}
       {/* ── BENEFITS GRID ── */}
