@@ -40,6 +40,7 @@ export function useGoals() {
                 title: data.title,
                 description: data.description || null,
                 targetAmount: data.targetAmount,
+                currentAmount: data.currentAmount ?? 0,
                 deadline: data.deadline || null,
                 priority: data.priority,
             });

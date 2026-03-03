@@ -13,7 +13,7 @@ const supabase_1 = require("./supabase");
 const DOCUMENT_BUCKET_NAME = 'user-documents';
 const SIGNED_URL_TTL_SECONDS = 5 * 60;
 exports.MAX_STORED_DOCUMENT_BYTES = 10 * 1024 * 1024;
-exports.MAX_SOURCE_PDF_BYTES_FOR_COMPRESSION = 25 * 1024 * 1024;
+exports.MAX_SOURCE_PDF_BYTES_FOR_COMPRESSION = 40 * 1024 * 1024;
 class DocumentUploadUserError extends Error {
     userMessage;
     constructor(message, userMessage) {

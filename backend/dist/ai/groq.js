@@ -83,14 +83,42 @@ function buildGoalsSummary(goals, currency) {
     if (focusGoals.length > 0) {
         lines.push('', 'Resumo de andamento:');
         for (const goal of focusGoals) {
+            const remainingLabel = typeof goal.targetAmount === 'number' && goal.targetAmount > 0
+                ? (() => {
+                    const remaining = goal.targetAmount - goal.currentAmount;
+                    if (remaining > 0)
+                        return ` | falta: ${formatCurrency(remaining, currency)}`;
+                    if (remaining < 0)
+                        return ` | acima da meta: ${formatCurrency(Math.abs(remaining), currency)}`;
+                    return ' | meta atingida';
+                })()
+                : '';
             const progressLabel = typeof goal.targetAmount === 'number' && goal.targetAmount > 0
                 ? `${formatCurrency(goal.currentAmount, currency)} de ${formatCurrency(goal.targetAmount, currency)} (${Math.min(100, (goal.currentAmount / goal.targetAmount) * 100).toFixed(0)}%)`
                 : `${formatCurrency(goal.currentAmount, currency)} acumulado`;
             const deadlineLabel = goal.deadline ? `, prazo ${goal.deadline}` : '';
-            lines.push(`- "${goal.title}" | status: ${goal.status} | prioridade: ${goal.priority} | progresso: ${progressLabel}${deadlineLabel}`);
+            lines.push(`- "${goal.title}" | status: ${goal.status} | prioridade: ${goal.priority} | progresso: ${progressLabel}${remainingLabel}${deadlineLabel}`);
         }
     }
     return lines.join('\n');
+}
+function buildGoalsActionReference(goals, currency) {
+    if (goals.length === 0) {
+        return '(nenhuma meta cadastrada)';
+    }
+    return goals
+        .slice(0, PROMPT_TX_LIMIT)
+        .map((goal) => {
+        const progressLabel = typeof goal.targetAmount === 'number' && goal.targetAmount > 0
+            ? `${formatCurrency(goal.currentAmount, currency)} de ${formatCurrency(goal.targetAmount, currency)}`
+            : `${formatCurrency(goal.currentAmount, currency)} acumulado`;
+        const remainingLabel = typeof goal.targetAmount === 'number' && goal.targetAmount > 0
+            ? `, faltam ${formatCurrency(Math.max(0, goal.targetAmount - goal.currentAmount), currency)}`
+            : '';
+        const deadlineLabel = goal.deadline ? `, prazo ${goal.deadline}` : '';
+        return `- ID: "${goal.id}", Titulo: "${goal.title}", Status: ${goal.status}, Prioridade: ${goal.priority}, Progresso: ${progressLabel}${remainingLabel}${deadlineLabel}`;
+    })
+        .join('\n');
 }
 /** Max transactions to embed in the system prompt (keeps token usage reasonable). */
 const PROMPT_TX_LIMIT = 15;
@@ -128,7 +156,7 @@ function isQueryOnlyIntent(messages, context) {
     if (!text)
         return false;
     // Action verbs → needs full prompt
-    if (/\b(gastei|paguei|comprei|recebi|ganhei|registr|lanca|adiciona|coloca|bota|paga|gasta|receb|todo mes|toda semana|mensal|semanal|anual|edita|altera|muda|exclui|delet|apaga|remove|lembrete|lembrar|lembra|lembre|vencimento)\b/.test(text)) {
+    if (/\b(gastei|paguei|comprei|recebi|ganhei|registr|lanca|adiciona|coloca|bota|paga|gasta|receb|todo mes|toda semana|mensal|semanal|anual|edita|altera|muda|exclui|delet|apaga|remove|lembrete|lembrar|lembra|lembre|vencimento|conclu|cumpr|atingi|atingir|reativa|reativar|cancela|cancelar)\b/.test(text)) {
         return false;
     }
     // Explicit query patterns → compact prompt
@@ -179,7 +207,8 @@ Responda a pergunta ou duvida do usuario com base no contexto financeiro abaixo.
 Seja natural, objetivo e util. Nao inclua IDs tecnicos.
 Se o usuario pedir um resumo ou relatorio de seus gastos/ganhos, use os totais por categoria listados no contexto abaixo para fornecer uma quebra detalhada e precisa.
 Se o usuario perguntar sobre metas, objetivos, andamento, progresso, prioridades ou quanto falta para atingir algo, use as metas reais abaixo.
-Com base nelas, voce pode explicar andamento, mostrar quanto ja foi acumulado, dizer quanto falta para bater a meta, sugerir proximos passos praticos e destacar prioridade e prazo.
+Com base nelas, voce pode explicar andamento, mostrar quanto ja foi acumulado, dizer quanto falta para bater a meta, destacar prioridade e prazo, apontar urgencia e sugerir proximos passos praticos.
+Quando responder sobre metas, seja detalhado: cite status, valor atual, valor alvo, percentual, quanto falta e a recomendacao mais util para o momento.
 Se nao houver metas, diga isso claramente e sugira criar metas no dashboard.
 IMPORTANTE: Se o usuario perguntar se voce pode ver/ler imagens, fotos, recibos ou audios, diga que SIM! Voce tem recursos visuais e de audio integrados no WhatsApp.
 Se o usuario perguntar que horas sao, use EXATAMENTE a hora atual fornecida abaixo no contexto. Nao invente horario e nunca assuma 00:00 so porque recebeu uma data.
@@ -243,6 +272,7 @@ ${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.bu
         // Full context: categories with IDs + recent transactions for edit/delete operations
         const financialSummary = buildFinancialSummary(recentTransactions, settings, categories);
         const goalsSummary = buildGoalsSummary(userGoals, settings.currency);
+        const goalsReference = buildGoalsActionReference(userGoals, settings.currency);
         const categoriesList = categories
             .map((c) => `- ID: "${c.id}", Nome: "${c.name}", Tipo: ${c.type}`)
             .join('\n');
@@ -271,6 +301,9 @@ ${financialSummary}
 
 Metas do usuario (referencia real para dicas, progresso e orientacoes):
 ${goalsSummary}
+
+Metas detalhadas para acoes (use IDs internamente para editar, concluir, cancelar ou excluir; nunca exiba IDs ao usuario):
+${goalsReference}
 
 Categorias disponiveis:
 ${categoriesList || '(nenhuma categoria cadastrada)'}
@@ -308,6 +341,7 @@ ESTILO DE RESPOSTA
 - Evite repetir a mesma abertura entre mensagens consecutivas.
 - Pode escrever respostas mais completas no WhatsApp quando isso ajudar o usuario.
 - Em duvidas, orientacoes e analises, prefira 4 a 12 linhas com estrutura clara.
+- Em respostas sobre metas, seja mais detalhado: destaque status, progresso, valor atual, valor alvo, quanto falta, prazo, urgencia e a melhor proxima acao.
 - Nunca exiba IDs tecnicos para o usuario.
 - REGRA DE CAPACIDADE EXPLICITA: Se o usuario te perguntar se voce pode ver imagens, ler fotos/recibos ou entender audios, responda CONFIRMANDO QUE SIM. Voce e totalmente capaz de processar imagens (visao computacional) e audios pelo WhatsApp.
 - REGRA DE TEMPO: se o usuario perguntar "que horas sao", "qual a hora" ou pedir data/hora atual, use a data e hora atuais de Brasilia fornecidas no contexto abaixo. Nao invente horario.
@@ -355,6 +389,14 @@ COMPREENSAO DE LINGUAGEM NATURAL
   - Para marcar como concluido: use "complete_reminder" com "id".
   - Para excluir lembrete: use "delete_reminder" com "id".
   - Use os IDs da lista de lembretes no contexto. Nunca invente IDs.
+- METAS:
+  - Para criar uma nova meta: use "add_goal".
+  - Para editar uma meta existente: use "update_goal" com o "id" correto da lista de metas.
+  - Para marcar uma meta como concluida rapidamente: use "complete_goal" com o "id" correto.
+  - Para reativar ou cancelar uma meta: use "update_goal" alterando "status" para "active" ou "cancelled".
+  - Para excluir uma meta: use "delete_goal" com o "id" correto.
+  - Quando o usuario perguntar sobre andamento das metas sem pedir mudanca, responda de forma analitica e use {"action":"none"}.
+  - Use os IDs da lista de metas no contexto. Nunca invente IDs.
 
 REGRAS DE IMAGEM (OBRIGATORIO)
 - Quando o usuario envia uma imagem SEM legenda (sem texto acompanhando):
@@ -391,6 +433,7 @@ QUANDO RESUMIR CAPACIDADES, PRIORIZE ESTES ITENS
 - Ajudar no controle de orcamento e alertar excesso de gastos.
 - Editar e excluir lancamentos.
 - Concluir, editar e excluir lembretes.
+- Mostrar andamento detalhado de metas, concluir metas e ajustar meta existente.
 - Sugerir melhorias financeiras com base nos dados reais.
 - Tirar duvidas financeiras praticas (economia, planejamento e habitos).
 
@@ -405,11 +448,15 @@ REGRAS TECNICAS (OBRIGATORIO)
 6) Para editar lembrete existente: use "update_reminder" com o "id" correto da lista.
 7) Para concluir lembrete: use "complete_reminder" com o "id" correto.
 8) Para excluir lembrete: use "delete_reminder" com o "id" correto.
-9) Para enviar uma foto ou arquivo guardado pelo usuario: use "fetch_document". A AI vai fazer uma busca simples pelo nome.
-10) Para conversas gerais, duvidas, orientacoes e informacoes: use {"action":"none"}.
-11) Se faltar o VALOR (nao a categoria ou data), pergunte no "reply" e use action none. Se faltar categoria, escolha a mais adequada. Se faltar data, use hoje.
-12) NUNCA registre transacao quando o usuario usa frases descritivas/informativas ('minhas despesas sao', 'meu gasto mensal e', 'tenho de conta').
-13) Se o usuario citar MULTIPLAS acoes na mesma mensagem, adicione MULTIPLOS objetos em "actionObjects", na mesma ordem em que aparecem.
+9) Para criar meta: use "add_goal".
+10) Para editar meta existente: use "update_goal" com o "id" correto.
+11) Para concluir meta existente: use "complete_goal" com o "id" correto.
+12) Para excluir meta existente: use "delete_goal" com o "id" correto.
+13) Para enviar uma foto ou arquivo guardado pelo usuario: use "fetch_document". A AI vai fazer uma busca simples pelo nome.
+14) Para conversas gerais, duvidas, orientacoes e informacoes: use {"action":"none"}.
+15) Se faltar o VALOR (nao a categoria ou data), pergunte no "reply" e use action none. Se faltar categoria, escolha a mais adequada. Se faltar data, use hoje.
+16) NUNCA registre transacao quando o usuario usa frases descritivas/informativas ('minhas despesas sao', 'meu gasto mensal e', 'tenho de conta').
+17) Se o usuario citar MULTIPLAS acoes na mesma mensagem, adicione MULTIPLOS objetos em "actionObjects", na mesma ordem em que aparecem.
 
 FORMATOS DE ACTIONOBJECT
 - {"action":"none"}
@@ -423,6 +470,10 @@ FORMATOS DE ACTIONOBJECT
 - {"action":"fetch_document","query":"comprovante de luz"}
 - {"action":"update_transaction","id":"transaction_id","changes":{"amount":20}}
 - {"action":"delete_transaction","id":"transaction_id"}
+- {"action":"add_goal","title":"Reserva de emergencia","description":"Guardar dinheiro para imprevistos","targetAmount":5000,"currentAmount":500,"deadline":"YYYY-MM-DD","priority":"high"}
+- {"action":"update_goal","id":"goal_id","changes":{"title":"Novo titulo","targetAmount":7000,"currentAmount":1500,"deadline":"YYYY-MM-DD","status":"active|completed|cancelled","priority":"low|medium|high"}}
+- {"action":"complete_goal","id":"goal_id"}
+- {"action":"delete_goal","id":"goal_id"}
 
 EXEMPLO DE RESPOSTA (formato exato):
 {"reply":"Lancamentos registrados!","actionObjects":[{"action":"add_transaction","type":"expense","amount":50,"description":"Mercado","categoryId":"alimentacao","date":"${today}","paymentMethod":"pix"},{"action":"add_transaction","type":"expense","amount":15,"description":"Uber","categoryId":"transporte","date":"${today}","paymentMethod":"pix"}]}
@@ -632,6 +683,95 @@ function validateAction(raw) {
         if (!id)
             return { action: 'none' };
         return { action: 'delete_reminder', id };
+    }
+    if (action === 'add_goal') {
+        const title = typeof obj.title === 'string' ? obj.title.trim() : '';
+        if (!title)
+            return { action: 'none' };
+        const rawTargetAmount = obj.targetAmount;
+        const rawCurrentAmount = obj.currentAmount;
+        const targetAmount = rawTargetAmount == null ? null : Number(rawTargetAmount);
+        const currentAmount = rawCurrentAmount == null ? 0 : Number(rawCurrentAmount);
+        if (targetAmount != null && (!Number.isFinite(targetAmount) || targetAmount <= 0))
+            return { action: 'none' };
+        if (!Number.isFinite(currentAmount) || currentAmount < 0)
+            return { action: 'none' };
+        const description = obj.description == null
+            ? null
+            : (typeof obj.description === 'string' ? obj.description.trim() : null);
+        const deadline = obj.deadline == null
+            ? null
+            : (typeof obj.deadline === 'string' && obj.deadline.trim().length > 0 ? obj.deadline.trim() : null);
+        const priority = obj.priority === 'low' || obj.priority === 'medium' || obj.priority === 'high'
+            ? obj.priority
+            : 'medium';
+        return {
+            action: 'add_goal',
+            title,
+            ...(description !== null ? { description } : {}),
+            ...(targetAmount != null ? { targetAmount } : {}),
+            ...(currentAmount > 0 ? { currentAmount } : {}),
+            ...(deadline ? { deadline } : {}),
+            priority
+        };
+    }
+    if (action === 'update_goal') {
+        const id = typeof obj.id === 'string' ? obj.id.trim() : '';
+        if (!id)
+            return { action: 'none' };
+        const rawChanges = typeof obj.changes === 'object' && obj.changes !== null
+            ? obj.changes
+            : {};
+        const changes = {};
+        if (typeof rawChanges.title === 'string' && rawChanges.title.trim().length > 0) {
+            changes.title = rawChanges.title.trim();
+        }
+        if (rawChanges.description === null || typeof rawChanges.description === 'string') {
+            changes.description = rawChanges.description == null ? null : rawChanges.description.trim();
+        }
+        if (rawChanges.targetAmount === null) {
+            changes.targetAmount = null;
+        }
+        else if (rawChanges.targetAmount != null) {
+            const targetAmount = Number(rawChanges.targetAmount);
+            if (!Number.isFinite(targetAmount) || targetAmount <= 0)
+                return { action: 'none' };
+            changes.targetAmount = targetAmount;
+        }
+        if (rawChanges.currentAmount != null) {
+            const currentAmount = Number(rawChanges.currentAmount);
+            if (!Number.isFinite(currentAmount) || currentAmount < 0)
+                return { action: 'none' };
+            changes.currentAmount = currentAmount;
+        }
+        if (rawChanges.deadline === null) {
+            changes.deadline = null;
+        }
+        else if (typeof rawChanges.deadline === 'string') {
+            const deadline = rawChanges.deadline.trim();
+            changes.deadline = deadline || null;
+        }
+        if (rawChanges.status === 'active' || rawChanges.status === 'completed' || rawChanges.status === 'cancelled') {
+            changes.status = rawChanges.status;
+        }
+        if (rawChanges.priority === 'low' || rawChanges.priority === 'medium' || rawChanges.priority === 'high') {
+            changes.priority = rawChanges.priority;
+        }
+        if (Object.keys(changes).length === 0)
+            return { action: 'none' };
+        return { action: 'update_goal', id, changes };
+    }
+    if (action === 'complete_goal') {
+        const id = typeof obj.id === 'string' ? obj.id.trim() : '';
+        if (!id)
+            return { action: 'none' };
+        return { action: 'complete_goal', id };
+    }
+    if (action === 'delete_goal') {
+        const id = typeof obj.id === 'string' ? obj.id.trim() : '';
+        if (!id)
+            return { action: 'none' };
+        return { action: 'delete_goal', id };
     }
     if (action === 'send_media') {
         const url = typeof obj.url === 'string' ? obj.url.trim() : '';

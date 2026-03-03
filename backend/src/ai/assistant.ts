@@ -1,7 +1,9 @@
 ﻿import { env } from '../config/env';
 import {
+  addUserGoal,
   addUserReminder,
   addUserTransaction,
+  deleteUserGoal,
   deleteUserReminder,
   updateUserReminder,
   deleteUserTransaction,
@@ -14,6 +16,7 @@ import {
   getUserSettings,
   getUserGoals,
   restoreUserTransaction,
+  updateUserGoal,
   updateUserTransaction,
   addRecurringTransaction as addRecurringTransactionDb,
   deleteRecurringTransaction as deleteRecurringTransactionDb,
@@ -282,6 +285,29 @@ interface DeletedReminderReceipt {
   deletedAt: string;
 }
 
+interface GoalReceipt {
+  goalId: string;
+  title: string;
+  description: string | null;
+  targetAmount: number | null;
+  currentAmount: number;
+  deadline: string | null;
+  status: 'active' | 'completed' | 'cancelled';
+  priority: 'low' | 'medium' | 'high';
+  source: 'ai' | 'manual';
+  updatedAt: string;
+}
+
+interface UpdatedGoalReceipt extends GoalReceipt {
+  changedFields: string[];
+}
+
+interface DeletedGoalReceipt {
+  goalId: string;
+  title: string;
+  deletedAt: string;
+}
+
 type ActionExecutionResult =
   | { kind: 'none' }
   | { kind: 'added'; receipt: AddedTransactionReceipt }
@@ -290,6 +316,10 @@ type ActionExecutionResult =
   | { kind: 'updated_reminder'; receipt: UpdatedReminderReceipt }
   | { kind: 'completed_reminder'; receipt: UpdatedReminderReceipt }
   | { kind: 'deleted_reminder'; receipt: DeletedReminderReceipt }
+  | { kind: 'added_goal'; receipt: GoalReceipt }
+  | { kind: 'updated_goal'; receipt: UpdatedGoalReceipt }
+  | { kind: 'completed_goal'; receipt: GoalReceipt }
+  | { kind: 'deleted_goal'; receipt: DeletedGoalReceipt }
   | { kind: 'updated'; receipt: UpdatedTransactionReceipt }
   | { kind: 'deleted'; receipt: DeletedTransactionReceipt }
   | { kind: 'send_media'; url: string }
@@ -1132,6 +1162,19 @@ function fieldLabel(field: string): string {
   return labels[field] ?? field;
 }
 
+function goalFieldLabel(field: string): string {
+  const labels: Record<string, string> = {
+    title: 'Titulo',
+    description: 'Descricao',
+    targetAmount: 'Valor alvo',
+    currentAmount: 'Progresso',
+    deadline: 'Prazo',
+    status: 'Status',
+    priority: 'Prioridade'
+  };
+  return labels[field] ?? field;
+}
+
 function buildUpdatedTransactionMessage(
   receipt: UpdatedTransactionReceipt,
   aiReply: string
@@ -1309,6 +1352,136 @@ function buildDeletedReminderMessage(
   return lines.join('\n');
 }
 
+function goalPriorityLabel(priority: GoalReceipt['priority']): string {
+  switch (priority) {
+    case 'high':
+      return 'Alta';
+    case 'low':
+      return 'Baixa';
+    default:
+      return 'Media';
+  }
+}
+
+function goalStatusLabel(status: GoalReceipt['status']): string {
+  switch (status) {
+    case 'completed':
+      return 'Concluida';
+    case 'cancelled':
+      return 'Cancelada';
+    default:
+      return 'Ativa';
+  }
+}
+
+function buildGoalProgressLine(receipt: GoalReceipt, currency: string): string {
+  if (typeof receipt.targetAmount === 'number' && receipt.targetAmount > 0) {
+    const pct = Math.min(100, (receipt.currentAmount / receipt.targetAmount) * 100);
+    const remaining = Math.max(0, receipt.targetAmount - receipt.currentAmount);
+    return `Progresso: ${formatCurrency(receipt.currentAmount, currency)} de ${formatCurrency(receipt.targetAmount, currency)} (${pct.toFixed(0)}%) | Faltam ${formatCurrency(remaining, currency)}`;
+  }
+
+  return `Progresso atual: ${formatCurrency(receipt.currentAmount, currency)}`;
+}
+
+function buildGoalMetaDetails(receipt: GoalReceipt, currency: string): string[] {
+  const lines = [
+    `*${receipt.title}*`,
+    buildGoalProgressLine(receipt, currency),
+    `Status: ${goalStatusLabel(receipt.status)} | Prioridade: ${goalPriorityLabel(receipt.priority)}`
+  ];
+
+  if (receipt.deadline) {
+    lines.push(`Prazo: ${formatDateBRFromYmd(receipt.deadline)}`);
+  }
+
+  if (receipt.description) {
+    lines.push(`Detalhe: ${receipt.description}`);
+  }
+
+  return lines;
+}
+
+function buildAddedGoalMessage(
+  receipt: GoalReceipt,
+  aiReply: string,
+  currency: string
+): string {
+  const lines = [
+    '🎯 *Meta criada*',
+    '',
+    ...buildGoalMetaDetails(receipt, currency)
+  ];
+
+  const cleanAiReply = aiReply.trim();
+  if (cleanAiReply.length > 0) {
+    lines.push('', cleanAiReply);
+  }
+
+  lines.push('', 'Se quiser, posso atualizar o progresso, alterar os dados, concluir ou excluir essa meta.');
+  return lines.join('\n');
+}
+
+function buildUpdatedGoalMessage(
+  receipt: UpdatedGoalReceipt,
+  aiReply: string,
+  currency: string
+): string {
+  const lines = [
+    '✏️ *Meta atualizada*',
+    '',
+    ...buildGoalMetaDetails(receipt, currency),
+    `Campos alterados: ${receipt.changedFields.join(', ')}`
+  ];
+
+  const cleanAiReply = aiReply.trim();
+  if (cleanAiReply.length > 0) {
+    lines.push('', cleanAiReply);
+  }
+
+  lines.push('', 'Se quiser, tambem posso concluir, reativar, cancelar ou ajustar novamente essa meta.');
+  return lines.join('\n');
+}
+
+function buildCompletedGoalMessage(
+  receipt: GoalReceipt,
+  aiReply: string,
+  currency: string
+): string {
+  const lines = [
+    '✅ *Meta concluida*',
+    '',
+    ...buildGoalMetaDetails(receipt, currency)
+  ];
+
+  const cleanAiReply = aiReply.trim();
+  if (cleanAiReply.length > 0) {
+    lines.push('', cleanAiReply);
+  }
+
+  lines.push('', 'Se quiser, posso reativar essa meta ou criar a proxima etapa dela.');
+  return lines.join('\n');
+}
+
+function buildDeletedGoalMessage(
+  receipt: DeletedGoalReceipt,
+  aiReply: string
+): string {
+  const lines = [
+    '🗑️ *Meta excluida*',
+    '',
+    `*${receipt.title}*`
+  ];
+
+  const cleanAiReply = aiReply.trim();
+  if (cleanAiReply.length > 0) {
+    lines.push('', cleanAiReply);
+  }
+
+  lines.push('', 'Se quiser, posso criar outra meta no lugar ou montar um novo plano.');
+  return lines.join('\n');
+}
+
 function buildMultiActionMessage(
   results: ActionExecutionResult[],
   aiReply: string,
@@ -1317,6 +1490,7 @@ function buildMultiActionMessage(
   const lines: string[] = ['✅ *Ações processadas:*', ''];
   const transactionCodes: string[] = [];
   let hasReminderActions = false;
+  let hasGoalActions = false;
 
   for (const result of results) {
     if (result.kind === 'added') {
@@ -1366,6 +1540,30 @@ function buildMultiActionMessage(
       continue;
     }
 
+    if (result.kind === 'added_goal') {
+      hasGoalActions = true;
+      lines.push(`- Meta criada: ${result.receipt.title}`);
+      continue;
+    }
+
+    if (result.kind === 'updated_goal') {
+      hasGoalActions = true;
+      lines.push(`- Meta atualizada: ${result.receipt.title}`);
+      continue;
+    }
+
+    if (result.kind === 'completed_goal') {
+      hasGoalActions = true;
+      lines.push(`- Meta concluida: ${result.receipt.title}`);
+      continue;
+    }
+
+    if (result.kind === 'deleted_goal') {
+      hasGoalActions = true;
+      lines.push(`- Meta excluida: ${result.receipt.title}`);
+      continue;
+    }
+
     if (result.kind === 'updated') {
       transactionCodes.push(result.receipt.transactionCode);
       lines.push(
@@ -1394,6 +1592,8 @@ function buildMultiActionMessage(
     lines.push('', buildEditDeleteHint(transactionCodes));
   } else if (hasReminderActions) {
     lines.push('', 'Se quiser, posso concluir, reabrir, editar ou excluir outros lembretes.');
+  } else if (hasGoalActions) {
+    lines.push('', 'Se quiser, posso atualizar progresso, concluir, reativar, cancelar ou excluir outras metas.');
   }
   return lines.join('\n');
 }
@@ -1434,6 +1634,18 @@ function buildMutationFailureMessage(
       break;
     case 'delete_reminder':
       baseMessage = 'Nao consegui excluir o lembrete solicitado.';
+      break;
+    case 'add_goal':
+      baseMessage = 'Nao consegui criar a meta solicitada.';
+      break;
+    case 'update_goal':
+      baseMessage = 'Nao consegui atualizar a meta solicitada.';
+      break;
+    case 'complete_goal':
+      baseMessage = 'Nao consegui concluir a meta solicitada.';
+      break;
+    case 'delete_goal':
+      baseMessage = 'Nao consegui excluir a meta solicitada.';
       break;
     default:
       break;
@@ -1605,6 +1817,10 @@ export async function processWhatsAppAIMessage(
     else if (actionResult.kind === 'updated_reminder') formattedText = buildUpdatedReminderMessage(actionResult.receipt, ai.reply, settings.currency);
     else if (actionResult.kind === 'completed_reminder') formattedText = buildCompletedReminderMessage(actionResult.receipt, ai.reply);
     else if (actionResult.kind === 'deleted_reminder') formattedText = buildDeletedReminderMessage(actionResult.receipt, ai.reply);
+    else if (actionResult.kind === 'added_goal') formattedText = buildAddedGoalMessage(actionResult.receipt, ai.reply, settings.currency);
+    else if (actionResult.kind === 'updated_goal') formattedText = buildUpdatedGoalMessage(actionResult.receipt, ai.reply, settings.currency);
+    else if (actionResult.kind === 'completed_goal') formattedText = buildCompletedGoalMessage(actionResult.receipt, ai.reply, settings.currency);
+    else if (actionResult.kind === 'deleted_goal') formattedText = buildDeletedGoalMessage(actionResult.receipt, ai.reply);
     else if (actionResult.kind === 'updated') formattedText = buildUpdatedTransactionMessage(actionResult.receipt, ai.reply);
     else if (actionResult.kind === 'deleted') formattedText = buildDeletedTransactionMessage(actionResult.receipt, ai.reply);
 
@@ -2014,6 +2230,179 @@ async function executeAction(
         kind: 'deleted_reminder',
         receipt: {
           reminderId: existing.id,
+          title: existing.title,
+          deletedAt: new Date().toISOString()
+        }
+      };
+    }
+
+    if (action.action === 'add_goal') {
+      const title = (action.title || '').toString().trim().slice(0, 120);
+      if (!title) {
+        return { kind: 'none' };
+      }
+
+      const targetAmount =
+        typeof action.targetAmount === 'number' && Number.isFinite(action.targetAmount) && action.targetAmount > 0
+          ? action.targetAmount
+          : null;
+      const currentAmount =
+        typeof action.currentAmount === 'number' && Number.isFinite(action.currentAmount) && action.currentAmount >= 0
+          ? action.currentAmount
+          : 0;
+      const priority = action.priority === 'low' || action.priority === 'high' ? action.priority : 'medium';
+      const deadline = parseYmd(action.deadline) ?? null;
+      const description =
+        typeof action.description === 'string' && action.description.trim().length > 0
+          ? action.description.trim().slice(0, 500)
+          : null;
+
+      const goalId = await addUserGoal(uid, {
+        title,
+        description,
+        targetAmount,
+        currentAmount,
+        deadline,
+        source: 'manual',
+        priority
+      });
+      invalidateContextCache(uid);
+
+      return {
+        kind: 'added_goal',
+        receipt: {
+          goalId,
+          title,
+          description,
+          targetAmount,
+          currentAmount,
+          deadline,
+          status: 'active',
+          priority,
+          source: 'manual',
+          updatedAt: new Date().toISOString()
+        }
+      };
+    }
+
+    if (action.action === 'update_goal') {
+      if (!action.id || typeof action.id !== 'string') {
+        return { kind: 'none' };
+      }
+
+      const existing = (await getUserGoals(uid)).find((goal) => goal.id === action.id);
+      if (!existing) {
+        return { kind: 'none' };
+      }
+
+      const rawChanges = action.changes ?? {};
+      const updates: Partial<Omit<UserGoal, 'id' | 'createdAt'>> = {};
+      if (typeof rawChanges.title === 'string' && rawChanges.title.trim().length > 0) {
+        updates.title = rawChanges.title.trim().slice(0, 120);
+      }
+      if (rawChanges.description === null || typeof rawChanges.description === 'string') {
+        updates.description = rawChanges.description == null ? null : rawChanges.description.trim().slice(0, 500);
+      }
+      if (rawChanges.targetAmount === null) {
+        updates.targetAmount = null;
+      } else if (typeof rawChanges.targetAmount === 'number' && Number.isFinite(rawChanges.targetAmount) && rawChanges.targetAmount > 0) {
+        updates.targetAmount = rawChanges.targetAmount;
+      }
+      if (typeof rawChanges.currentAmount === 'number' && Number.isFinite(rawChanges.currentAmount) && rawChanges.currentAmount >= 0) {
+        updates.currentAmount = rawChanges.currentAmount;
+      }
+      if (rawChanges.deadline === null) {
+        updates.deadline = null;
+      } else if (typeof rawChanges.deadline === 'string') {
+        updates.deadline = parseYmd(rawChanges.deadline) ?? null;
+      }
+      if (rawChanges.status === 'active' || rawChanges.status === 'completed' || rawChanges.status === 'cancelled') {
+        updates.status = rawChanges.status;
+      }
+      if (rawChanges.priority === 'low' || rawChanges.priority === 'medium' || rawChanges.priority === 'high') {
+        updates.priority = rawChanges.priority;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return { kind: 'none' };
+      }
+
+      await updateUserGoal(uid, action.id, updates);
+      invalidateContextCache(uid);
+      const updated = (await getUserGoals(uid)).find((goal) => goal.id === action.id);
+      if (!updated) {
+        return { kind: 'none' };
+      }
+
+      return {
+        kind: 'updated_goal',
+        receipt: {
+          goalId: updated.id,
+          title: updated.title,
+          description: updated.description,
+          targetAmount: updated.targetAmount,
+          currentAmount: updated.currentAmount,
+          deadline: updated.deadline,
+          status: updated.status,
+          priority: updated.priority,
+          source: updated.source,
+          updatedAt: updated.updatedAt,
+          changedFields: Object.keys(updates).map(goalFieldLabel)
+        }
+      };
+    }
+
+    if (action.action === 'complete_goal') {
+      if (!action.id || typeof action.id !== 'string') {
+        return { kind: 'none' };
+      }
+
+      const existing = (await getUserGoals(uid)).find((goal) => goal.id === action.id);
+      if (!existing) {
+        return { kind: 'none' };
+      }
+
+      await updateUserGoal(uid, action.id, { status: 'completed' });
+      invalidateContextCache(uid);
+      const updated = (await getUserGoals(uid)).find((goal) => goal.id === action.id);
+      if (!updated) {
+        return { kind: 'none' };
+      }
+
+      return {
+        kind: 'completed_goal',
+        receipt: {
+          goalId: updated.id,
+          title: updated.title,
+          description: updated.description,
+          targetAmount: updated.targetAmount,
+          currentAmount: updated.currentAmount,
+          deadline: updated.deadline,
+          status: updated.status,
+          priority: updated.priority,
+          source: updated.source,
+          updatedAt: updated.updatedAt
+        }
+      };
+    }
+
+    if (action.action === 'delete_goal') {
+      if (!action.id || typeof action.id !== 'string') {
+        return { kind: 'none' };
+      }
+
+      const existing = (await getUserGoals(uid)).find((goal) => goal.id === action.id);
+      if (!existing) {
+        return { kind: 'none' };
+      }
+
+      await deleteUserGoal(uid, action.id);
+      invalidateContextCache(uid);
+
+      return {
+        kind: 'deleted_goal',
+        receipt: {
+          goalId: existing.id,
           title: existing.title,
           deletedAt: new Date().toISOString()
         }

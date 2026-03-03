@@ -6,7 +6,7 @@ import { supabaseAdmin } from './supabase';
 const DOCUMENT_BUCKET_NAME = 'user-documents';
 const SIGNED_URL_TTL_SECONDS = 5 * 60;
 export const MAX_STORED_DOCUMENT_BYTES = 10 * 1024 * 1024;
-export const MAX_SOURCE_PDF_BYTES_FOR_COMPRESSION = 25 * 1024 * 1024;
+export const MAX_SOURCE_PDF_BYTES_FOR_COMPRESSION = 40 * 1024 * 1024;
 
 interface ParsedImageDataUrl {
   mimeType: string;

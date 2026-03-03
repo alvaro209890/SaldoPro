@@ -86,6 +86,20 @@ export function Transactions() {
         setIsModalOpen(true);
     };
 
+    const handleQuickDelete = async (transaction: Transaction) => {
+        const confirmed = window.confirm(`Excluir a transação "${transaction.description}"?`);
+        if (!confirmed) {
+            return;
+        }
+
+        await remove(transaction.id);
+
+        if (editingTransaction?.id === transaction.id) {
+            setEditingTransaction(null);
+            setIsModalOpen(false);
+        }
+    };
+
     const handleSubmit = async (data: TransactionFormData) => {
         if (editingTransaction) {
             await update(editingTransaction.id, data);
@@ -158,6 +172,9 @@ export function Transactions() {
                                 transaction={t}
                                 category={categories.find((c) => c.id === t.category)}
                                 onEdit={() => handleEdit(t)}
+                                onDelete={() => {
+                                    void handleQuickDelete(t);
+                                }}
                             />
                         ))}
                     </div>

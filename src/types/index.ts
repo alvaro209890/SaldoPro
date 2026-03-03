@@ -198,6 +198,8 @@ export interface GoalFormData {
     title: string;
     description: string;
     targetAmount: number | null;
+    currentAmount?: number;
     deadline: string;
     priority: 'low' | 'medium' | 'high';
+    status?: 'active' | 'completed' | 'cancelled';
 }

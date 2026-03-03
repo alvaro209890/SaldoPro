@@ -5,7 +5,7 @@ import { PAYMENT_METHOD_LABELS } from '@/utils/constants';
 import { Badge } from '@/components/ui/Badge';
 import { ICON_MAP, type IconName } from '@/utils/constants';
 import type { Transaction, Category } from '@/types';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, type KeyboardEvent } from 'react';
 
 interface TransactionRowProps {
     transaction: Transaction;
@@ -38,8 +38,23 @@ export function TransactionRow({
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
+    const handleRowKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+        if (event.key !== 'Enter' && event.key !== ' ') {
+            return;
+        }
+
+        event.preventDefault();
+        onEdit();
+    };
+
     return (
-        <div className="group flex flex-col justify-between gap-3 rounded-xl border border-white/5 bg-surface-900/30 p-3 transition-all duration-300 hover:border-white/10 hover:bg-surface-800/60 hover:shadow-lg sm:flex-row sm:items-center sm:gap-4 sm:p-3.5">
+        <div
+            role="button"
+            tabIndex={0}
+            onClick={onEdit}
+            onKeyDown={handleRowKeyDown}
+            className="group flex cursor-pointer flex-col justify-between gap-3 rounded-xl border border-white/5 bg-surface-900/30 p-3 text-left transition-all duration-300 hover:border-white/10 hover:bg-surface-800/60 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/60 sm:flex-row sm:items-center sm:gap-4 sm:p-3.5"
+        >
             <div className="flex min-w-0 items-center gap-3 sm:gap-4">
                 <div
                     className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl shadow-inner border border-white/5"
@@ -83,7 +98,11 @@ export function TransactionRow({
 
                 <div className="relative" ref={menuRef}>
                     <button
-                        onClick={() => setShowMenu(!showMenu)}
+                        type="button"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            setShowMenu(!showMenu);
+                        }}
                         className="rounded-lg p-1.5 text-gray-500 opacity-100 sm:opacity-0 sm:transition-all sm:hover:bg-surface-700 sm:hover:text-white sm:group-hover:opacity-100"
                     >
                         <MoreVertical className="h-5 w-5" />
@@ -92,7 +111,9 @@ export function TransactionRow({
                     {showMenu && (
                         <div className="absolute right-0 top-full mt-1 z-20 w-36 rounded-xl border border-white/10 bg-surface-800/95 backdrop-blur-md shadow-2xl overflow-hidden animate-scale-in">
                             <button
-                                onClick={() => {
+                                type="button"
+                                onClick={(event) => {
+                                    event.stopPropagation();
                                     setShowMenu(false);
                                     onEdit();
                                 }}
@@ -103,7 +124,9 @@ export function TransactionRow({
                             </button>
                             {onDelete && (
                                 <button
-                                    onClick={() => {
+                                    type="button"
+                                    onClick={(event) => {
+                                        event.stopPropagation();
                                         setShowMenu(false);
                                         onDelete();
                                     }}
