@@ -28,7 +28,30 @@ interface Overview {
 interface TxItem { id: string; type: 'income' | 'expense'; amount: number; date: string; description: string; paymentMethod: string; category: string; }
 interface ReminderItem { id: string; reminderKind: string; title: string; amount: number | null; dueDate: string; status: string; }
 interface ChatMsg { role: 'user' | 'assistant'; content: string; }
-type Tab = 'overview' | 'operations' | 'users';
+interface StorageUsageItem {
+  uid: string;
+  readyBytes: number;
+  readyObjects: number;
+  pendingBytes: number;
+  pendingObjects: number;
+  totalBytes: number;
+  totalObjects: number;
+}
+interface StorageUsageResponse {
+  storage: {
+    bucketName: string;
+    totalBytes: number;
+    totalObjects: number;
+    readyBytes: number;
+    readyObjects: number;
+    pendingBytes: number;
+    pendingObjects: number;
+    unassignedBytes: number;
+    unassignedObjects: number;
+    users: StorageUsageItem[];
+  };
+}
+type Tab = 'overview' | 'operations' | 'users' | 'storage';
 
 /* ───── Helpers ───── */
 function fmtDate(v: string | null) {
@@ -37,6 +60,18 @@ function fmtDate(v: string | null) {
 }
 function fmtUptime(s: number) { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return `${h}h ${m}m`; }
 function fmtCurrency(v: number, c = 'BRL') { return c === 'BRL' ? `R$ ${v.toFixed(2).replace('.', ',')}` : `${c} ${v.toFixed(2)}`; }
+function fmtBytes(v: number) {
+  if (v <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = v;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const digits = value >= 100 || unitIndex === 0 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(digits).replace('.', ',')} ${units[unitIndex]}`;
+}
 function isInactive(v: string | null) { if (!v) return true; const p = Date.parse(v); return !Number.isFinite(p) || p < Date.now() - 7 * 86400000; }
 async function parseErr(r: Response) { const p = await r.json().catch(() => null) as { error?: string } | null; return p?.error || 'Erro inesperado.'; }
 async function apiFetch<T>(path: string, token: string, init?: RequestInit): Promise<T> {
@@ -57,6 +92,7 @@ const IconRefresh = () => <Icon d="M1 4v6h6M23 20v-6h-6M20.49 9A9 9 0 005.64 5.6
 const IconChevron = () => <Icon d="m15 18-6-6 6-6" size={16} />;
 const IconSend = () => <Icon d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" size={16} />;
 const IconPhone = () => <Icon d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6A19.79 19.79 0 012.12 4.18 2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z" />;
+const IconStorage = () => <Icon d="M20 7H4V5a2 2 0 012-2h12a2 2 0 012 2v2zM4 7h16v12a2 2 0 01-2 2H6a2 2 0 01-2-2V7zM9 11h6M9 15h6" />;
 
 /* ───── Stat Card ───── */
 function StatCard({ label, value, sub, glow = '' }: { label: string; value: string | number; sub?: string; glow?: string }) {
@@ -99,6 +135,7 @@ export function App() {
 
   const [overview, setOverview] = useState<Overview | null>(null);
   const [users, setUsers] = useState<User[]>([]);
+  const [storageUsage, setStorageUsage] = useState<StorageUsageResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [tab, setTab] = useState<Tab>('overview');
@@ -131,18 +168,19 @@ export function App() {
 
   /* Load dashboard */
   useEffect(() => {
-    if (!token) { setOverview(null); setUsers([]); return; }
+    if (!token) { setOverview(null); setUsers([]); setStorageUsage(null); return; }
     let c = false;
     const load = async (silent = false) => {
       if (!silent) setLoading(true);
       setError('');
       try {
-        const [ov, us] = await Promise.all([
+        const [ov, us, storage] = await Promise.all([
           apiFetch<Overview>('/api/admin/overview', token),
-          apiFetch<{ users: User[] }>('/api/admin/users', token)
+          apiFetch<{ users: User[] }>('/api/admin/users', token),
+          apiFetch<StorageUsageResponse>('/api/admin/storage-usage', token)
         ]);
         if (c) return;
-        setOverview(ov); setUsers(us.users);
+        setOverview(ov); setUsers(us.users); setStorageUsage(storage);
       } catch (e) {
         if (c) return;
         const msg = e instanceof Error ? e.message : 'Falha ao carregar.';
@@ -192,14 +230,18 @@ export function App() {
 
   async function logout() {
     if (token) try { await apiFetch('/api/admin/auth/logout', token, { method: 'POST' }); } catch { }
-    persistToken(''); setToken(''); setOverview(null); setUsers([]);
+    persistToken(''); setToken(''); setOverview(null); setUsers([]); setStorageUsage(null);
   }
 
   async function refresh() {
     if (!token) return; setLoading(true); setError('');
     try {
-      const [ov, us] = await Promise.all([apiFetch<Overview>('/api/admin/overview', token), apiFetch<{ users: User[] }>('/api/admin/users', token)]);
-      setOverview(ov); setUsers(us.users);
+      const [ov, us, storage] = await Promise.all([
+        apiFetch<Overview>('/api/admin/overview', token),
+        apiFetch<{ users: User[] }>('/api/admin/users', token),
+        apiFetch<StorageUsageResponse>('/api/admin/storage-usage', token)
+      ]);
+      setOverview(ov); setUsers(us.users); setStorageUsage(storage);
       if (selUid) {
         const d = await apiFetch<{ user: User | null; recentTransactions: TxItem[]; recentReminders: ReminderItem[] }>(`/api/admin/users/${selUid}`, token);
         if (d.user) { setSelUser(d.user); setTxs(d.recentTransactions); setReminders(d.recentReminders); }
@@ -267,6 +309,19 @@ export function App() {
     });
     return data;
   }, [users]);
+
+  const storageRows = useMemo(() => {
+    const knownUsers = new Map(users.map(user => [user.uid, user] as const));
+    return (storageUsage?.storage.users ?? []).map(entry => {
+      const user = knownUsers.get(entry.uid) ?? null;
+      return {
+        ...entry,
+        displayName: user?.displayName?.trim() || 'UID sem cadastro',
+        email: user?.email ?? null,
+        blocked: user?.blocked ?? false
+      };
+    });
+  }, [storageUsage, users]);
 
   /* ───── LOGIN ───── */
   if (checking) return (
@@ -445,6 +500,7 @@ export function App() {
           <button onClick={() => setTab('overview')} className={`sidebar-link w-full ${tab === 'overview' ? 'active' : ''}`}><IconGrid /> Visão Geral</button>
           <button onClick={() => setTab('operations')} className={`sidebar-link w-full ${tab === 'operations' ? 'active' : ''}`}><IconServer /> Operação</button>
           <button onClick={() => setTab('users')} className={`sidebar-link w-full ${tab === 'users' ? 'active' : ''}`}><IconUsers /> Usuários</button>
+          <button onClick={() => setTab('storage')} className={`sidebar-link w-full ${tab === 'storage' ? 'active' : ''}`}><IconStorage /> Storage</button>
         </nav>
         <div className="border-t border-white/6 pt-4 space-y-1">
           <button onClick={() => void refresh()} disabled={loading} className="sidebar-link w-full"><IconRefresh /> {loading ? 'Atualizando...' : 'Atualizar'}</button>
@@ -456,9 +512,9 @@ export function App() {
       <div className="lg:hidden fixed top-0 left-0 right-0 z-50 bg-black/80 backdrop-blur-xl border-b border-white/6 px-4 py-3 flex items-center justify-between">
         <p className="text-sm font-bold text-white">💰 SaldoPro Admin</p>
         <div className="flex gap-2">
-          {(['overview', 'operations', 'users'] as Tab[]).map(t => (
+          {(['overview', 'operations', 'users', 'storage'] as Tab[]).map(t => (
             <button key={t} onClick={() => setTab(t)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${tab === t ? 'bg-emerald-500/20 text-emerald-300' : 'text-zinc-400'}`}>
-              {t === 'overview' ? 'Geral' : t === 'operations' ? 'Op.' : 'Users'}
+              {t === 'overview' ? 'Geral' : t === 'operations' ? 'Op.' : t === 'users' ? 'Users' : 'Storage'}
             </button>
           ))}
         </div>
@@ -634,6 +690,48 @@ export function App() {
         )}
 
         {/* ──── USERS TAB ──── */}
+        {tab === 'storage' && (
+          <div className="space-y-5">
+            <div>
+              <h1 className="text-2xl font-bold text-white">Storage Supabase</h1>
+              <p className="text-sm text-zinc-500 mt-1">Uso real do bucket {storageUsage?.storage.bucketName ?? 'user-documents'} com separaÃ§Ã£o por usuÃ¡rio</p>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <StatCard label="Total do bucket" value={fmtBytes(storageUsage?.storage.totalBytes ?? 0)} sub={`${(storageUsage?.storage.totalObjects ?? 0).toLocaleString('pt-BR')} arquivo(s)`} glow="card-glow-sky" />
+              <StatCard label="Arquivos prontos" value={fmtBytes(storageUsage?.storage.readyBytes ?? 0)} sub={`${(storageUsage?.storage.readyObjects ?? 0).toLocaleString('pt-BR')} objeto(s)`} glow="card-glow-green" />
+              <StatCard label="Pendentes" value={fmtBytes(storageUsage?.storage.pendingBytes ?? 0)} sub={`${(storageUsage?.storage.pendingObjects ?? 0).toLocaleString('pt-BR')} objeto(s)`} glow="card-glow-amber" />
+              <StatCard label="UsuÃ¡rios com uso" value={storageRows.length.toLocaleString('pt-BR')} sub={`${users.length.toLocaleString('pt-BR')} usuÃ¡rios no painel`} />
+            </div>
+
+            {(storageUsage?.storage.unassignedObjects ?? 0) > 0 && (
+              <div className="rounded-xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                Existem {storageUsage?.storage.unassignedObjects ?? 0} arquivo(s) fora do padrÃ£o esperado, somando {fmtBytes(storageUsage?.storage.unassignedBytes ?? 0)}.
+              </div>
+            )}
+
+            <div className="card overflow-x-auto">
+              <table className="data-table">
+                <thead><tr><th>UsuÃ¡rio</th><th>Email / UID</th><th>Prontos</th><th>Pendentes</th><th>Total</th><th>Arquivos</th><th>Status</th></tr></thead>
+                <tbody>
+                  {storageRows.map(row => (
+                    <tr key={row.uid}>
+                      <td className="text-white font-medium">{row.displayName}</td>
+                      <td className="text-zinc-400 text-xs">{row.email || row.uid}</td>
+                      <td><div className="text-white font-semibold">{fmtBytes(row.readyBytes)}</div><div className="text-xs text-zinc-500">{row.readyObjects} arquivo(s)</div></td>
+                      <td><div className="text-white font-semibold">{fmtBytes(row.pendingBytes)}</div><div className="text-xs text-zinc-500">{row.pendingObjects} arquivo(s)</div></td>
+                      <td className="text-white font-semibold">{fmtBytes(row.totalBytes)}</td>
+                      <td>{row.totalObjects}</td>
+                      <td><span className={row.blocked ? 'badge badge-rose' : 'badge badge-green'}>{row.blocked ? 'Bloqueado' : 'Ativo'}</span></td>
+                    </tr>
+                  ))}
+                  {storageRows.length === 0 && <tr><td colSpan={7} className="text-center text-zinc-500 py-8">Nenhum arquivo encontrado no bucket.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {tab === 'users' && (
           <div className="space-y-5">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">

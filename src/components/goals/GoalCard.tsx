@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, Trash2, Edit3, Target, Clock, Sparkles, TrendingUp, ChevronDown, ChevronUp } from 'lucide-react';
+import { Check, Trash2, Target, Clock, Sparkles, TrendingUp, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import type { Goal } from '@/types';
 

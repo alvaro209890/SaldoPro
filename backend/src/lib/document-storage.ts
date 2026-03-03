@@ -10,11 +10,41 @@ interface ParsedImageDataUrl {
   buffer: Buffer;
 }
 
+interface StorageObjectRow {
+  name: string;
+  metadata?: {
+    size?: number | string | null;
+  } | null;
+}
+
 export interface PendingDocumentUpload {
   draftId: string;
   storagePath: string;
   mimeType: string;
   sizeBytes: number;
+}
+
+export interface UserDocumentStorageUsage {
+  uid: string;
+  readyBytes: number;
+  readyObjects: number;
+  pendingBytes: number;
+  pendingObjects: number;
+  totalBytes: number;
+  totalObjects: number;
+}
+
+export interface DocumentStorageUsageSummary {
+  bucketName: string;
+  totalBytes: number;
+  totalObjects: number;
+  readyBytes: number;
+  readyObjects: number;
+  pendingBytes: number;
+  pendingObjects: number;
+  unassignedBytes: number;
+  unassignedObjects: number;
+  users: UserDocumentStorageUsage[];
 }
 
 function extensionFromMimeType(mimeType: string): string {
@@ -64,6 +94,107 @@ function parseImageDataUrl(imageDataUrl: string): ParsedImageDataUrl {
   }
 
   return { mimeType, buffer };
+}
+
+function toObjectSize(metadata: StorageObjectRow['metadata']): number {
+  const parsed = Number(metadata?.size ?? 0);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function parseStorageOwner(path: string): { uid: string; group: 'ready' | 'pending' } | null {
+  const normalized = path.trim();
+  if (!normalized) return null;
+
+  const segments = normalized.split('/').filter(Boolean);
+  if (segments.length < 3) return null;
+
+  if (segments[0] === 'documents') {
+    return { uid: segments[1], group: 'ready' };
+  }
+
+  if (segments[0] === 'pending') {
+    return { uid: segments[1], group: 'pending' };
+  }
+
+  return null;
+}
+
+export async function getDocumentStorageUsageSummary(): Promise<DocumentStorageUsageSummary> {
+  const { data, error } = await supabaseAdmin
+    .schema('storage')
+    .from('objects')
+    .select('name, metadata')
+    .eq('bucket_id', DOCUMENT_BUCKET_NAME);
+
+  if (error) {
+    logger.error('Failed to read Supabase Storage usage summary', { bucketName: DOCUMENT_BUCKET_NAME, error });
+    throw new Error(`getDocumentStorageUsageSummary: ${error.message}`);
+  }
+
+  const summary: DocumentStorageUsageSummary = {
+    bucketName: DOCUMENT_BUCKET_NAME,
+    totalBytes: 0,
+    totalObjects: 0,
+    readyBytes: 0,
+    readyObjects: 0,
+    pendingBytes: 0,
+    pendingObjects: 0,
+    unassignedBytes: 0,
+    unassignedObjects: 0,
+    users: []
+  };
+
+  const usageByUid = new Map<string, UserDocumentStorageUsage>();
+
+  for (const row of (data ?? []) as StorageObjectRow[]) {
+    const size = toObjectSize(row.metadata);
+    summary.totalBytes += size;
+    summary.totalObjects += 1;
+
+    const owner = parseStorageOwner(row.name);
+    if (!owner) {
+      summary.unassignedBytes += size;
+      summary.unassignedObjects += 1;
+      continue;
+    }
+
+    if (owner.group === 'ready') {
+      summary.readyBytes += size;
+      summary.readyObjects += 1;
+    } else {
+      summary.pendingBytes += size;
+      summary.pendingObjects += 1;
+    }
+
+    const current = usageByUid.get(owner.uid) ?? {
+      uid: owner.uid,
+      readyBytes: 0,
+      readyObjects: 0,
+      pendingBytes: 0,
+      pendingObjects: 0,
+      totalBytes: 0,
+      totalObjects: 0
+    };
+
+    if (owner.group === 'ready') {
+      current.readyBytes += size;
+      current.readyObjects += 1;
+    } else {
+      current.pendingBytes += size;
+      current.pendingObjects += 1;
+    }
+
+    current.totalBytes += size;
+    current.totalObjects += 1;
+    usageByUid.set(owner.uid, current);
+  }
+
+  summary.users = [...usageByUid.values()].sort((a, b) => {
+    if (b.totalBytes !== a.totalBytes) return b.totalBytes - a.totalBytes;
+    return a.uid.localeCompare(b.uid);
+  });
+
+  return summary;
 }
 
 export async function uploadPendingDocument(

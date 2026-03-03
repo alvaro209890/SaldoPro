@@ -5,6 +5,7 @@ const express_1 = require("express");
 const admin_session_1 = require("../lib/admin-session");
 const firebase_user_access_1 = require("../lib/firebase-user-access");
 const firestore_1 = require("../lib/firestore");
+const document_storage_1 = require("../lib/document-storage");
 const logger_1 = require("../lib/logger");
 const admin_auth_1 = require("../middleware/admin-auth");
 function isWhatsAppLog(entry) {
@@ -138,6 +139,15 @@ function createAdminRouter(manager) {
                 (0, firebase_user_access_1.listAllFirebaseUserAccessStates)()
             ]);
             res.json({ users: mergeAdminUsers(snapshots, firebaseStates) });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.get('/storage-usage', async (_req, res, next) => {
+        try {
+            const storage = await (0, document_storage_1.getDocumentStorageUsageSummary)();
+            res.json({ storage });
         }
         catch (error) {
             next(error);

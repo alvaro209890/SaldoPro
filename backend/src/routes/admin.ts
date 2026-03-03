@@ -16,6 +16,7 @@ import {
   type AdminUserSnapshot,
   getRecentConversationByOwnerUid
 } from '../lib/firestore';
+import { getDocumentStorageUsageSummary } from '../lib/document-storage';
 import { getRecentOperationalLogs, logger, type OperationalLogEntry } from '../lib/logger';
 import { requireAdminAuth } from '../middleware/admin-auth';
 import type { WhatsAppClientsManager } from '../whatsapp/manager';
@@ -42,6 +43,10 @@ interface AdminUserDetailsResponse {
   recentTransactions: ReturnType<typeof getRecentTransactions> extends Promise<infer T> ? T : never;
   recentReminders: Awaited<ReturnType<typeof getUserReminders>>;
   missing?: boolean;
+}
+
+interface AdminStorageUsageResponse {
+  storage: Awaited<ReturnType<typeof getDocumentStorageUsageSummary>>;
 }
 
 function isWhatsAppLog(entry: OperationalLogEntry): boolean {
@@ -199,6 +204,15 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
         listAllFirebaseUserAccessStates()
       ]);
       res.json({ users: mergeAdminUsers(snapshots, firebaseStates) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/storage-usage', async (_req: Request, res: Response<AdminStorageUsageResponse>, next) => {
+    try {
+      const storage = await getDocumentStorageUsageSummary();
+      res.json({ storage });
     } catch (error) {
       next(error);
     }
