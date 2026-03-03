@@ -41,7 +41,7 @@ export function App() {
                             <PlanFeatureGate
                                 feature="webAiChat"
                                 title="A IA do painel exige um plano ativo"
-                                description="Assine um plano para liberar o chat com IA no painel e continuar esse fluxo sem bloqueios."
+                                description="Assine um plano premium para desbloquear o chat com IA no painel. A funcionalidade fica disponivel assim que o pagamento for confirmado."
                             >
                                 <AIAssistant />
                             </PlanFeatureGate>
@@ -55,7 +55,7 @@ export function App() {
                             <PlanFeatureGate
                                 feature="documentStorage"
                                 title="A area de arquivos faz parte do premium"
-                                description="Sem assinatura, imagens, PDFs e ZIPs ficam bloqueados. Vamos te levar para a tela de planos para liberar essa aba."
+                                description="Imagens, PDFs e ZIPs so ficam disponiveis com assinatura ativa. Assine um plano para liberar."
                             >
                                 <Documents />
                             </PlanFeatureGate>
@@ -67,7 +67,7 @@ export function App() {
                             <PlanFeatureGate
                                 feature="goals"
                                 title="A aba de metas exige assinatura"
-                                description="As metas inteligentes ficam disponiveis apenas com plano ativo. Assine agora para destravar esta area."
+                                description="As metas inteligentes ficam disponiveis somente com plano premium ativo. Assine para desbloquear."
                             >
                                 <Goals />
                             </PlanFeatureGate>

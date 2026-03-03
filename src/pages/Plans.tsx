@@ -58,7 +58,7 @@ type MercadoPagoInstance = {
 declare global { interface Window { MercadoPago?: new (publicKey: string, options?: { locale?: string }) => MercadoPagoInstance; } }
 
 /* ──── style tokens ──── */
-const iframeCls = 'h-[42px] max-h-[42px] overflow-hidden rounded-lg border border-white/10 bg-white/[0.04] px-3';
+const iframeCls = 'h-[42px] max-h-[42px] overflow-hidden rounded-lg border border-white/10 bg-white px-3';
 const inputCls = 'h-[42px] w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-emerald-400/40';
 const selectCls = inputCls;
 const labelCls = 'block text-[11px] font-medium uppercase tracking-wider text-slate-500 mb-1';
