@@ -137,17 +137,17 @@ export function Settings() {
                     </p>
                 </div>
 
-                <div className="flex p-1 bg-[#0c1216] border border-surface-800 rounded-xl w-full sm:w-auto">
+                <div className="flex w-full flex-col gap-1 rounded-xl border border-surface-800 bg-[#0c1216] p-1 sm:w-auto sm:flex-row sm:gap-0">
                     <button
                         onClick={() => setActiveTab('settings')}
-                        className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'settings' ? 'bg-indigo-600/20 text-indigo-400 shadow-sm' : 'text-gray-400 hover:text-gray-200 hover:bg-surface-800/50'}`}
+                        className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all sm:flex-none sm:px-5 ${activeTab === 'settings' ? 'bg-indigo-600/20 text-indigo-400 shadow-sm' : 'text-gray-400 hover:text-gray-200 hover:bg-surface-800/50'}`}
                     >
                         <SettingsIcon className="w-4 h-4" />
                         Ajustes
                     </button>
                     <button
                         onClick={() => setActiveTab('manual')}
-                        className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'manual' ? 'bg-indigo-600/20 text-indigo-400 shadow-sm' : 'text-gray-400 hover:text-gray-200 hover:bg-surface-800/50'}`}
+                        className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all sm:flex-none sm:px-5 ${activeTab === 'manual' ? 'bg-indigo-600/20 text-indigo-400 shadow-sm' : 'text-gray-400 hover:text-gray-200 hover:bg-surface-800/50'}`}
                     >
                         <BookOpen className="w-4 h-4" />
                         Manual
@@ -302,18 +302,18 @@ export function Settings() {
                                     {whatsappAllowedNumbers.map((phone) => (
                                         <div
                                             key={phone}
-                                            className="flex items-center justify-between rounded-xl border border-surface-800/80 bg-[#0f1419] px-5 py-4 shadow-sm"
+                                            className="flex flex-col gap-3 rounded-xl border border-surface-800/80 bg-[#0f1419] px-5 py-4 shadow-sm sm:flex-row sm:items-center sm:justify-between"
                                         >
-                                            <div className="flex items-center gap-3">
+                                            <div className="flex min-w-0 items-center gap-3">
                                                 <div className="w-8 h-8 rounded-full bg-green-500/10 flex items-center justify-center">
                                                     <Phone className="w-4 h-4 text-green-500" />
                                                 </div>
-                                                <span className="text-sm font-medium text-gray-200">{phone}</span>
+                                                <span className="min-w-0 break-all text-sm font-medium text-gray-200">{phone}</span>
                                             </div>
                                             <button
                                                 type="button"
                                                 onClick={() => handleRemoveNumber(phone)}
-                                                className="rounded-lg p-2 text-gray-500 hover:bg-red-500/10 hover:text-red-400 transition-colors focus:outline-none"
+                                                className="self-end rounded-lg p-2 text-gray-500 transition-colors hover:bg-red-500/10 hover:text-red-400 focus:outline-none sm:self-auto"
                                                 aria-label={`Remover ${phone}`}
                                             >
                                                 <Trash2 className="w-4 h-4" />

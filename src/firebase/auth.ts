@@ -1,6 +1,7 @@
 import {
     confirmPasswordReset,
     createUserWithEmailAndPassword,
+    type AuthError,
     type ActionCodeSettings,
     signInWithEmailAndPassword,
     sendPasswordResetEmail,
@@ -12,8 +13,21 @@ import { auth } from './config';
 import { BACKEND_URL } from '@/config/backend';
 
 const configuredAppUrl = (import.meta.env.VITE_APP_URL ?? '').trim();
+const authDomain = (import.meta.env.VITE_FIREBASE_AUTH_DOMAIN ?? '').trim();
 
 function getPasswordResetUrl(): string {
+    if (typeof window !== 'undefined') {
+        const { origin, hostname } = window.location;
+
+        if (hostname === 'localhost' || hostname === '127.0.0.1') {
+            return new URL('/reset-password', origin).toString();
+        }
+    }
+
+    if (authDomain) {
+        return new URL('/reset-password', `https://${authDomain}`).toString();
+    }
+
     if (configuredAppUrl) {
         return new URL('/reset-password', configuredAppUrl).toString();
     }
@@ -22,7 +36,7 @@ function getPasswordResetUrl(): string {
         return new URL('/reset-password', window.location.origin).toString();
     }
 
-    return `https://${import.meta.env.VITE_FIREBASE_AUTH_DOMAIN}/reset-password`;
+    throw new Error('Nenhum dominio de recuperacao de senha foi configurado.');
 }
 
 export async function registerUser(email: string, password: string, displayName: string, phone: string) {
@@ -76,7 +90,21 @@ export async function resetPassword(email: string) {
         handleCodeInApp: false,
     };
 
-    await sendPasswordResetEmail(auth, email, actionCodeSettings);
+    try {
+        await sendPasswordResetEmail(auth, email, actionCodeSettings);
+    } catch (error) {
+        const authError = error as AuthError;
+
+        if (
+            authError.code === 'auth/unauthorized-continue-uri' ||
+            authError.code === 'auth/invalid-continue-uri'
+        ) {
+            await sendPasswordResetEmail(auth, email);
+            return;
+        }
+
+        throw error;
+    }
 }
 
 export async function validatePasswordResetCode(oobCode: string) {

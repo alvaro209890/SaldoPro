@@ -143,3 +143,23 @@ body {
 .animate-scale-in {
   animation: scale-in 0.2s ease-out;
 }
+
+/* Gallery card hover */
+.gallery-card-hover {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.gallery-card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.08);
+}
+
+/* Gallery card action overlay */
+.gallery-card-overlay {
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.gallery-card-hover:hover .gallery-card-overlay {
+  opacity: 1;
+}
