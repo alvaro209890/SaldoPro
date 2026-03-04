@@ -401,7 +401,7 @@ const COMPOSING_REFRESH_MS = 4000;
 const USER_DEBOUNCE_MS = 1800;
 /** If the same JID hits repeated Bad MAC in a short window, perform a soft reconnect. */
 const BAD_MAC_WINDOW_MS = 2 * 60 * 1000;
-const BAD_MAC_RECONNECT_THRESHOLD = 3;
+const BAD_MAC_RECONNECT_THRESHOLD = 5;
 /** After this many soft reconnects, restart the cycle but preserve auth state. */
 const BAD_MAC_RECONNECT_CYCLE_AFTER = 3;
 /** How long to keep unresolvable-LID messages buffered before discarding. */
@@ -435,7 +435,7 @@ export class WhatsAppClient {
   private readonly processedInboundIds = new Set<string>();
   private readonly processedInboundOrder: string[] = [];
   private readonly conversationByPhone = new Map<string, ConversationEntry[]>();
-  private readonly badMacByJid = new Map<string, { count: number; lastAt: number }>();
+  private readonly badMacByJid = new Map<string, { count: number; lastAt: number; cleared: number }>();
   private readonly lidToPhoneJid = new Map<string, string>();
   private readonly sentMessagesCache = new Map<string, proto.IMessage>();
 
@@ -2713,12 +2713,11 @@ export class WhatsAppClient {
 
     const now = Date.now();
     const previous = this.badMacByJid.get(remoteJid);
-    const count =
-      previous && now - previous.lastAt <= BAD_MAC_WINDOW_MS
-        ? previous.count + 1
-        : 1;
+    const isWithinWindow = previous && now - previous.lastAt <= BAD_MAC_WINDOW_MS;
+    const count = isWithinWindow ? previous.count + 1 : 1;
+    const previousCleared = isWithinWindow ? (previous.cleared ?? 0) : 0;
 
-    this.badMacByJid.set(remoteJid, { count, lastAt: now });
+    this.badMacByJid.set(remoteJid, { count, lastAt: now, cleared: previousCleared });
 
     logger.warn('Bad MAC counter updated', {
       slotId: this.slotId,
@@ -2726,6 +2725,7 @@ export class WhatsAppClient {
       messageId,
       count,
       threshold: BAD_MAC_RECONNECT_THRESHOLD,
+      cleared: previousCleared,
       softReconnectCount: this.softReconnectCount,
       reconnectCycleAfter: BAD_MAC_RECONNECT_CYCLE_AFTER,
       errorMessage
@@ -2735,10 +2735,23 @@ export class WhatsAppClient {
       return;
     }
 
-    this.badMacByJid.set(remoteJid, { count: 0, lastAt: now });
+    const newCleared = previousCleared + 1;
+    this.badMacByJid.set(remoteJid, { count: 0, lastAt: now, cleared: newCleared });
     await this.clearSignalSessionsAfterBadMac(message);
 
-    // Repeated decrypt failures should not wipe the linked-device auth state.
+    // First round: just clear sessions and let Baileys built-in retry mechanism
+    // recover the decrypt (retry receipt → sender re-sends with prekey bundle).
+    // Do NOT reconnect — that kills the socket and prevents the retry from completing.
+    if (newCleared <= 1) {
+      logger.info('Bad MAC sessions cleared, awaiting Baileys retry (no reconnect)', {
+        slotId: this.slotId,
+        remoteJid,
+        clearedRound: newCleared
+      });
+      return;
+    }
+
+    // Second+ round: Baileys retry didn't fix it. Now escalate to soft reconnect.
     if (this.softReconnectCount >= BAD_MAC_RECONNECT_CYCLE_AFTER) {
       logger.error('BAD_MAC_ESCALATION: repeated decrypt failures detected, preserving auth and recycling socket', {
         slotId: this.slotId,
