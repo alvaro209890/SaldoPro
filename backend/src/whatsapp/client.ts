@@ -449,6 +449,7 @@ export class WhatsAppClient {
   private readonly aiCallTimestamps = new Map<string, number[]>();
   private softReconnectCount = 0;
   private connectionEpoch = 0;
+  private lastOpenedAt = 0;
 
   // --- LID message buffer: store messages with unresolved LID for later replay ---
   private readonly pendingLidMessages = new Map<string, { message: proto.IWebMessageInfo; bufferedAt: number }[]>();
@@ -821,6 +822,7 @@ export class WhatsAppClient {
       this.state = 'open';
       this.connected = true;
       this.lastDisconnectReason = null;
+      this.lastOpenedAt = Date.now();
       this.phone = jidToPhone(this.socket?.user?.id) || null;
       this.badMacByJid.clear();
       this.softReconnectCount = 0;
@@ -881,7 +883,10 @@ export class WhatsAppClient {
         code !== DisconnectReason.forbidden;
 
       if (shouldReconnect) {
-        this.scheduleReconnect();
+        // If connection was open less than 5s, it's likely unstable — back off longer
+        const uptime = this.lastOpenedAt ? Date.now() - this.lastOpenedAt : Infinity;
+        const delay = uptime < 5000 ? 5000 : 2000;
+        this.scheduleReconnect(delay);
       }
     }
   }
@@ -3198,7 +3203,9 @@ export class WhatsAppClient {
     }
 
     this.socket = null;
-    this.scheduleReconnect(1500);
+    // Exponential backoff: 3s → 6s → 12s → capped at 15s
+    const delay = Math.min(3000 * Math.pow(2, this.softReconnectCount - 1), 15000);
+    this.scheduleReconnect(delay);
   }
 
   private mapDisconnectReason(code: number | null): string {
