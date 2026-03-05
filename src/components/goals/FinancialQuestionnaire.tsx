@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { DollarSign, Wallet, TrendingDown, Target, FileText, ChevronRight, ChevronLeft, Sparkles } from 'lucide-react';
 import type { FinancialProfileFormData } from '@/types';
+import { maskCurrencyInput, parseCurrencyInput, parseLocaleNumberInput, sanitizeDecimalInput } from '@/utils/currencyInput';
 
 interface FinancialQuestionnaireProps {
     onSubmit: (data: FinancialProfileFormData) => Promise<void>;
@@ -32,14 +33,22 @@ export function FinancialQuestionnaire({ onSubmit, isLoading }: FinancialQuestio
     const isFirstStep = step === 0;
 
     const getCurrentValue = () => values[currentStep.key];
+
+    const parseCurrentNumberValue = (stepKey: typeof currentStep.key, rawValue: string): number => {
+        if (stepKey === 'savingsTargetPct') {
+            return parseLocaleNumberInput(rawValue);
+        }
+        return parseCurrencyInput(rawValue);
+    };
+
     const isCurrentStepValid = () => {
         const val = getCurrentValue();
         if (currentStep.key === 'financialGoalsText') return true; // optional
         if (currentStep.key === 'savingsTargetPct') {
-            const num = parseFloat(val);
+            const num = parseCurrentNumberValue(currentStep.key, val);
             return !isNaN(num) && num >= 0 && num <= 100;
         }
-        const num = parseFloat(val);
+        const num = parseCurrentNumberValue(currentStep.key, val);
         return !isNaN(num) && num >= 0;
     };
 
@@ -53,10 +62,10 @@ export function FinancialQuestionnaire({ onSubmit, isLoading }: FinancialQuestio
 
     const handleSubmit = async () => {
         await onSubmit({
-            monthlyIncome: parseFloat(values.monthlyIncome) || 0,
-            fixedExpenses: parseFloat(values.fixedExpenses) || 0,
-            variableExpenses: parseFloat(values.variableExpenses) || 0,
-            savingsTargetPct: parseFloat(values.savingsTargetPct) || 10,
+            monthlyIncome: parseCurrencyInput(values.monthlyIncome) || 0,
+            fixedExpenses: parseCurrencyInput(values.fixedExpenses) || 0,
+            variableExpenses: parseCurrencyInput(values.variableExpenses) || 0,
+            savingsTargetPct: parseLocaleNumberInput(values.savingsTargetPct) || 10,
             financialGoalsText: values.financialGoalsText.trim(),
         });
     };
@@ -108,10 +117,17 @@ export function FinancialQuestionnaire({ onSubmit, isLoading }: FinancialQuestio
                                     <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500 text-sm font-medium">R$</span>
                                 )}
                                 <Input
-                                    type="number"
-                                    inputMode="decimal"
+                                    type="text"
+                                    inputMode={currentStep.key === 'savingsTargetPct' ? 'decimal' : 'numeric'}
                                     value={getCurrentValue()}
-                                    onChange={(e) => setValues(v => ({ ...v, [currentStep.key]: e.target.value }))}
+                                    onChange={(e) => {
+                                        const rawValue = e.target.value;
+                                        const nextValue =
+                                            currentStep.key === 'savingsTargetPct'
+                                                ? sanitizeDecimalInput(rawValue, 2)
+                                                : maskCurrencyInput(rawValue);
+                                        setValues((v) => ({ ...v, [currentStep.key]: nextValue }));
+                                    }}
                                     placeholder={currentStep.placeholder}
                                     className={currentStep.key !== 'savingsTargetPct' ? 'pl-10' : ''}
                                     autoFocus
@@ -167,7 +183,7 @@ export function FinancialQuestionnaire({ onSubmit, isLoading }: FinancialQuestio
                                 ? `${val}%`
                                 : s.key === 'financialGoalsText'
                                     ? val.slice(0, 30) + (val.length > 30 ? '…' : '')
-                                    : `R$ ${parseFloat(val).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+                                    : `R$ ${parseCurrencyInput(val).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
                             return (
                                 <button
                                     key={s.key}

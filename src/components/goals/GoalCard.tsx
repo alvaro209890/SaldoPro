@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import type { Goal } from '@/types';
+import { formatCurrencyInput, maskCurrencyInput, parseCurrencyInput } from '@/utils/currencyInput';
 
 interface GoalCardProps {
     goal: Goal;
@@ -70,10 +71,12 @@ function getDeadlineMeta(deadline: string | null): { label: string; urgent: bool
 export function GoalCard({ goal, onUpdate, onDelete, onEdit }: GoalCardProps) {
     const [expanded, setExpanded] = useState(false);
     const [editingProgress, setEditingProgress] = useState(false);
-    const [progressValue, setProgressValue] = useState(String(goal.currentAmount));
+    const [progressValue, setProgressValue] = useState(
+        formatCurrencyInput(goal.currentAmount, { emptyWhenZero: false })
+    );
 
     useEffect(() => {
-        setProgressValue(String(goal.currentAmount));
+        setProgressValue(formatCurrencyInput(goal.currentAmount, { emptyWhenZero: false }));
     }, [goal.currentAmount]);
 
     const priority = PRIORITY_STYLES[goal.priority];
@@ -108,7 +111,7 @@ export function GoalCard({ goal, onUpdate, onDelete, onEdit }: GoalCardProps) {
     };
 
     const handleSaveProgress = async () => {
-        const parsedValue = parseFloat(progressValue);
+        const parsedValue = parseCurrencyInput(progressValue);
         if (Number.isNaN(parsedValue) || parsedValue < 0) {
             return;
         }
@@ -247,10 +250,10 @@ export function GoalCard({ goal, onUpdate, onDelete, onEdit }: GoalCardProps) {
                                     <div className="relative">
                                         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-gray-500">R$</span>
                                         <input
-                                            type="number"
-                                            inputMode="decimal"
+                                            type="text"
+                                            inputMode="numeric"
                                             value={progressValue}
-                                            onChange={(event) => setProgressValue(event.target.value)}
+                                            onChange={(event) => setProgressValue(maskCurrencyInput(event.target.value))}
                                             onKeyDown={(event) => {
                                                 if (event.key === 'Enter') {
                                                     void handleSaveProgress();
@@ -268,7 +271,7 @@ export function GoalCard({ goal, onUpdate, onDelete, onEdit }: GoalCardProps) {
                                             size="sm"
                                             variant="ghost"
                                             onClick={() => {
-                                                setProgressValue(String(goal.currentAmount));
+                                                setProgressValue(formatCurrencyInput(goal.currentAmount, { emptyWhenZero: false }));
                                                 setEditingProgress(false);
                                             }}
                                             className="flex-1"

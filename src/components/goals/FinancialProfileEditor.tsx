@@ -3,6 +3,7 @@ import { ArrowDownRight, ArrowUpRight, PiggyBank, Sparkles, Wallet } from 'lucid
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import type { FinancialProfile, FinancialProfileFormData } from '@/types';
+import { formatCurrencyInput, maskCurrencyInput, parseCurrencyInput, parseLocaleNumberInput, sanitizeDecimalInput } from '@/utils/currencyInput';
 
 export interface FinancialProfileEditorProps {
     profile: FinancialProfile;
@@ -26,9 +27,9 @@ const FINANCIAL_GOALS_TEXT_LIMIT = 500;
 
 function profileToFormValues(profile: FinancialProfile): FormValues {
     return {
-        monthlyIncome: String(profile.monthlyIncome),
-        fixedExpenses: String(profile.fixedExpenses),
-        variableExpenses: String(profile.variableExpenses),
+        monthlyIncome: formatCurrencyInput(profile.monthlyIncome, { emptyWhenZero: false }),
+        fixedExpenses: formatCurrencyInput(profile.fixedExpenses, { emptyWhenZero: false }),
+        variableExpenses: formatCurrencyInput(profile.variableExpenses, { emptyWhenZero: false }),
         savingsTargetPct: String(profile.savingsTargetPct),
         financialGoalsText: profile.financialGoalsText ?? '',
     };
@@ -36,12 +37,6 @@ function profileToFormValues(profile: FinancialProfile): FormValues {
 
 function formatCurrency(value: number): string {
     return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-}
-
-function parseNumber(value: string): number {
-    const normalized = value.replace(',', '.').trim();
-    const parsed = Number.parseFloat(normalized);
-    return Number.isFinite(parsed) ? parsed : NaN;
 }
 
 export function FinancialProfileEditor({
@@ -63,10 +58,10 @@ export function FinancialProfileEditor({
     }, [profile]);
 
     const summary = useMemo(() => {
-        const monthlyIncome = parseNumber(values.monthlyIncome);
-        const fixedExpenses = parseNumber(values.fixedExpenses);
-        const variableExpenses = parseNumber(values.variableExpenses);
-        const savingsTargetPct = parseNumber(values.savingsTargetPct);
+        const monthlyIncome = parseCurrencyInput(values.monthlyIncome);
+        const fixedExpenses = parseCurrencyInput(values.fixedExpenses);
+        const variableExpenses = parseCurrencyInput(values.variableExpenses);
+        const savingsTargetPct = parseLocaleNumberInput(values.savingsTargetPct);
 
         const safeIncome = Number.isFinite(monthlyIncome) ? Math.max(0, monthlyIncome) : 0;
         const safeFixed = Number.isFinite(fixedExpenses) ? Math.max(0, fixedExpenses) : 0;
@@ -85,10 +80,10 @@ export function FinancialProfileEditor({
     const validate = (): FinancialProfileFormData | null => {
         const nextErrors: FormErrors = {};
 
-        const monthlyIncome = parseNumber(values.monthlyIncome);
-        const fixedExpenses = parseNumber(values.fixedExpenses);
-        const variableExpenses = parseNumber(values.variableExpenses);
-        const savingsTargetPct = parseNumber(values.savingsTargetPct);
+        const monthlyIncome = parseCurrencyInput(values.monthlyIncome);
+        const fixedExpenses = parseCurrencyInput(values.fixedExpenses);
+        const variableExpenses = parseCurrencyInput(values.variableExpenses);
+        const savingsTargetPct = parseLocaleNumberInput(values.savingsTargetPct);
         const financialGoalsText = values.financialGoalsText.trim();
 
         if (!Number.isFinite(monthlyIncome) || monthlyIncome < 0) {
@@ -126,7 +121,14 @@ export function FinancialProfileEditor({
     };
 
     const handleFieldChange = (field: keyof FormValues, value: string) => {
-        setValues((previous) => ({ ...previous, [field]: value }));
+        const nextValue =
+            field === 'monthlyIncome' || field === 'fixedExpenses' || field === 'variableExpenses'
+                ? maskCurrencyInput(value, { emptyWhenZero: false })
+                : field === 'savingsTargetPct'
+                    ? sanitizeDecimalInput(value, 2)
+                    : value;
+
+        setValues((previous) => ({ ...previous, [field]: nextValue }));
         setIsDirty(true);
         setShowRegeneratePrompt(false);
         if (errors[field]) {
@@ -206,10 +208,8 @@ export function FinancialProfileEditor({
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <Input
                         label="Renda mensal"
-                        type="number"
-                        inputMode="decimal"
-                        min="0"
-                        step="0.01"
+                        type="text"
+                        inputMode="numeric"
                         value={values.monthlyIncome}
                         onChange={(event) => handleFieldChange('monthlyIncome', event.target.value)}
                         error={errors.monthlyIncome}
@@ -217,10 +217,8 @@ export function FinancialProfileEditor({
 
                     <Input
                         label="Gastos fixos"
-                        type="number"
-                        inputMode="decimal"
-                        min="0"
-                        step="0.01"
+                        type="text"
+                        inputMode="numeric"
                         value={values.fixedExpenses}
                         onChange={(event) => handleFieldChange('fixedExpenses', event.target.value)}
                         error={errors.fixedExpenses}
@@ -228,10 +226,8 @@ export function FinancialProfileEditor({
 
                     <Input
                         label="Gastos variaveis"
-                        type="number"
-                        inputMode="decimal"
-                        min="0"
-                        step="0.01"
+                        type="text"
+                        inputMode="numeric"
                         value={values.variableExpenses}
                         onChange={(event) => handleFieldChange('variableExpenses', event.target.value)}
                         error={errors.variableExpenses}
@@ -239,11 +235,8 @@ export function FinancialProfileEditor({
 
                     <Input
                         label="Meta de economia (%)"
-                        type="number"
+                        type="text"
                         inputMode="decimal"
-                        min="0"
-                        max="100"
-                        step="0.01"
                         value={values.savingsTargetPct}
                         onChange={(event) => handleFieldChange('savingsTargetPct', event.target.value)}
                         error={errors.savingsTargetPct}

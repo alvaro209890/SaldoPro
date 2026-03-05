@@ -10,6 +10,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { Button } from '@/components/ui/Button';
 import { Plus, SearchX } from 'lucide-react';
+import { parseCurrencyInput } from '@/utils/currencyInput';
 import type { Transaction, TransactionFilters as FilterType, TransactionFormData } from '@/types';
 
 const initialFilters: FilterType = {
@@ -37,6 +38,9 @@ export function Transactions() {
     const isLoading = txLoading || catLoading;
 
     const filteredTransactions = useMemo(() => {
+        const amountMin = filters.amountMin ? parseCurrencyInput(filters.amountMin) : null;
+        const amountMax = filters.amountMax ? parseCurrencyInput(filters.amountMax) : null;
+
         return transactions
             .filter((t) => {
                 // Search
@@ -57,9 +61,9 @@ export function Transactions() {
                 // Date To
                 if (filters.dateTo && t.date > filters.dateTo) return false;
                 // Amount Min
-                if (filters.amountMin && t.amount < Number(filters.amountMin)) return false;
+                if (amountMin != null && t.amount < amountMin) return false;
                 // Amount Max
-                if (filters.amountMax && t.amount > Number(filters.amountMax)) return false;
+                if (amountMax != null && t.amount > amountMax) return false;
 
                 return true;
             })

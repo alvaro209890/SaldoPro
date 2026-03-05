@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
 import type { Goal, GoalFormData } from '@/types';
+import { maskCurrencyInput, formatCurrencyInput, parseCurrencyInput } from '@/utils/currencyInput';
 
 interface GoalFormProps {
     isOpen: boolean;
@@ -45,8 +46,12 @@ export function GoalForm({ isOpen, onClose, onSubmit, initialData = null, onDele
         if (initialData) {
             setTitle(initialData.title);
             setDescription(initialData.description ?? '');
-            setTargetAmount(initialData.targetAmount != null ? String(initialData.targetAmount) : '');
-            setCurrentAmount(String(initialData.currentAmount));
+            setTargetAmount(
+                initialData.targetAmount != null
+                    ? formatCurrencyInput(initialData.targetAmount, { emptyWhenZero: false })
+                    : ''
+            );
+            setCurrentAmount(formatCurrencyInput(initialData.currentAmount, { emptyWhenZero: false }));
             setDeadline(initialData.deadline ?? '');
             setPriority(initialData.priority);
             setStatus(initialData.status);
@@ -69,8 +74,9 @@ export function GoalForm({ isOpen, onClose, onSubmit, initialData = null, onDele
             return;
         }
 
-        const parsedTargetAmount = targetAmount ? Number(targetAmount) : null;
-        const parsedCurrentAmount = currentAmount ? Number(currentAmount) : 0;
+        const hasTargetAmount = targetAmount.trim().length > 0;
+        const parsedTargetAmount = parseCurrencyInput(targetAmount);
+        const parsedCurrentAmount = parseCurrencyInput(currentAmount);
 
         setIsSubmitting(true);
         try {
@@ -78,7 +84,7 @@ export function GoalForm({ isOpen, onClose, onSubmit, initialData = null, onDele
                 title: title.trim(),
                 description: description.trim(),
                 targetAmount:
-                    parsedTargetAmount != null && Number.isFinite(parsedTargetAmount) && parsedTargetAmount > 0
+                    hasTargetAmount && Number.isFinite(parsedTargetAmount) && parsedTargetAmount > 0
                         ? parsedTargetAmount
                         : null,
                 currentAmount: Number.isFinite(parsedCurrentAmount) && parsedCurrentAmount >= 0 ? parsedCurrentAmount : 0,
@@ -164,13 +170,11 @@ export function GoalForm({ isOpen, onClose, onSubmit, initialData = null, onDele
                             Valor alvo (R$)
                         </label>
                         <Input
-                            type="number"
-                            inputMode="decimal"
+                            type="text"
+                            inputMode="numeric"
                             value={targetAmount}
-                            onChange={(event) => setTargetAmount(event.target.value)}
-                            placeholder="Ex: 5000"
-                            min="0"
-                            step="0.01"
+                            onChange={(event) => setTargetAmount(maskCurrencyInput(event.target.value))}
+                            placeholder="0,00"
                         />
                     </div>
 
@@ -179,13 +183,11 @@ export function GoalForm({ isOpen, onClose, onSubmit, initialData = null, onDele
                             Ja acumulado (R$)
                         </label>
                         <Input
-                            type="number"
-                            inputMode="decimal"
+                            type="text"
+                            inputMode="numeric"
                             value={currentAmount}
-                            onChange={(event) => setCurrentAmount(event.target.value)}
-                            placeholder="Ex: 800"
-                            min="0"
-                            step="0.01"
+                            onChange={(event) => setCurrentAmount(maskCurrencyInput(event.target.value))}
+                            placeholder="0,00"
                         />
                     </div>
 

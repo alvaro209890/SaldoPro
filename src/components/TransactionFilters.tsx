@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Button } from '@/components/ui/Button';
 import { PAYMENT_METHOD_LABELS } from '@/utils/constants';
+import { maskCurrencyInput } from '@/utils/currencyInput';
 import type { Category, TransactionFilters as FilterType } from '@/types';
 
 interface TransactionFiltersProps {
@@ -144,17 +145,19 @@ export function TransactionFilters({ filters, onChange, categories }: Transactio
                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                             <Input
                                 label="Valor Mín"
-                                type="number"
-                                placeholder="0.00"
+                                type="text"
+                                inputMode="numeric"
+                                placeholder="0,00"
                                 value={filters.amountMin}
-                                onChange={(e) => handleChange('amountMin', e.target.value)}
+                                onChange={(e) => handleChange('amountMin', maskCurrencyInput(e.target.value))}
                             />
                             <Input
                                 label="Valor Máx"
-                                type="number"
-                                placeholder="0.00"
+                                type="text"
+                                inputMode="numeric"
+                                placeholder="0,00"
                                 value={filters.amountMax}
-                                onChange={(e) => handleChange('amountMax', e.target.value)}
+                                onChange={(e) => handleChange('amountMax', maskCurrencyInput(e.target.value))}
                             />
                         </div>
 
