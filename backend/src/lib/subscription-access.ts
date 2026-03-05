@@ -6,6 +6,9 @@ import { supabaseAdmin as db } from './supabase';
 const SUBSCRIPTIONS_TABLE = 'app_user_subscriptions';
 const BILLING_EVENTS_TABLE = 'app_billing_events';
 const PLAN_OVERRIDES_TABLE = 'app_user_plan_overrides';
+// Temporary maintenance mode: when false, all premium features stay enabled
+// without changing subscription records/billing internals.
+const SUBSCRIPTION_ENFORCEMENT_ENABLED = false;
 
 export type PremiumFeature =
   | 'web_ai_chat'
@@ -478,13 +481,14 @@ export async function clearUserPlanOverride(uid: string): Promise<void> {
 export async function getUserPlanAccess(uid: string): Promise<UserPlanAccess> {
   const summary = await getUserPlanAccessSummary(uid);
   const { subscriptionStatus, baseHasActivePlan, hasActivePlan, manualOverride } = summary;
-  const features = buildPremiumFeatureFlags(hasActivePlan);
-  const freeWhatsappQuota = await getFreeWhatsAppQuotaState(uid, !hasActivePlan);
+  const effectiveHasActivePlan = SUBSCRIPTION_ENFORCEMENT_ENABLED ? hasActivePlan : true;
+  const features = buildPremiumFeatureFlags(effectiveHasActivePlan);
+  const freeWhatsappQuota = await getFreeWhatsAppQuotaState(uid, SUBSCRIPTION_ENFORCEMENT_ENABLED && !effectiveHasActivePlan);
 
   return {
     subscriptionStatus,
     baseHasActivePlan,
-    hasActivePlan,
+    hasActivePlan: effectiveHasActivePlan,
     manualOverride,
     features,
     freeWhatsappQuota
@@ -544,4 +548,3 @@ export async function adminGrantSubscription(
   assertNoError(error, 'adminGrantSubscription');
   return mapSubscriptionRow(data as DbUserSubscriptionRow);
 }
-

@@ -11,6 +11,10 @@ interface PlanFeatureErrorOptions {
   message?: string;
 }
 
+// Temporary maintenance mode: keep billing/subscription code intact,
+// but bypass premium feature enforcement on protected routes.
+const PLAN_FEATURE_ENFORCEMENT_ENABLED = false;
+
 export function requirePlanFeature(
   feature: PremiumFeature,
   options: PlanFeatureErrorOptions = {}
@@ -22,6 +26,11 @@ export function requirePlanFeature(
     const uid = (req as Request & { uid?: string }).uid;
     if (!uid) {
       res.status(401).json({ error: 'Token de autenticacao ausente.' });
+      return;
+    }
+
+    if (!PLAN_FEATURE_ENFORCEMENT_ENABLED) {
+      next();
       return;
     }
 

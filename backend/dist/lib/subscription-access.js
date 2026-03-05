@@ -24,6 +24,9 @@ const supabase_1 = require("./supabase");
 const SUBSCRIPTIONS_TABLE = 'app_user_subscriptions';
 const BILLING_EVENTS_TABLE = 'app_billing_events';
 const PLAN_OVERRIDES_TABLE = 'app_user_plan_overrides';
+// Temporary maintenance mode: when false, all premium features stay enabled
+// without changing subscription records/billing internals.
+const SUBSCRIPTION_ENFORCEMENT_ENABLED = false;
 function assertNoError(error, context) {
     if (!error)
         return;
@@ -315,12 +318,13 @@ async function clearUserPlanOverride(uid) {
 async function getUserPlanAccess(uid) {
     const summary = await getUserPlanAccessSummary(uid);
     const { subscriptionStatus, baseHasActivePlan, hasActivePlan, manualOverride } = summary;
-    const features = buildPremiumFeatureFlags(hasActivePlan);
-    const freeWhatsappQuota = await (0, daily_ai_quota_1.getFreeWhatsAppQuotaState)(uid, !hasActivePlan);
+    const effectiveHasActivePlan = SUBSCRIPTION_ENFORCEMENT_ENABLED ? hasActivePlan : true;
+    const features = buildPremiumFeatureFlags(effectiveHasActivePlan);
+    const freeWhatsappQuota = await (0, daily_ai_quota_1.getFreeWhatsAppQuotaState)(uid, SUBSCRIPTION_ENFORCEMENT_ENABLED && !effectiveHasActivePlan);
     return {
         subscriptionStatus,
         baseHasActivePlan,
-        hasActivePlan,
+        hasActivePlan: effectiveHasActivePlan,
         manualOverride,
         features,
         freeWhatsappQuota

@@ -153,6 +153,39 @@ function buildDocumentFetchReply(title) {
         'Se quiser outra, me diga uma parte do nome ou da descricao.'
     ].join('\n');
 }
+function getDocumentExtension(mimeType) {
+    const normalized = mimeType.toLowerCase();
+    if (normalized === 'application/pdf')
+        return 'pdf';
+    if (normalized === 'application/zip' ||
+        normalized === 'application/x-zip-compressed' ||
+        normalized === 'multipart/x-zip') {
+        return 'zip';
+    }
+    if (normalized.includes('png'))
+        return 'png';
+    if (normalized.includes('webp'))
+        return 'webp';
+    if (normalized.includes('gif'))
+        return 'gif';
+    if (normalized.includes('bmp'))
+        return 'bmp';
+    if (normalized.includes('heic'))
+        return 'heic';
+    if (normalized.includes('heif'))
+        return 'heif';
+    return 'jpg';
+}
+function buildDocumentFileName(document) {
+    const baseName = document.title
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9_-]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60)
+        .toLowerCase();
+    return `${baseName || `arquivo-${document.id.slice(0, 8)}`}.${getDocumentExtension(document.mimeType)}`;
+}
 const IMAGE_ONLY_FALLBACK_TEXT = 'Analise a imagem enviada. Se for um comprovante, recibo, nota fiscal ou boleto (com valores, datas, nomes de bancos, chave PIX, etc.), extraia os dados financeiros e registre automaticamente a transacao usando add_transaction. Se NAO for um documento financeiro (foto, print, screenshot, meme, etc.), responda pedindo ao usuario um titulo/nome para salvar a imagem como arquivo. NAO registre transacao se nao houver dados financeiros claros na imagem.';
 const DOCUMENT_PENDING_TTL_MS = 10 * 60 * 1000;
 const DOCUMENT_RECENT_LIMIT = 30;
@@ -184,6 +217,7 @@ const FREE_WHATSAPP_LIMIT_REACHED_REPLY = [
     'Assine um plano para continuar usando a IA sem travas e liberar o uso ilimitado.',
     `Entre no seu painel para assinar: ${env_1.env.appPanelUrl}`
 ].join('\n');
+const WHATSAPP_GUEST_UID_PREFIX = 'wa_guest_';
 const SIGNAL_CONSOLE_WARN_FILTERS = new Set([
     'Closing open session in favor of incoming prekey bundle'
 ]);
@@ -193,6 +227,13 @@ const SIGNAL_CONSOLE_INFO_FILTERS = new Set([
 function shouldSuppressConsoleNoise(args, filters) {
     const [firstArg] = args;
     return typeof firstArg === 'string' && filters.has(firstArg);
+}
+function buildWhatsAppGuestUid(phone) {
+    const normalizedPhone = (0, events_1.normalizePhoneNumber)(phone).replace(/\D/g, '');
+    return `${WHATSAPP_GUEST_UID_PREFIX}${normalizedPhone}`;
+}
+function isWhatsAppGuestUid(uid) {
+    return uid.startsWith(WHATSAPP_GUEST_UID_PREFIX);
 }
 function installSignalConsoleNoiseFilter() {
     const globalState = globalThis;
@@ -304,7 +345,7 @@ const COMPOSING_REFRESH_MS = 4000;
 const USER_DEBOUNCE_MS = 1800;
 /** If the same JID hits repeated Bad MAC in a short window, perform a soft reconnect. */
 const BAD_MAC_WINDOW_MS = 2 * 60 * 1000;
-const BAD_MAC_RECONNECT_THRESHOLD = 3;
+const BAD_MAC_RECONNECT_THRESHOLD = 5;
 /** After this many soft reconnects, restart the cycle but preserve auth state. */
 const BAD_MAC_RECONNECT_CYCLE_AFTER = 3;
 /** How long to keep unresolvable-LID messages buffered before discarding. */
@@ -344,6 +385,7 @@ class WhatsAppClient {
     aiCallTimestamps = new Map();
     softReconnectCount = 0;
     connectionEpoch = 0;
+    lastOpenedAt = 0;
     // --- LID message buffer: store messages with unresolved LID for later replay ---
     pendingLidMessages = new Map();
     // --- Message processing queue ---
@@ -695,6 +737,7 @@ class WhatsAppClient {
             this.state = 'open';
             this.connected = true;
             this.lastDisconnectReason = null;
+            this.lastOpenedAt = Date.now();
             this.phone = (0, events_1.jidToPhone)(this.socket?.user?.id) || null;
             this.badMacByJid.clear();
             this.softReconnectCount = 0;
@@ -745,7 +788,10 @@ class WhatsAppClient {
                 code !== baileys_1.DisconnectReason.loggedOut &&
                 code !== baileys_1.DisconnectReason.forbidden;
             if (shouldReconnect) {
-                this.scheduleReconnect();
+                // If connection was open less than 5s, it's likely unstable — back off longer
+                const uptime = this.lastOpenedAt ? Date.now() - this.lastOpenedAt : Infinity;
+                const delay = uptime < 5000 ? 5000 : 2000;
+                this.scheduleReconnect(delay);
             }
         }
     }
@@ -1073,12 +1119,44 @@ class WhatsAppClient {
             }
         }
         if (!binding) {
+            const guestUid = buildWhatsAppGuestUid(remotePhone);
+            try {
+                await (0, firestore_1.bootstrapUserData)(guestUid, {
+                    email: `${guestUid}@whatsapp.local`,
+                    displayName: `WhatsApp ${(0, events_1.normalizePhoneNumber)(remotePhone).slice(-4)}`,
+                    phone: remotePhone
+                });
+                binding = await (0, firestore_1.getPhoneBinding)(remotePhone);
+                if (binding?.uid !== guestUid) {
+                    await (0, firestore_1.savePhoneBinding)(remotePhone, guestUid);
+                    binding = {
+                        phone: (0, events_1.normalizePhoneNumber)(remotePhone),
+                        uid: guestUid,
+                        linkedAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString()
+                    };
+                }
+                bindingJustVerified = true;
+                logger_1.logger.info('MSG_GUEST_PROVISION: provisioned temporary WhatsApp account', {
+                    phone: remotePhone,
+                    uid: guestUid
+                });
+            }
+            catch (guestProvisionError) {
+                logger_1.logger.error('MSG_GUEST_PROVISION_FAIL: unable to provision temporary WhatsApp account', {
+                    phone: remotePhone,
+                    uid: guestUid,
+                    error: guestProvisionError instanceof Error ? guestProvisionError.message : 'unknown'
+                });
+            }
+        }
+        if (!binding) {
             logger_1.logger.info('MSG_UNLINKED: no binding found or allowed, asking user to register', { from: remotePhone });
             await this.handleUnlinkedMessage(replyJid, remotePhone);
             this.rememberInbound(messageId);
             return;
         }
-        const ownerActive = await (0, firebase_user_access_1.isFirebaseUserActive)(binding.uid);
+        const ownerActive = isWhatsAppGuestUid(binding.uid) ? true : await (0, firebase_user_access_1.isFirebaseUserActive)(binding.uid);
         if (!ownerActive) {
             logger_1.logger.warn('MSG_BLOCKED_USER: ignoring inbound WhatsApp message for blocked/unavailable account', {
                 uid: binding.uid,
@@ -1740,12 +1818,26 @@ class WhatsAppClient {
             });
         }
         const reply = buildDocumentFetchReply(selected.title);
-        await this.sendWithRetry(remoteJid, reply, 'auto_reply', ownerUid, { image: { url: signedUrl } });
+        const selectedMimeType = selected.mimeType.trim().toLowerCase();
+        const isImageDocument = selectedMimeType.startsWith('image/');
+        if (isImageDocument) {
+            await this.sendWithRetry(remoteJid, reply, 'auto_reply', ownerUid, { image: { url: signedUrl } });
+        }
+        else {
+            await this.sendWithRetry(remoteJid, reply, 'auto_reply', ownerUid, {
+                document: {
+                    url: signedUrl,
+                    mimeType: selectedMimeType || 'application/octet-stream',
+                    fileName: buildDocumentFileName(selected)
+                }
+            });
+        }
         logger_1.logger.info('DOC_FETCH_SEND_SUCCESS', {
             uid: ownerUid,
             phone: remotePhone,
             documentId: selected.id,
-            title: selected.title
+            title: selected.title,
+            mimeType: selectedMimeType || null
         });
         await this.appendConversationMessage(ownerUid, remotePhone, {
             role: 'user',
@@ -1753,7 +1845,7 @@ class WhatsAppClient {
         });
         await this.appendConversationMessage(ownerUid, remotePhone, {
             role: 'assistant',
-            content: `[Imagem Enviada] ${reply}`
+            content: isImageDocument ? `[Imagem Enviada] ${reply}` : `[Arquivo Enviado] ${reply}`
         });
     }
     /**
@@ -1919,7 +2011,16 @@ class WhatsAppClient {
                         });
                     }
                 }
-                const payload = customOptions?.image ? { image: { url: customOptions.image.url }, caption: text } : { text };
+                const payload = customOptions?.document
+                    ? {
+                        document: { url: customOptions.document.url },
+                        mimetype: customOptions.document.mimeType,
+                        fileName: customOptions.document.fileName,
+                        caption: text
+                    }
+                    : customOptions?.image
+                        ? { image: { url: customOptions.image.url }, caption: text }
+                        : { text };
                 const response = await this.socket.sendMessage(jid, payload);
                 if (response?.key?.id && response.message) {
                     this.sentMessagesCache.set(response.key.id, response.message);
@@ -1943,7 +2044,7 @@ class WhatsAppClient {
                     timestamp: now,
                     waTimestamp: null,
                     status: 'sent',
-                    rawType: 'conversation',
+                    rawType: customOptions?.document ? 'documentMessage' : customOptions?.image ? 'imageMessage' : 'conversation',
                     createdAt: now,
                     metadata: {
                         fromMe: true,
@@ -2220,16 +2321,17 @@ class WhatsAppClient {
         const messageId = key?.id ?? 'unknown';
         const now = Date.now();
         const previous = this.badMacByJid.get(remoteJid);
-        const count = previous && now - previous.lastAt <= BAD_MAC_WINDOW_MS
-            ? previous.count + 1
-            : 1;
-        this.badMacByJid.set(remoteJid, { count, lastAt: now });
+        const isWithinWindow = previous && now - previous.lastAt <= BAD_MAC_WINDOW_MS;
+        const count = isWithinWindow ? previous.count + 1 : 1;
+        const previousCleared = isWithinWindow ? (previous.cleared ?? 0) : 0;
+        this.badMacByJid.set(remoteJid, { count, lastAt: now, cleared: previousCleared });
         logger_1.logger.warn('Bad MAC counter updated', {
             slotId: this.slotId,
             remoteJid,
             messageId,
             count,
             threshold: BAD_MAC_RECONNECT_THRESHOLD,
+            cleared: previousCleared,
             softReconnectCount: this.softReconnectCount,
             reconnectCycleAfter: BAD_MAC_RECONNECT_CYCLE_AFTER,
             errorMessage
@@ -2237,9 +2339,21 @@ class WhatsAppClient {
         if (count < BAD_MAC_RECONNECT_THRESHOLD) {
             return;
         }
-        this.badMacByJid.set(remoteJid, { count: 0, lastAt: now });
+        const newCleared = previousCleared + 1;
+        this.badMacByJid.set(remoteJid, { count: 0, lastAt: now, cleared: newCleared });
         await this.clearSignalSessionsAfterBadMac(message);
-        // Repeated decrypt failures should not wipe the linked-device auth state.
+        // First round: just clear sessions and let Baileys built-in retry mechanism
+        // recover the decrypt (retry receipt → sender re-sends with prekey bundle).
+        // Do NOT reconnect — that kills the socket and prevents the retry from completing.
+        if (newCleared <= 1) {
+            logger_1.logger.info('Bad MAC sessions cleared, awaiting Baileys retry (no reconnect)', {
+                slotId: this.slotId,
+                remoteJid,
+                clearedRound: newCleared
+            });
+            return;
+        }
+        // Second+ round: Baileys retry didn't fix it. Now escalate to soft reconnect.
         if (this.softReconnectCount >= BAD_MAC_RECONNECT_CYCLE_AFTER) {
             logger_1.logger.error('BAD_MAC_ESCALATION: repeated decrypt failures detected, preserving auth and recycling socket', {
                 slotId: this.slotId,
@@ -2670,7 +2784,9 @@ class WhatsAppClient {
             });
         }
         this.socket = null;
-        this.scheduleReconnect(1500);
+        // Exponential backoff: 3s → 6s → 12s → capped at 15s
+        const delay = Math.min(3000 * Math.pow(2, this.softReconnectCount - 1), 15000);
+        this.scheduleReconnect(delay);
     }
     mapDisconnectReason(code) {
         if (code === null)

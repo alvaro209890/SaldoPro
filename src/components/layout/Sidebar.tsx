@@ -15,7 +15,6 @@ import {
     Repeat,
     Images,
     Target,
-    CreditCard,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -33,7 +32,6 @@ const NAV_ITEMS = [
     { label: 'Recorrentes', path: '/app/recurring', icon: Repeat },
     { label: 'Metas', path: '/app/goals', icon: Target },
     { label: 'Imagens', path: '/app/documents', icon: Images },
-    { label: 'Planos', path: '/app/plans', icon: CreditCard },
     { label: 'Configurações', path: '/app/settings', icon: Settings },
 ];
 

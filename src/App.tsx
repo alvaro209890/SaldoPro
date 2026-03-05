@@ -1,7 +1,6 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { ProtectedRoute } from '@/components/layout/ProtectedRoute';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { PlanFeatureGate } from '@/components/layout/PlanFeatureGate';
 
 // Pages
 import { Login } from '@/pages/Login';
@@ -17,7 +16,6 @@ import { Reminders } from '@/pages/Reminders';
 import { RecurringTransactions } from '@/pages/RecurringTransactions';
 import { Documents } from '@/pages/Documents';
 import { Goals } from '@/pages/Goals';
-import { Plans } from '@/pages/Plans';
 
 export function App() {
     return (
@@ -35,45 +33,12 @@ export function App() {
                     <Route path="categories" element={<Categories />} />
                     <Route path="reports" element={<Reports />} />
                     <Route path="settings" element={<Settings />} />
-                    <Route
-                        path="ai"
-                        element={
-                            <PlanFeatureGate
-                                feature="webAiChat"
-                                title="A IA do painel exige um plano ativo"
-                                description="Assine um plano premium para desbloquear o chat com IA no painel. A funcionalidade fica disponivel assim que o pagamento for confirmado."
-                            >
-                                <AIAssistant />
-                            </PlanFeatureGate>
-                        }
-                    />
+                    <Route path="ai" element={<AIAssistant />} />
                     <Route path="reminders" element={<Reminders />} />
                     <Route path="recurring" element={<RecurringTransactions />} />
-                    <Route
-                        path="documents"
-                        element={
-                            <PlanFeatureGate
-                                feature="documentStorage"
-                                title="A area de arquivos faz parte do premium"
-                                description="Imagens, PDFs e ZIPs so ficam disponiveis com assinatura ativa. Assine um plano para liberar."
-                            >
-                                <Documents />
-                            </PlanFeatureGate>
-                        }
-                    />
-                    <Route
-                        path="goals"
-                        element={
-                            <PlanFeatureGate
-                                feature="goals"
-                                title="A aba de metas exige assinatura"
-                                description="As metas inteligentes ficam disponiveis somente com plano premium ativo. Assine para desbloquear."
-                            >
-                                <Goals />
-                            </PlanFeatureGate>
-                        }
-                    />
-                    <Route path="plans" element={<Plans />} />
+                    <Route path="documents" element={<Documents />} />
+                    <Route path="goals" element={<Goals />} />
+                    <Route path="plans" element={<Navigate to="/app/dashboard" replace />} />
                 </Route>
             </Route>
 

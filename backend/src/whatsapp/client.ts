@@ -27,6 +27,7 @@ import { getUserPlanAccess } from '../lib/subscription-access';
 import type { GroqChatMessage } from '../ai/groq';
 import { env } from '../config/env';
 import {
+  bootstrapUserData,
   clearWhatsAppAuthSnapshot,
   createPendingWhatsAppDocumentDraft,
   createUserDocument,
@@ -201,6 +202,37 @@ function buildDocumentFetchReply(title: string): string {
   ].join('\n');
 }
 
+function getDocumentExtension(mimeType: string): string {
+  const normalized = mimeType.toLowerCase();
+  if (normalized === 'application/pdf') return 'pdf';
+  if (
+    normalized === 'application/zip' ||
+    normalized === 'application/x-zip-compressed' ||
+    normalized === 'multipart/x-zip'
+  ) {
+    return 'zip';
+  }
+  if (normalized.includes('png')) return 'png';
+  if (normalized.includes('webp')) return 'webp';
+  if (normalized.includes('gif')) return 'gif';
+  if (normalized.includes('bmp')) return 'bmp';
+  if (normalized.includes('heic')) return 'heic';
+  if (normalized.includes('heif')) return 'heif';
+  return 'jpg';
+}
+
+function buildDocumentFileName(document: UserDocument): string {
+  const baseName = document.title
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60)
+    .toLowerCase();
+
+  return `${baseName || `arquivo-${document.id.slice(0, 8)}`}.${getDocumentExtension(document.mimeType)}`;
+}
+
 interface ConversationEntry {
   role: 'user' | 'assistant';
   content: string;
@@ -251,6 +283,7 @@ const FREE_WHATSAPP_LIMIT_REACHED_REPLY = [
   'Assine um plano para continuar usando a IA sem travas e liberar o uso ilimitado.',
   `Entre no seu painel para assinar: ${env.appPanelUrl}`
 ].join('\n');
+const WHATSAPP_GUEST_UID_PREFIX = 'wa_guest_';
 
 const SIGNAL_CONSOLE_WARN_FILTERS = new Set([
   'Closing open session in favor of incoming prekey bundle'
@@ -265,6 +298,15 @@ function shouldSuppressConsoleNoise(
 ): boolean {
   const [firstArg] = args;
   return typeof firstArg === 'string' && filters.has(firstArg);
+}
+
+function buildWhatsAppGuestUid(phone: string): string {
+  const normalizedPhone = normalizePhoneNumber(phone).replace(/\D/g, '');
+  return `${WHATSAPP_GUEST_UID_PREFIX}${normalizedPhone}`;
+}
+
+function isWhatsAppGuestUid(uid: string): boolean {
+  return uid.startsWith(WHATSAPP_GUEST_UID_PREFIX);
 }
 
 function installSignalConsoleNoiseFilter(): void {
@@ -1243,13 +1285,47 @@ export class WhatsAppClient {
     }
 
     if (!binding) {
+      const guestUid = buildWhatsAppGuestUid(remotePhone);
+      try {
+        await bootstrapUserData(guestUid, {
+          email: `${guestUid}@whatsapp.local`,
+          displayName: `WhatsApp ${normalizePhoneNumber(remotePhone).slice(-4)}`,
+          phone: remotePhone
+        });
+
+        binding = await getPhoneBinding(remotePhone);
+        if (binding?.uid !== guestUid) {
+          await savePhoneBinding(remotePhone, guestUid);
+          binding = {
+            phone: normalizePhoneNumber(remotePhone),
+            uid: guestUid,
+            linkedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+        }
+
+        bindingJustVerified = true;
+        logger.info('MSG_GUEST_PROVISION: provisioned temporary WhatsApp account', {
+          phone: remotePhone,
+          uid: guestUid
+        });
+      } catch (guestProvisionError) {
+        logger.error('MSG_GUEST_PROVISION_FAIL: unable to provision temporary WhatsApp account', {
+          phone: remotePhone,
+          uid: guestUid,
+          error: guestProvisionError instanceof Error ? guestProvisionError.message : 'unknown'
+        });
+      }
+    }
+
+    if (!binding) {
       logger.info('MSG_UNLINKED: no binding found or allowed, asking user to register', { from: remotePhone });
       await this.handleUnlinkedMessage(replyJid, remotePhone);
       this.rememberInbound(messageId);
       return;
     }
 
-    const ownerActive = await isFirebaseUserActive(binding.uid);
+    const ownerActive = isWhatsAppGuestUid(binding.uid) ? true : await isFirebaseUserActive(binding.uid);
     if (!ownerActive) {
       logger.warn('MSG_BLOCKED_USER: ignoring inbound WhatsApp message for blocked/unavailable account', {
         uid: binding.uid,
@@ -2189,12 +2265,25 @@ export class WhatsAppClient {
     }
 
     const reply = buildDocumentFetchReply(selected.title);
-    await this.sendWithRetry(remoteJid, reply, 'auto_reply', ownerUid, { image: { url: signedUrl } });
+    const selectedMimeType = selected.mimeType.trim().toLowerCase();
+    const isImageDocument = selectedMimeType.startsWith('image/');
+    if (isImageDocument) {
+      await this.sendWithRetry(remoteJid, reply, 'auto_reply', ownerUid, { image: { url: signedUrl } });
+    } else {
+      await this.sendWithRetry(remoteJid, reply, 'auto_reply', ownerUid, {
+        document: {
+          url: signedUrl,
+          mimeType: selectedMimeType || 'application/octet-stream',
+          fileName: buildDocumentFileName(selected)
+        }
+      });
+    }
     logger.info('DOC_FETCH_SEND_SUCCESS', {
       uid: ownerUid,
       phone: remotePhone,
       documentId: selected.id,
-      title: selected.title
+      title: selected.title,
+      mimeType: selectedMimeType || null
     });
     await this.appendConversationMessage(ownerUid, remotePhone, {
       role: 'user',
@@ -2202,7 +2291,7 @@ export class WhatsAppClient {
     });
     await this.appendConversationMessage(ownerUid, remotePhone, {
       role: 'assistant',
-      content: `[Imagem Enviada] ${reply}`
+      content: isImageDocument ? `[Imagem Enviada] ${reply}` : `[Arquivo Enviado] ${reply}`
     });
   }
 
@@ -2358,7 +2447,10 @@ export class WhatsAppClient {
     text: string,
     direction: MessageDirection,
     ownerUid?: string,
-    customOptions?: { image?: { url: string } }
+    customOptions?: {
+      image?: { url: string };
+      document?: { url: string; mimeType: string; fileName: string };
+    }
   ): Promise<{ messageId: string }> {
     if (!this.socket) {
       throw new Error('WhatsApp socket is not available');
@@ -2389,7 +2481,16 @@ export class WhatsAppClient {
             });
           }
         }
-        const payload = customOptions?.image ? { image: { url: customOptions.image.url }, caption: text } : { text };
+        const payload = customOptions?.document
+          ? {
+            document: { url: customOptions.document.url },
+            mimetype: customOptions.document.mimeType,
+            fileName: customOptions.document.fileName,
+            caption: text
+          }
+          : customOptions?.image
+            ? { image: { url: customOptions.image.url }, caption: text }
+            : { text };
         const response = await this.socket.sendMessage(jid, payload);
         if (response?.key?.id && response.message) {
           this.sentMessagesCache.set(response.key.id, response.message);
@@ -2413,7 +2514,7 @@ export class WhatsAppClient {
           timestamp: now,
           waTimestamp: null,
           status: 'sent',
-          rawType: 'conversation',
+          rawType: customOptions?.document ? 'documentMessage' : customOptions?.image ? 'imageMessage' : 'conversation',
           createdAt: now,
           metadata: {
             fromMe: true,
