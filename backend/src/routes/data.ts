@@ -41,6 +41,7 @@ import {
   addUserGoal,
   updateUserGoal,
   deleteUserGoal,
+  DuplicateCategoryError,
 } from '../lib/firestore';
 import { generateFinancialGoals } from '../ai/groq';
 import {
@@ -279,7 +280,7 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
     res.json(categories);
   });
 
-  router.post('/categories', async (req: Request, res: Response) => {
+  router.post('/categories', async (req: Request, res: Response, next: NextFunction) => {
     const uid = getUid(req);
     const body = (req.body ?? {}) as { name?: unknown; type?: unknown; color?: unknown; icon?: unknown };
 
@@ -292,21 +293,37 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
       return;
     }
 
-    const id = await addUserCategory(uid, { name, type, color, icon });
-    res.json({ id });
+    try {
+      const id = await addUserCategory(uid, { name, type, color, icon });
+      res.json({ id });
+    } catch (error) {
+      if (error instanceof DuplicateCategoryError) {
+        res.status(409).json({ error: error.message });
+        return;
+      }
+      next(error);
+    }
   });
 
-  router.patch('/categories/:id', async (req: Request, res: Response) => {
+  router.patch('/categories/:id', async (req: Request, res: Response, next: NextFunction) => {
     const uid = getUid(req);
     const categoryId = req.params.id;
     const body = (req.body ?? {}) as { name?: unknown; type?: unknown; color?: unknown; icon?: unknown };
-    await updateUserCategory(uid, categoryId, {
-      ...(typeof body.name === 'string' ? { name: body.name } : {}),
-      ...(body.type === 'income' || body.type === 'expense' ? { type: body.type } : {}),
-      ...(typeof body.color === 'string' ? { color: body.color } : {}),
-      ...(typeof body.icon === 'string' ? { icon: body.icon } : {})
-    });
-    res.json({ ok: true });
+    try {
+      await updateUserCategory(uid, categoryId, {
+        ...(typeof body.name === 'string' ? { name: body.name } : {}),
+        ...(body.type === 'income' || body.type === 'expense' ? { type: body.type } : {}),
+        ...(typeof body.color === 'string' ? { color: body.color } : {}),
+        ...(typeof body.icon === 'string' ? { icon: body.icon } : {})
+      });
+      res.json({ ok: true });
+    } catch (error) {
+      if (error instanceof DuplicateCategoryError) {
+        res.status(409).json({ error: error.message });
+        return;
+      }
+      next(error);
+    }
   });
 
   router.delete('/categories/:id', async (req: Request, res: Response) => {

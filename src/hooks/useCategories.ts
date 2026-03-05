@@ -9,6 +9,11 @@ import {
 import type { Category } from '@/types';
 import { toast } from 'sonner';
 
+function getErrorMessage(error: unknown, fallback: string): string {
+    if (error instanceof Error && error.message.trim()) return error.message;
+    return fallback;
+}
+
 export function useCategories() {
     const { user } = useAuth();
     const [categories, setCategories] = useState<Category[]>([]);
@@ -43,7 +48,7 @@ export function useCategories() {
             toast.success('Categoria adicionada!');
         } catch (error) {
             console.error(error);
-            toast.error('Erro ao adicionar categoria.');
+            toast.error(getErrorMessage(error, 'Erro ao adicionar categoria.'));
             throw error;
         }
     };
@@ -55,7 +60,7 @@ export function useCategories() {
             toast.success('Categoria atualizada!');
         } catch (error) {
             console.error(error);
-            toast.error('Erro ao atualizar categoria.');
+            toast.error(getErrorMessage(error, 'Erro ao atualizar categoria.'));
             throw error;
         }
     };
@@ -67,7 +72,7 @@ export function useCategories() {
             toast.success('Categoria removida!');
         } catch (error) {
             console.error(error);
-            toast.error('Erro ao remover categoria.');
+            toast.error(getErrorMessage(error, 'Erro ao remover categoria.'));
             throw error;
         }
     };

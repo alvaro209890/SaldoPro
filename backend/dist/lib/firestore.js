@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.DuplicateCategoryError = void 0;
 exports.saveWhatsAppMessage = saveWhatsAppMessage;
 exports.inboundMessageExists = inboundMessageExists;
 exports.saveMessageSafe = saveMessageSafe;
@@ -89,6 +90,13 @@ function assertNoError(error, context) {
         return;
     throw new Error(`${context}: ${error.message}`);
 }
+class DuplicateCategoryError extends Error {
+    constructor(message = 'Categoria ja existe.') {
+        super(message);
+        this.name = 'DuplicateCategoryError';
+    }
+}
+exports.DuplicateCategoryError = DuplicateCategoryError;
 function toNumber(value) {
     if (typeof value === 'number')
         return value;
@@ -554,7 +562,7 @@ async function addUserCategory(uid, input) {
         .limit(1);
     assertNoError(existingError, 'addUserCategory.exists');
     if ((existing ?? []).length > 0) {
-        throw new Error('Categoria ja existe.');
+        throw new DuplicateCategoryError();
     }
     const { data, error } = await supabase_1.supabaseAdmin
         .from('app_categories')
@@ -599,7 +607,7 @@ async function updateUserCategory(uid, categoryId, changes) {
             .limit(1);
         assertNoError(existingError, 'updateUserCategory.exists');
         if ((existing ?? []).length > 0) {
-            throw new Error('Categoria ja existe.');
+            throw new DuplicateCategoryError();
         }
     }
     const updates = {};

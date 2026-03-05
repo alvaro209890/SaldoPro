@@ -1001,88 +1001,104 @@ function buildDeletedReminderMessage(receipt, aiReply) {
 function goalPriorityLabel(priority) {
     switch (priority) {
         case 'high':
-            return 'Alta';
+            return '🔴 Alta';
         case 'low':
-            return 'Baixa';
+            return '🟢 Baixa';
         default:
-            return 'Media';
+            return '🟡 Média';
     }
 }
 function goalStatusLabel(status) {
     switch (status) {
         case 'completed':
-            return 'Concluida';
+            return '✅ Concluída';
         case 'cancelled':
-            return 'Cancelada';
+            return '❌ Cancelada';
         default:
-            return 'Ativa';
+            return '🔄 Ativa';
     }
+}
+function buildProgressBar(current, target) {
+    const pct = target > 0 ? Math.min(100, (current / target) * 100) : 0;
+    const filled = Math.round(pct / 10);
+    const empty = 10 - filled;
+    return '▓'.repeat(filled) + '░'.repeat(empty) + ` ${pct.toFixed(0)}%`;
 }
 function buildGoalProgressLine(receipt, currency) {
     if (typeof receipt.targetAmount === 'number' && receipt.targetAmount > 0) {
-        const pct = Math.min(100, (receipt.currentAmount / receipt.targetAmount) * 100);
         const remaining = Math.max(0, receipt.targetAmount - receipt.currentAmount);
-        return `Progresso: ${formatCurrency(receipt.currentAmount, currency)} de ${formatCurrency(receipt.targetAmount, currency)} (${pct.toFixed(0)}%) | Faltam ${formatCurrency(remaining, currency)}`;
+        return [
+            `💰 ${formatCurrency(receipt.currentAmount, currency)} de ${formatCurrency(receipt.targetAmount, currency)}`,
+            `📊 ${buildProgressBar(receipt.currentAmount, receipt.targetAmount)}`,
+            `📌 Faltam *${formatCurrency(remaining, currency)}*`
+        ].join('\n');
     }
-    return `Progresso atual: ${formatCurrency(receipt.currentAmount, currency)}`;
+    return `💰 Acumulado: *${formatCurrency(receipt.currentAmount, currency)}*`;
 }
 function buildGoalMetaDetails(receipt, currency) {
     const lines = [
         `*${receipt.title}*`,
+        receipt.description ? `_${receipt.description}_` : '',
+        '',
         buildGoalProgressLine(receipt, currency),
-        `Status: ${goalStatusLabel(receipt.status)} | Prioridade: ${goalPriorityLabel(receipt.priority)}`
-    ];
+        '',
+        `⚡ Prioridade: ${goalPriorityLabel(receipt.priority)}`,
+        `📋 Status: ${goalStatusLabel(receipt.status)}`
+    ].filter(Boolean);
     if (receipt.deadline) {
-        lines.push(`Prazo: ${formatDateBRFromYmd(receipt.deadline)}`);
-    }
-    if (receipt.description) {
-        lines.push(`Detalhe: ${receipt.description}`);
+        lines.push(`📅 Prazo: *${formatDateBRFromYmd(receipt.deadline)}*`);
     }
     return lines;
 }
 function buildAddedGoalMessage(receipt, aiReply, currency) {
     const lines = [
-        '🎯 *Meta criada*',
+        '🎯 *Nova meta criada!*',
+        '━━━━━━━━━━━━━━━━━',
         '',
         ...buildGoalMetaDetails(receipt, currency)
     ];
     const cleanAiReply = aiReply.trim();
     if (cleanAiReply.length > 0) {
-        lines.push('', cleanAiReply);
+        lines.push('', '━━━━━━━━━━━━━━━━━', '', cleanAiReply);
     }
-    lines.push('', 'Se quiser, posso atualizar o progresso, alterar os dados, concluir ou excluir essa meta.');
+    lines.push('', '━━━━━━━━━━━━━━━━━', '💡 _Posso atualizar o progresso, alterar dados, concluir ou excluir essa meta. É só pedir!_');
     return lines.join('\n');
 }
 function buildUpdatedGoalMessage(receipt, aiReply, currency) {
+    const changedLabels = receipt.changedFields.map(goalFieldLabel).join(', ');
     const lines = [
-        '✏️ *Meta atualizada*',
+        '✏️ *Meta atualizada!*',
+        '━━━━━━━━━━━━━━━━━',
         '',
         ...buildGoalMetaDetails(receipt, currency),
-        `Campos alterados: ${receipt.changedFields.join(', ')}`
+        '',
+        `🔄 Alterado: _${changedLabels}_`
     ];
     const cleanAiReply = aiReply.trim();
     if (cleanAiReply.length > 0) {
-        lines.push('', cleanAiReply);
+        lines.push('', '━━━━━━━━━━━━━━━━━', '', cleanAiReply);
     }
-    lines.push('', 'Se quiser, tambem posso concluir, reativar, cancelar ou ajustar novamente essa meta.');
+    lines.push('', '━━━━━━━━━━━━━━━━━', '💡 _Posso concluir, reativar, cancelar ou ajustar essa meta novamente._');
     return lines.join('\n');
 }
 function buildCompletedGoalMessage(receipt, aiReply, currency) {
     const lines = [
-        '✅ *Meta concluida*',
+        '🏆 *Meta concluída! Parabéns!*',
+        '━━━━━━━━━━━━━━━━━',
         '',
         ...buildGoalMetaDetails(receipt, currency)
     ];
     const cleanAiReply = aiReply.trim();
     if (cleanAiReply.length > 0) {
-        lines.push('', cleanAiReply);
+        lines.push('', '━━━━━━━━━━━━━━━━━', '', cleanAiReply);
     }
-    lines.push('', 'Se quiser, posso reativar essa meta ou criar a proxima etapa dela.');
+    lines.push('', '━━━━━━━━━━━━━━━━━', '🚀 _Que tal criar a próxima meta? Posso reativar essa ou montar uma nova etapa!_');
     return lines.join('\n');
 }
 function buildDeletedGoalMessage(receipt, aiReply) {
     const lines = [
-        '🗑️ *Meta excluida*',
+        '🗑️ *Meta excluída*',
+        '━━━━━━━━━━━━━━━━━',
         '',
         `*${receipt.title}*`
     ];
@@ -1090,7 +1106,7 @@ function buildDeletedGoalMessage(receipt, aiReply) {
     if (cleanAiReply.length > 0) {
         lines.push('', cleanAiReply);
     }
-    lines.push('', 'Se quiser, posso criar outra meta no lugar ou montar um novo plano.');
+    lines.push('', '━━━━━━━━━━━━━━━━━', '💡 _Posso criar outra meta no lugar ou montar um novo plano financeiro para você!_');
     return lines.join('\n');
 }
 function buildMultiActionMessage(results, aiReply, currency) {
@@ -1136,22 +1152,30 @@ function buildMultiActionMessage(results, aiReply, currency) {
         }
         if (result.kind === 'added_goal') {
             hasGoalActions = true;
-            lines.push(`- Meta criada: ${result.receipt.title}`);
+            const r = result.receipt;
+            const progress = typeof r.targetAmount === 'number' && r.targetAmount > 0
+                ? ` (${formatCurrency(r.currentAmount, currency)} de ${formatCurrency(r.targetAmount, currency)})`
+                : '';
+            lines.push(`- 🎯 Meta criada: *${r.title}*${progress}`);
             continue;
         }
         if (result.kind === 'updated_goal') {
             hasGoalActions = true;
-            lines.push(`- Meta atualizada: ${result.receipt.title}`);
+            const r = result.receipt;
+            const progress = typeof r.targetAmount === 'number' && r.targetAmount > 0
+                ? ` (${Math.min(100, (r.currentAmount / r.targetAmount) * 100).toFixed(0)}%)`
+                : '';
+            lines.push(`- ✏️ Meta atualizada: *${r.title}*${progress}`);
             continue;
         }
         if (result.kind === 'completed_goal') {
             hasGoalActions = true;
-            lines.push(`- Meta concluida: ${result.receipt.title}`);
+            lines.push(`- 🏆 Meta concluída: *${result.receipt.title}*`);
             continue;
         }
         if (result.kind === 'deleted_goal') {
             hasGoalActions = true;
-            lines.push(`- Meta excluida: ${result.receipt.title}`);
+            lines.push(`- 🗑️ Meta excluída: *${result.receipt.title}*`);
             continue;
         }
         if (result.kind === 'updated') {
@@ -1179,7 +1203,7 @@ function buildMultiActionMessage(results, aiReply, currency) {
         lines.push('', 'Se quiser, posso concluir, reabrir, editar ou excluir outros lembretes.');
     }
     else if (hasGoalActions) {
-        lines.push('', 'Se quiser, posso atualizar progresso, concluir, reativar, cancelar ou excluir outras metas.');
+        lines.push('', '💡 _Posso atualizar progresso, concluir, reativar ou gerenciar outras metas._');
     }
     return lines.join('\n');
 }
@@ -1410,9 +1434,7 @@ async function executeAction(uid, action, categories, options) {
             if (!Number.isFinite(action.amount) || action.amount <= 0) {
                 return { kind: 'none' };
             }
-            const categoryExists = categories.find((c) => c.id === action.categoryId);
-            const fallbackCategory = categories.find((c) => c.type === action.type);
-            const category = categoryExists?.id ?? fallbackCategory?.id;
+            const category = (0, groq_1.resolveBestCategoryId)(action.categoryId, categories, action.type, action.description || '', options.latestUserMessageText);
             if (!category) {
                 return { kind: 'none' };
             }
@@ -1508,9 +1530,7 @@ async function executeAction(uid, action, categories, options) {
             if (!Number.isFinite(action.amount) || action.amount <= 0) {
                 return { kind: 'none' };
             }
-            const categoryExists = categories.find((c) => c.id === action.categoryId);
-            const fallbackCategory = categories.find((c) => c.type === action.type);
-            const category = categoryExists?.id ?? fallbackCategory?.id;
+            const category = (0, groq_1.resolveBestCategoryId)(action.categoryId, categories, action.type, action.description || '', options.latestUserMessageText);
             if (!category) {
                 return { kind: 'none' };
             }

@@ -73,6 +73,12 @@ interface SubscriptionRecord {
   createdAt: string;
   updatedAt: string;
 }
+interface MaintenanceSignal {
+  id: string;
+  level: 'critical' | 'warning' | 'info';
+  title: string;
+  detail: string;
+}
 type Tab = 'overview' | 'operations' | 'users' | 'storage' | 'subscriptions' | 'maintenance';
 type CleanupCategory = 'whatsapp_messages' | 'chat_sessions' | 'old_reminders' | 'expired_pending_docs' | 'ai_quotas' | 'billing_events';
 interface CleanupHistoryItem { id: string; timestamp: string; cutoffDate: string; categories: CleanupCategory[]; counts: Record<string, number>; totalDeleted: number; }
@@ -106,6 +112,18 @@ function fmtDate(v: string | null) {
 }
 function fmtUptime(s: number) { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return `${h}h ${m}m`; }
 function fmtCurrency(v: number, c = 'BRL') { return c === 'BRL' ? `R$ ${v.toFixed(2).replace('.', ',')}` : `${c} ${v.toFixed(2)}`; }
+function daysSince(v: string | null): number | null {
+  if (!v) return null;
+  const p = Date.parse(v);
+  if (!Number.isFinite(p)) return null;
+  return Math.max(0, Math.floor((Date.now() - p) / 86400000));
+}
+function daysUntil(v: string | null): number | null {
+  if (!v) return null;
+  const p = Date.parse(v);
+  if (!Number.isFinite(p)) return null;
+  return Math.ceil((p - Date.now()) / 86400000);
+}
 function fmtBytes(v: number) {
   if (v <= 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -304,6 +322,11 @@ export function App() {
 
   useEffect(() => { setDm(''); setDmOk(false); }, [selUid]);
 
+  useEffect(() => {
+    if (tab !== 'maintenance' || !token || subscriptions.length > 0) return;
+    void loadSubscriptions();
+  }, [tab, token, subscriptions.length]);
+
   /* Cleanup functions */
   function toggleCleanupCat(cat: CleanupCategory) {
     setCleanupCats(prev => { const n = new Set(prev); n.has(cat) ? n.delete(cat) : n.add(cat); return n; });
@@ -420,6 +443,20 @@ export function App() {
     } catch { }
   }
 
+  function openMaintenanceTab() {
+    setTab('maintenance');
+    void loadCleanupHistory();
+    void loadSubscriptions();
+  }
+
+  async function refreshMaintenanceData() {
+    await Promise.allSettled([
+      refresh(),
+      loadCleanupHistory(),
+      loadSubscriptions()
+    ]);
+  }
+
   async function grantAccess(e: FormEvent) {
     e.preventDefault();
     if (!token || !grantUid || grantDays < 1) return;
@@ -509,6 +546,151 @@ export function App() {
       };
     });
   }, [storageUsage, users]);
+
+  const usersWithoutWhatsApp = users.filter((u) => u.whatsappAllowedNumbers.length === 0).length;
+  const inactive7dUsers = users.filter((u) => isInactive(u.metrics.lastWhatsAppMessageAt)).length;
+  const inactive30dUsers = users.filter((u) => {
+    const days = daysSince(u.metrics.lastWhatsAppMessageAt);
+    return days != null && days >= 30;
+  }).length;
+  const blockedUsers = users.filter((u) => u.blocked).length;
+  const pendingStorageRows = useMemo(
+    () => storageRows.filter((row) => row.pendingObjects > 0).sort((a, b) => b.pendingBytes - a.pendingBytes),
+    [storageRows]
+  );
+  const topInactiveUsers = useMemo(() => {
+    return users
+      .map((u) => ({ user: u, days: daysSince(u.metrics.lastWhatsAppMessageAt) }))
+      .filter((entry): entry is { user: User; days: number } => typeof entry.days === 'number' && entry.days >= 7)
+      .sort((a, b) => b.days - a.days)
+      .slice(0, 8);
+  }, [users]);
+  const pendingSubscriptions = subscriptions.filter((s) => s.status === 'pending');
+  const expiringSubscriptions7d = subscriptions.filter((s) => {
+    if (s.status !== 'authorized') return false;
+    const d = daysUntil(s.nextBillingDate);
+    return d != null && d >= 0 && d <= 7;
+  });
+  const riskySubscriptions = useMemo(() => {
+    const userByUid = new Map(users.map((u) => [u.uid, u] as const));
+    return subscriptions
+      .filter((s) => {
+        if (s.status === 'pending') return true;
+        if (s.status !== 'authorized') return false;
+        const d = daysUntil(s.nextBillingDate);
+        return d != null && d >= 0 && d <= 7;
+      })
+      .map((s) => {
+        const u = userByUid.get(s.uid);
+        return {
+          ...s,
+          displayName: u?.displayName || 'Sem nome',
+          email: u?.email ?? s.payerEmail,
+          daysRemaining: daysUntil(s.nextBillingDate)
+        };
+      })
+      .sort((a, b) => {
+        const aPriority = a.status === 'pending' ? -1 : (a.daysRemaining ?? 999);
+        const bPriority = b.status === 'pending' ? -1 : (b.daysRemaining ?? 999);
+        return aPriority - bPriority;
+      })
+      .slice(0, 10);
+  }, [subscriptions, users]);
+  const cleanupTrendData = useMemo(() => {
+    return [...cleanupHistory]
+      .slice(0, 8)
+      .reverse()
+      .map((entry, index) => {
+        const dt = Date.parse(entry.timestamp);
+        return {
+          name: Number.isFinite(dt) ? format(new Date(dt), 'dd/MM', { locale: ptBR }) : `Run ${index + 1}`,
+          removidos: entry.totalDeleted
+        };
+      });
+  }, [cleanupHistory]);
+  const cleanupRuns30d = cleanupHistory.filter((entry) => {
+    const p = Date.parse(entry.timestamp);
+    return Number.isFinite(p) && p >= Date.now() - 30 * 86400000;
+  }).length;
+  const cleanupDeleted30d = cleanupHistory
+    .filter((entry) => {
+      const p = Date.parse(entry.timestamp);
+      return Number.isFinite(p) && p >= Date.now() - 30 * 86400000;
+    })
+    .reduce((sum, entry) => sum + entry.totalDeleted, 0);
+  const maintenanceSignals = useMemo<MaintenanceSignal[]>(() => {
+    const signals: MaintenanceSignal[] = [];
+    const errors15m = overview?.backend.alerts.errors15m ?? 0;
+    const warnings15m = overview?.backend.alerts.warnings15m ?? 0;
+    const pendingObjects = storageUsage?.storage.pendingObjects ?? 0;
+    const unassignedObjects = storageUsage?.storage.unassignedObjects ?? 0;
+
+    if (errors15m > 0) {
+      signals.push({
+        id: 'errors15m',
+        level: 'critical',
+        title: 'Erros operacionais recentes',
+        detail: `${errors15m} erro(s) nos ultimos 15 minutos.`
+      });
+    }
+    if (warnings15m >= 5) {
+      signals.push({
+        id: 'warnings15m',
+        level: 'warning',
+        title: 'Volume alto de alertas',
+        detail: `${warnings15m} warning(s) nos ultimos 15 minutos.`
+      });
+    }
+    if (pendingObjects > 0) {
+      signals.push({
+        id: 'pendingDocs',
+        level: 'warning',
+        title: 'Documentos pendentes acumulados',
+        detail: `${pendingObjects.toLocaleString('pt-BR')} arquivo(s) pendente(s) aguardando resolucao.`
+      });
+    }
+    if (unassignedObjects > 0) {
+      signals.push({
+        id: 'unassignedDocs',
+        level: 'critical',
+        title: 'Arquivos fora do padrao',
+        detail: `${unassignedObjects.toLocaleString('pt-BR')} arquivo(s) sem owner/estrutura valida.`
+      });
+    }
+    if (inactive30dUsers > 0) {
+      signals.push({
+        id: 'inactive30d',
+        level: 'info',
+        title: 'Usuarios inativos por 30+ dias',
+        detail: `${inactive30dUsers.toLocaleString('pt-BR')} usuario(s) sem atividade recente.`
+      });
+    }
+    if (pendingSubscriptions.length > 0) {
+      signals.push({
+        id: 'pendingSubs',
+        level: 'warning',
+        title: 'Assinaturas pendentes',
+        detail: `${pendingSubscriptions.length.toLocaleString('pt-BR')} assinatura(s) aguardando autorizacao.`
+      });
+    }
+    if (expiringSubscriptions7d.length > 0) {
+      signals.push({
+        id: 'expiringSubs',
+        level: 'info',
+        title: 'Assinaturas vencendo em ate 7 dias',
+        detail: `${expiringSubscriptions7d.length.toLocaleString('pt-BR')} usuario(s) com cobranca proxima.`
+      });
+    }
+    if (signals.length === 0) {
+      signals.push({
+        id: 'allGood',
+        level: 'info',
+        title: 'Sem alertas criticos',
+        detail: 'A plataforma esta estavel com os indicadores atuais.'
+      });
+    }
+    return signals;
+  }, [overview, storageUsage, inactive30dUsers, pendingSubscriptions.length, expiringSubscriptions7d.length]);
 
   /* ───── LOGIN ───── */
   if (checking) return (
@@ -708,7 +890,7 @@ export function App() {
           <button onClick={() => setTab('users')} className={`sidebar-link w-full ${tab === 'users' ? 'active' : ''}`}><IconUsers /> Usuários</button>
           <button onClick={() => { setTab('subscriptions'); void loadSubscriptions(); }} className={`sidebar-link w-full ${tab === 'subscriptions' ? 'active' : ''}`}><IconCreditCard /> Assinaturas</button>
           <button onClick={() => setTab('storage')} className={`sidebar-link w-full ${tab === 'storage' ? 'active' : ''}`}><IconStorage /> Storage</button>
-          <button onClick={() => { setTab('maintenance'); void loadCleanupHistory(); }} className={`sidebar-link w-full ${tab === 'maintenance' ? 'active' : ''}`}><IconTrash /> Manutenção</button>
+          <button onClick={() => openMaintenanceTab()} className={`sidebar-link w-full ${tab === 'maintenance' ? 'active' : ''}`}><IconTrash /> Manutenção</button>
         </nav>
         <div className="border-t border-white/6 pt-4 space-y-1">
           <button onClick={() => void refresh()} disabled={loading} className="sidebar-link w-full"><IconRefresh /> {loading ? 'Atualizando...' : 'Atualizar'}</button>
@@ -721,7 +903,7 @@ export function App() {
         <p className="text-sm font-bold text-white">💰 SaldoPro Admin</p>
         <div className="flex gap-2">
           {(['overview', 'operations', 'users', 'subscriptions', 'storage', 'maintenance'] as Tab[]).map(t => (
-            <button key={t} onClick={() => { setTab(t); if (t === 'subscriptions') void loadSubscriptions(); if (t === 'maintenance') void loadCleanupHistory(); }} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${tab === t ? 'bg-emerald-500/20 text-emerald-300' : 'text-zinc-400'}`}>
+            <button key={t} onClick={() => { if (t === 'maintenance') openMaintenanceTab(); else { setTab(t); if (t === 'subscriptions') void loadSubscriptions(); } }} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${tab === t ? 'bg-emerald-500/20 text-emerald-300' : 'text-zinc-400'}`}>
               {t === 'overview' ? 'Geral' : t === 'operations' ? 'Op.' : t === 'users' ? 'Users' : t === 'subscriptions' ? 'Assin.' : t === 'storage' ? 'Storage' : 'Manut.'}
             </button>
           ))}
@@ -1287,6 +1469,189 @@ export function App() {
             <div>
               <h1 className="text-2xl font-bold text-white">Manutenção do Banco de Dados</h1>
               <p className="text-sm text-zinc-500 mt-1">Identifique e remova dados obsoletos para otimizar performance e armazenamento</p>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => void refreshMaintenanceData()} disabled={loading}
+                className="rounded-xl bg-white/5 border border-white/10 px-4 py-2.5 text-sm font-semibold text-zinc-300 hover:text-white hover:bg-white/10 transition disabled:opacity-40">
+                {loading ? 'Atualizando...' : 'Atualizar dados'}
+              </button>
+              <button onClick={() => { setCleanupCats(new Set(CLEANUP_CATEGORIES.map(c => c.key))); setCleanupPreview(null); setCleanupResult(null); }}
+                className="rounded-xl bg-emerald-500/15 border border-emerald-500/25 px-4 py-2.5 text-sm font-semibold text-emerald-300 hover:bg-emerald-500/25 transition">
+                Selecionar todas categorias
+              </button>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <StatCard label="Erros 15m" value={overview?.backend.alerts.errors15m ?? 0} sub={`${overview?.backend.alerts.warnings15m ?? 0} warning(s)`} glow="card-glow-rose" />
+              <StatCard label="Usuarios bloqueados" value={blockedUsers} sub={`${usersWithoutWhatsApp} sem WhatsApp`} glow="card-glow-amber" />
+              <StatCard label="Inativos 30+ dias" value={inactive30dUsers} sub={`${inactive7dUsers} inativos 7+ dias`} glow="card-glow-sky" />
+              <StatCard
+                label="Storage pendente"
+                value={(storageUsage?.storage.pendingObjects ?? 0).toLocaleString('pt-BR')}
+                sub={`${fmtBytes(storageUsage?.storage.pendingBytes ?? 0)} pendente(s)`}
+                glow="card-glow-green"
+              />
+            </div>
+
+            <div className="card p-5">
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-xs uppercase tracking-widest text-zinc-500">Sinais de Atencao</p>
+                <span className="text-xs text-zinc-500">{maintenanceSignals.length} item(ns)</span>
+              </div>
+              <div className="space-y-2">
+                {maintenanceSignals.map(signal => (
+                  <div key={signal.id} className={`rounded-xl border px-4 py-3 ${
+                    signal.level === 'critical'
+                      ? 'border-rose-400/20 bg-rose-500/10'
+                      : signal.level === 'warning'
+                        ? 'border-amber-400/20 bg-amber-500/10'
+                        : 'border-sky-400/20 bg-sky-500/10'
+                  }`}>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`badge ${signal.level === 'critical' ? 'badge-rose' : signal.level === 'warning' ? 'badge-amber' : 'badge-sky'}`}>
+                        {signal.level === 'critical' ? 'Critico' : signal.level === 'warning' ? 'Atencao' : 'Info'}
+                      </span>
+                      <p className="text-sm font-semibold text-white">{signal.title}</p>
+                    </div>
+                    <p className="text-xs text-zinc-300 mt-1.5">{signal.detail}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="card p-5">
+                <p className="text-xs uppercase tracking-widest text-zinc-500 mb-4">Usuarios com inatividade alta</p>
+                {topInactiveUsers.length === 0 ? (
+                  <p className="text-sm text-zinc-500">Nenhum usuario com 7+ dias de inatividade.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="data-table">
+                      <thead><tr><th>Usuario</th><th>Ultima atividade</th><th>Dias</th><th>Status</th></tr></thead>
+                      <tbody>
+                        {topInactiveUsers.map(({ user, days }) => (
+                          <tr key={user.uid}>
+                            <td>
+                              <div className="text-white font-medium">{user.displayName || 'Sem nome'}</div>
+                              <div className="text-xs text-zinc-500">{user.email || user.uid}</div>
+                            </td>
+                            <td className="text-xs">{fmtDate(user.metrics.lastWhatsAppMessageAt)}</td>
+                            <td className={`font-semibold ${days >= 30 ? 'text-rose-300' : 'text-amber-300'}`}>{days}d</td>
+                            <td><span className={user.blocked ? 'badge badge-rose' : 'badge badge-green'}>{user.blocked ? 'Bloqueado' : 'Ativo'}</span></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              <div className="card p-5">
+                <p className="text-xs uppercase tracking-widest text-zinc-500 mb-4">Assinaturas em risco</p>
+                {riskySubscriptions.length === 0 ? (
+                  <p className="text-sm text-zinc-500">Sem assinaturas pendentes ou com vencimento proximo.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="data-table">
+                      <thead><tr><th>Usuario</th><th>Status</th><th>Prox. cobranca</th><th>Dias</th></tr></thead>
+                      <tbody>
+                        {riskySubscriptions.map(sub => (
+                          <tr key={sub.id}>
+                            <td>
+                              <div className="text-white font-medium">{sub.displayName}</div>
+                              <div className="text-xs text-zinc-500">{sub.email}</div>
+                            </td>
+                            <td><span className={sub.status === 'pending' ? 'badge badge-amber' : 'badge badge-green'}>{sub.status === 'pending' ? 'Pendente' : 'Ativa'}</span></td>
+                            <td className="text-xs">{fmtDate(sub.nextBillingDate)}</td>
+                            <td className={`${sub.status === 'pending' || (sub.daysRemaining ?? 999) <= 3 ? 'text-rose-300' : 'text-amber-300'} font-semibold`}>
+                              {sub.status === 'pending' ? 'Pendente' : `${sub.daysRemaining ?? '—'}d`}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="card p-5">
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-xs uppercase tracking-widest text-zinc-500">Storage pendente por usuario</p>
+                <span className="text-xs text-zinc-500">{pendingStorageRows.length} usuario(s) com pendencia</span>
+              </div>
+              {pendingStorageRows.length === 0 ? (
+                <p className="text-sm text-zinc-500">Nao ha pendencias no storage neste momento.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="data-table">
+                    <thead><tr><th>Usuario</th><th>Pendentes</th><th>Tamanho pendente</th><th>Total bucket</th></tr></thead>
+                    <tbody>
+                      {pendingStorageRows.slice(0, 10).map(row => (
+                        <tr key={row.uid}>
+                          <td>
+                            <div className="text-white font-medium">{row.displayName}</div>
+                            <div className="text-xs text-zinc-500">{row.email || row.uid}</div>
+                          </td>
+                          <td className="text-amber-300 font-semibold">{row.pendingObjects.toLocaleString('pt-BR')}</td>
+                          <td className="text-white">{fmtBytes(row.pendingBytes)}</td>
+                          <td className="text-zinc-300">{fmtBytes(row.totalBytes)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="card p-5">
+                <p className="text-xs uppercase tracking-widest text-zinc-500 mb-4">Tendencia das limpezas recentes</p>
+                {cleanupTrendData.length === 0 ? (
+                  <p className="text-sm text-zinc-500">Sem execucoes de limpeza ainda.</p>
+                ) : (
+                  <div className="h-52">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={cleanupTrendData}>
+                        <XAxis dataKey="name" tick={{ fill: '#71717a', fontSize: 11 }} axisLine={false} tickLine={false} />
+                        <YAxis tick={{ fill: '#71717a', fontSize: 11 }} axisLine={false} tickLine={false} />
+                        <Tooltip contentStyle={{ background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '12px' }} />
+                        <Bar dataKey="removidos" fill="#22d3ee" radius={[6, 6, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </div>
+
+              <div className="card p-5">
+                <p className="text-xs uppercase tracking-widest text-zinc-500 mb-4">Resumo de manutencao (30 dias)</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-lg bg-white/4 border border-white/6 p-3">
+                    <p className="text-xs text-zinc-500">Execucoes</p>
+                    <p className="text-xl font-bold text-white mt-1">{cleanupRuns30d}</p>
+                  </div>
+                  <div className="rounded-lg bg-white/4 border border-white/6 p-3">
+                    <p className="text-xs text-zinc-500">Registros removidos</p>
+                    <p className="text-xl font-bold text-white mt-1">{cleanupDeleted30d.toLocaleString('pt-BR')}</p>
+                  </div>
+                  <div className="rounded-lg bg-white/4 border border-white/6 p-3">
+                    <p className="text-xs text-zinc-500">Pendentes assinatura</p>
+                    <p className="text-xl font-bold text-amber-300 mt-1">{pendingSubscriptions.length}</p>
+                  </div>
+                  <div className="rounded-lg bg-white/4 border border-white/6 p-3">
+                    <p className="text-xs text-zinc-500">Vencendo em 7d</p>
+                    <p className="text-xl font-bold text-rose-300 mt-1">{expiringSubscriptions7d.length}</p>
+                  </div>
+                </div>
+                <div className="mt-4 pt-4 border-t border-white/6">
+                  <p className="text-xs text-zinc-500">Ultima limpeza</p>
+                  <p className="text-sm text-white mt-1">{cleanupHistory[0] ? fmtDate(cleanupHistory[0].timestamp) : 'Nenhuma limpeza executada'}</p>
+                  {cleanupHistory[0] && (
+                    <p className="text-xs text-zinc-400 mt-1">{cleanupHistory[0].totalDeleted.toLocaleString('pt-BR')} registro(s) removidos</p>
+                  )}
+                </div>
+              </div>
             </div>
 
             {/* Period selector */}

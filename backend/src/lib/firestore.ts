@@ -20,6 +20,13 @@ function assertNoError(error: { message: string } | null, context: string): void
   throw new Error(`${context}: ${error.message}`);
 }
 
+export class DuplicateCategoryError extends Error {
+  constructor(message = 'Categoria ja existe.') {
+    super(message);
+    this.name = 'DuplicateCategoryError';
+  }
+}
+
 function toNumber(value: string | number | null | undefined): number {
   if (typeof value === 'number') return value;
   const parsed = Number(value ?? 0);
@@ -850,7 +857,7 @@ export async function addUserCategory(uid: string, input: Omit<UserCategory, 'id
     .limit(1);
   assertNoError(existingError, 'addUserCategory.exists');
   if ((existing ?? []).length > 0) {
-    throw new Error('Categoria ja existe.');
+    throw new DuplicateCategoryError();
   }
 
   const { data, error } = await db
@@ -901,7 +908,7 @@ export async function updateUserCategory(
       .limit(1);
     assertNoError(existingError, 'updateUserCategory.exists');
     if ((existing ?? []).length > 0) {
-      throw new Error('Categoria ja existe.');
+      throw new DuplicateCategoryError();
     }
   }
 

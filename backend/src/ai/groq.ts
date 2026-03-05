@@ -359,6 +359,109 @@ const CATEGORY_KEYWORD_MAP: Record<string, string[]> = {
   'outros': ['imposto', 'taxa', 'multa', 'cartorio', 'documento', 'cnh', 'rg', 'passaporte']
 };
 
+const CATEGORY_TOKEN_STOPWORDS = new Set([
+  'a', 'as', 'o', 'os', 'um', 'uma', 'de', 'do', 'da', 'dos', 'das',
+  'no', 'na', 'nos', 'nas', 'em', 'por', 'pra', 'pro', 'para', 'com',
+  'e', 'ou'
+]);
+
+function normalizeCategoryText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function tokenizeCategoryText(value: string): string[] {
+  return normalizeCategoryText(value)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((token) => token.length > 2 && !CATEGORY_TOKEN_STOPWORDS.has(token));
+}
+
+function compactCategoryText(value: string): string {
+  return normalizeCategoryText(value).replace(/[^a-z0-9]/g, '');
+}
+
+function findCategoryByCanonicalName(categories: UserCategory[], canonical: string): UserCategory | null {
+  const normalizedCanonical = normalizeCategoryText(canonical);
+  if (!normalizedCanonical) return null;
+
+  let best: { category: UserCategory; score: number } | null = null;
+  const canonicalTokens = tokenizeCategoryText(normalizedCanonical);
+
+  for (const category of categories) {
+    const name = normalizeCategoryText(category.name);
+    if (!name) continue;
+
+    let score = 0;
+    if (name === normalizedCanonical) {
+      score = 400;
+    } else if (name.includes(normalizedCanonical)) {
+      score = 300;
+    } else if (normalizedCanonical.includes(name)) {
+      score = 200;
+    } else if (canonicalTokens.length > 0) {
+      const categoryTokens = tokenizeCategoryText(name);
+      const overlap = categoryTokens.filter((token) => canonicalTokens.includes(token)).length;
+      if (overlap > 0) score = 100 + overlap;
+    }
+
+    if (score === 0) continue;
+    score += name.length;
+
+    if (!best || score > best.score) {
+      best = { category, score };
+    }
+  }
+
+  return best?.category ?? null;
+}
+
+function findMentionedCategory(categories: UserCategory[], text: string): UserCategory | null {
+  const normalizedText = normalizeCategoryText(text);
+  if (!normalizedText) return null;
+
+  const compactText = compactCategoryText(normalizedText);
+  const textTokens = new Set(tokenizeCategoryText(normalizedText));
+
+  let best: { category: UserCategory; score: number } | null = null;
+
+  for (const category of categories) {
+    const normalizedName = normalizeCategoryText(category.name);
+    if (!normalizedName) continue;
+
+    const compactName = compactCategoryText(normalizedName);
+    const nameTokens = tokenizeCategoryText(normalizedName);
+    let matched = false;
+    let score = 0;
+
+    if (compactName && compactText.includes(compactName)) {
+      matched = true;
+      score = Math.max(score, 300 + compactName.length);
+    }
+
+    if (normalizedText.includes(normalizedName)) {
+      matched = true;
+      score = Math.max(score, 250 + normalizedName.length);
+    }
+
+    if (nameTokens.length > 0 && nameTokens.every((token) => textTokens.has(token))) {
+      matched = true;
+      score = Math.max(score, 200 + nameTokens.length * 10 + normalizedName.length);
+    }
+
+    if (!matched) continue;
+
+    if (!best || score > best.score) {
+      best = { category, score };
+    }
+  }
+
+  return best?.category ?? null;
+}
+
 /**
  * Build a keyword → user-category-ID guide for the system prompt.
  * Maps common transaction keywords to the user's real category IDs using fuzzy name matching.
@@ -366,37 +469,34 @@ const CATEGORY_KEYWORD_MAP: Record<string, string[]> = {
 function buildCategoryKeywordGuide(categories: UserCategory[]): string {
   if (categories.length === 0) return '';
 
-  const normalize = (s: string) =>
-    s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
-
   // Build a map: canonical name → user category
   const matched = new Map<string, UserCategory>();
   for (const [canonical, _keywords] of Object.entries(CATEGORY_KEYWORD_MAP)) {
-    const normalizedCanonical = normalize(canonical);
-    // Try to find best matching user category
-    const match = categories.find((c) => {
-      const catName = normalize(c.name);
-      return (
-        catName === normalizedCanonical ||
-        catName.includes(normalizedCanonical) ||
-        normalizedCanonical.includes(catName)
-      );
-    });
+    const match = findCategoryByCanonicalName(categories, canonical);
     if (match) {
       matched.set(canonical, match);
     }
   }
 
-  if (matched.size === 0) return '';
+  const sortedCategories = [...categories].sort((a, b) => {
+    if (a.type !== b.type) return a.type.localeCompare(b.type);
+    return a.name.localeCompare(b.name, 'pt-BR');
+  });
 
-  const lines: string[] = [
-    'GUIA DE PALAVRAS-CHAVE PARA CATEGORIAS (use o ID correto da categoria do usuario):'
-  ];
-  for (const [canonical, cat] of matched.entries()) {
-    const keywords = CATEGORY_KEYWORD_MAP[canonical];
-    if (!keywords || keywords.length === 0) continue;
-    const topKeywords = keywords.slice(0, 12).map(k => `"${k}"`).join(', ');
-    lines.push(`- ${topKeywords} → use categoryId: "${cat.id}" (${cat.name})`);
+  const lines: string[] = ['GUIA DIRETO DE CATEGORIAS DO USUARIO (nome -> categoryId):'];
+  for (const category of sortedCategories) {
+    lines.push(`- "${category.name}" (tipo: ${category.type}) -> categoryId: "${category.id}"`);
+  }
+
+  if (matched.size > 0) {
+    lines.push('');
+    lines.push('GUIA DE PALAVRAS-CHAVE PARA CATEGORIAS (fallback):');
+    for (const [canonical, cat] of matched.entries()) {
+      const keywords = CATEGORY_KEYWORD_MAP[canonical];
+      if (!keywords || keywords.length === 0) continue;
+      const topKeywords = keywords.slice(0, 12).map(k => `"${k}"`).join(', ');
+      lines.push(`- ${topKeywords} -> use categoryId: "${cat.id}" (${cat.name})`);
+    }
   }
 
   return lines.join('\n');
@@ -416,44 +516,36 @@ export function resolveBestCategoryId(
 ): string | null {
   if (categories.length === 0) return null;
 
-  // 1. Exact match on ID
-  const exact = categories.find((c) => c.id === aiCategoryId);
+  const typedCategories = categories.filter((c) => c.type === transactionType);
+  const searchCategories = typedCategories.length > 0 ? typedCategories : categories;
+  const combinedText = `${description} ${userMessage || ''}`.trim();
+
+  // 1. Prefer category explicitly mentioned by the user text.
+  const mentionedCategory = findMentionedCategory(searchCategories, combinedText);
+  if (mentionedCategory) return mentionedCategory.id;
+
+  // 2. Exact match on ID from AI.
+  const exact = searchCategories.find((c) => c.id === aiCategoryId);
   if (exact) return exact.id;
 
-  const normalize = (s: string) =>
-    s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
-
-  // 2. Try matching by name (AI may return name instead of ID)
-  const byName = categories.find(
-    (c) => normalize(c.name) === normalize(aiCategoryId)
-  );
+  // 3. Match by name (AI may return name instead of ID).
+  const normalizedAiCategory = normalizeCategoryText(aiCategoryId);
+  const byName = searchCategories.find((c) => normalizeCategoryText(c.name) === normalizedAiCategory);
   if (byName) return byName.id;
 
-  // 3. Smart keyword matching: scan description + user message for keywords
-  const combinedText = normalize(`${description} ${userMessage || ''}`);
+  // 4. Smart keyword matching with canonical map.
+  const normalizedText = normalizeCategoryText(combinedText);
 
-  // Build a scored list
   let bestScore = 0;
   let bestCategory: UserCategory | null = null;
 
   for (const [canonical, keywords] of Object.entries(CATEGORY_KEYWORD_MAP)) {
-    const normalizedCanonical = normalize(canonical);
-
-    // Find matching user category for this canonical name
-    const cat = categories.find((c) => {
-      const catName = normalize(c.name);
-      return (
-        catName === normalizedCanonical ||
-        catName.includes(normalizedCanonical) ||
-        normalizedCanonical.includes(catName)
-      );
-    });
+    const cat = findCategoryByCanonicalName(searchCategories, canonical);
     if (!cat) continue;
 
-    // Count keyword hits
     let score = 0;
     for (const keyword of keywords) {
-      if (combinedText.includes(normalize(keyword))) {
+      if (normalizedText.includes(normalizeCategoryText(keyword))) {
         score += 1;
       }
     }
@@ -466,9 +558,11 @@ export function resolveBestCategoryId(
 
   if (bestCategory) return bestCategory.id;
 
-  // 4. Fallback: first category of matching type
-  const fallback = categories.find((c) => c.type === transactionType);
-  return fallback?.id ?? null;
+  // 5. Fallback by type, preferring "Outros" then first category.
+  const fallbackOutros = searchCategories.find((c) => normalizeCategoryText(c.name) === 'outros');
+  if (fallbackOutros) return fallbackOutros.id;
+
+  return searchCategories[0]?.id ?? null;
 }
 
 /**
@@ -847,8 +941,8 @@ REGRAS TECNICAS (OBRIGATORIO)
 12) Para excluir meta existente: use "delete_goal" com o "id" correto.
 13) Para enviar uma foto ou arquivo guardado pelo usuario: use "fetch_document". A AI vai fazer uma busca simples pelo nome.
 14) Para conversas gerais, duvidas, orientacoes e informacoes: use {"action":"none"}.
-15) Se faltar o VALOR (nao a categoria ou data), pergunte no "reply" e use action none. Se faltar categoria, escolha a mais adequada usando o GUIA DE PALAVRAS-CHAVE abaixo. Se faltar data, use hoje.
-16) REGRA CRITICA DE CATEGORIA: O campo "categoryId" no actionObject DEVE ser EXATAMENTE um dos IDs listados em "Categorias disponiveis" acima. NUNCA invente IDs como "gasolina", "combustivel", "alimentacao" etc. Use SEMPRE o ID real da categoria do usuario (ex: "abc123"). Consulte o GUIA DE PALAVRAS-CHAVE para decidir qual categoria usar.
+15) Se faltar o VALOR (nao a categoria ou data), pergunte no "reply" e use action none. Se faltar categoria, escolha a mais adequada usando primeiro o GUIA DIRETO DE CATEGORIAS e depois o GUIA DE PALAVRAS-CHAVE. Se faltar data, use hoje.
+16) REGRA CRITICA DE CATEGORIA: O campo "categoryId" no actionObject DEVE ser EXATAMENTE um dos IDs listados em "Categorias disponiveis" acima. NUNCA invente IDs como "gasolina", "combustivel", "alimentacao" etc. Use SEMPRE o ID real da categoria do usuario (ex: "abc123"). Priorize categoria explicitamente citada pelo usuario na mensagem.
 17) NUNCA registre transacao quando o usuario usa frases descritivas/informativas ('minhas despesas sao', 'meu gasto mensal e', 'tenho de conta').
 18) Se o usuario citar MULTIPLAS acoes na mesma mensagem, adicione MULTIPLOS objetos em "actionObjects", na mesma ordem em que aparecem.
 

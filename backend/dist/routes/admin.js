@@ -9,6 +9,9 @@ const firestore_1 = require("../lib/firestore");
 const document_storage_1 = require("../lib/document-storage");
 const logger_1 = require("../lib/logger");
 const admin_auth_1 = require("../middleware/admin-auth");
+const supabase_1 = require("../lib/supabase");
+const cleanupHistory = [];
+const MAX_CLEANUP_HISTORY = 50;
 function isWhatsAppLog(entry) {
     if (entry.message.includes('WhatsApp'))
         return true;
@@ -420,6 +423,235 @@ function createAdminRouter(manager) {
             logger_1.logger.error('Failed to send admin direct message', error);
             res.status(500).json({ error: error instanceof Error ? error.message : 'Erro ao enviar mensagem.' });
         }
+    });
+    /* ───── DB Cleanup Routes ───── */
+    async function countForCategory(category, cutoff) {
+        let count = 0;
+        switch (category) {
+            case 'whatsapp_messages': {
+                const { count: c, error } = await supabase_1.supabaseAdmin
+                    .from('app_whatsapp_messages')
+                    .select('*', { count: 'exact', head: true })
+                    .lt('created_at', cutoff);
+                if (error)
+                    throw new Error(`whatsapp_messages count: ${error.message}`);
+                count = c ?? 0;
+                break;
+            }
+            case 'chat_sessions': {
+                const { count: c, error } = await supabase_1.supabaseAdmin
+                    .from('app_chat_sessions')
+                    .select('*', { count: 'exact', head: true })
+                    .lt('updated_at', cutoff);
+                if (error)
+                    throw new Error(`chat_sessions count: ${error.message}`);
+                count = c ?? 0;
+                break;
+            }
+            case 'old_reminders': {
+                const { count: c, error } = await supabase_1.supabaseAdmin
+                    .from('app_reminders')
+                    .select('*', { count: 'exact', head: true })
+                    .lt('due_date', cutoff)
+                    .eq('status', 'paid');
+                if (error)
+                    throw new Error(`old_reminders count: ${error.message}`);
+                count = c ?? 0;
+                break;
+            }
+            case 'expired_pending_docs': {
+                const { count: c, error } = await supabase_1.supabaseAdmin
+                    .from('app_whatsapp_pending_documents')
+                    .select('*', { count: 'exact', head: true })
+                    .lt('expires_at', new Date().toISOString());
+                if (error)
+                    throw new Error(`expired_pending_docs count: ${error.message}`);
+                count = c ?? 0;
+                break;
+            }
+            case 'ai_quotas': {
+                const { count: c, error } = await supabase_1.supabaseAdmin
+                    .from('app_daily_ai_quotas')
+                    .select('*', { count: 'exact', head: true })
+                    .lt('quota_date', cutoff);
+                if (error)
+                    throw new Error(`ai_quotas count: ${error.message}`);
+                count = c ?? 0;
+                break;
+            }
+            case 'billing_events': {
+                const { count: c, error } = await supabase_1.supabaseAdmin
+                    .from('app_billing_events')
+                    .select('*', { count: 'exact', head: true })
+                    .lt('created_at', cutoff);
+                if (error)
+                    throw new Error(`billing_events count: ${error.message}`);
+                count = c ?? 0;
+                break;
+            }
+        }
+        return count;
+    }
+    async function deleteForCategory(category, cutoff) {
+        let deleted = 0;
+        switch (category) {
+            case 'whatsapp_messages': {
+                const { count, error } = await supabase_1.supabaseAdmin
+                    .from('app_whatsapp_messages')
+                    .delete({ count: 'exact' })
+                    .lt('created_at', cutoff);
+                if (error)
+                    throw new Error(`whatsapp_messages delete: ${error.message}`);
+                deleted = count ?? 0;
+                break;
+            }
+            case 'chat_sessions': {
+                // First get session IDs to delete their messages
+                const { data: sessions, error: fetchErr } = await supabase_1.supabaseAdmin
+                    .from('app_chat_sessions')
+                    .select('id')
+                    .lt('updated_at', cutoff);
+                if (fetchErr)
+                    throw new Error(`chat_sessions fetch: ${fetchErr.message}`);
+                if (sessions && sessions.length > 0) {
+                    const sessionIds = sessions.map((s) => s.id);
+                    // Delete messages first (FK constraint)
+                    const { error: msgErr } = await supabase_1.supabaseAdmin
+                        .from('app_chat_messages')
+                        .delete()
+                        .in('session_id', sessionIds);
+                    if (msgErr)
+                        throw new Error(`chat_messages delete: ${msgErr.message}`);
+                    // Then delete sessions
+                    const { count, error: sessErr } = await supabase_1.supabaseAdmin
+                        .from('app_chat_sessions')
+                        .delete({ count: 'exact' })
+                        .lt('updated_at', cutoff);
+                    if (sessErr)
+                        throw new Error(`chat_sessions delete: ${sessErr.message}`);
+                    deleted = count ?? 0;
+                }
+                break;
+            }
+            case 'old_reminders': {
+                const { count, error } = await supabase_1.supabaseAdmin
+                    .from('app_reminders')
+                    .delete({ count: 'exact' })
+                    .lt('due_date', cutoff)
+                    .eq('status', 'paid');
+                if (error)
+                    throw new Error(`old_reminders delete: ${error.message}`);
+                deleted = count ?? 0;
+                break;
+            }
+            case 'expired_pending_docs': {
+                const { count, error } = await supabase_1.supabaseAdmin
+                    .from('app_whatsapp_pending_documents')
+                    .delete({ count: 'exact' })
+                    .lt('expires_at', new Date().toISOString());
+                if (error)
+                    throw new Error(`expired_pending_docs delete: ${error.message}`);
+                deleted = count ?? 0;
+                break;
+            }
+            case 'ai_quotas': {
+                const { count, error } = await supabase_1.supabaseAdmin
+                    .from('app_daily_ai_quotas')
+                    .delete({ count: 'exact' })
+                    .lt('quota_date', cutoff);
+                if (error)
+                    throw new Error(`ai_quotas delete: ${error.message}`);
+                deleted = count ?? 0;
+                break;
+            }
+            case 'billing_events': {
+                const { count, error } = await supabase_1.supabaseAdmin
+                    .from('app_billing_events')
+                    .delete({ count: 'exact' })
+                    .lt('created_at', cutoff);
+                if (error)
+                    throw new Error(`billing_events delete: ${error.message}`);
+                deleted = count ?? 0;
+                break;
+            }
+        }
+        return deleted;
+    }
+    router.post('/db-cleanup/preview', async (req, res, next) => {
+        try {
+            const categories = Array.isArray(req.body?.categories) ? req.body.categories : [];
+            const cutoffDate = typeof req.body?.cutoffDate === 'string' ? req.body.cutoffDate : '';
+            if (categories.length === 0) {
+                res.status(400).json({ error: 'Selecione ao menos uma categoria.' });
+                return;
+            }
+            if (!cutoffDate) {
+                res.status(400).json({ error: 'Data de corte é obrigatória.' });
+                return;
+            }
+            const counts = {};
+            for (const cat of categories) {
+                counts[cat] = await countForCategory(cat, cutoffDate);
+            }
+            const total = Object.values(counts).reduce((s, v) => s + (v ?? 0), 0);
+            res.json({ ok: true, counts, total });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.post('/db-cleanup/execute', async (req, res, next) => {
+        try {
+            const categories = Array.isArray(req.body?.categories) ? req.body.categories : [];
+            const cutoffDate = typeof req.body?.cutoffDate === 'string' ? req.body.cutoffDate : '';
+            const confirmation = typeof req.body?.confirmation === 'string' ? req.body.confirmation : '';
+            if (categories.length === 0) {
+                res.status(400).json({ error: 'Selecione ao menos uma categoria.' });
+                return;
+            }
+            if (!cutoffDate) {
+                res.status(400).json({ error: 'Data de corte é obrigatória.' });
+                return;
+            }
+            if (confirmation !== 'CONFIRMAR') {
+                res.status(400).json({ error: 'Confirmação inválida. Digite CONFIRMAR.' });
+                return;
+            }
+            // Process in a specific order to respect FK constraints
+            const orderedCategories = [
+                'chat_sessions', 'whatsapp_messages', 'old_reminders',
+                'expired_pending_docs', 'ai_quotas', 'billing_events'
+            ].filter(c => categories.includes(c));
+            const counts = {};
+            for (const cat of orderedCategories) {
+                counts[cat] = await deleteForCategory(cat, cutoffDate);
+            }
+            const totalDeleted = Object.values(counts).reduce((s, v) => s + v, 0);
+            const entry = {
+                id: crypto.randomUUID(),
+                timestamp: new Date().toISOString(),
+                cutoffDate,
+                categories: orderedCategories,
+                counts,
+                totalDeleted
+            };
+            cleanupHistory.unshift(entry);
+            if (cleanupHistory.length > MAX_CLEANUP_HISTORY)
+                cleanupHistory.length = MAX_CLEANUP_HISTORY;
+            logger_1.logger.warn('Admin executed DB cleanup', {
+                cutoffDate,
+                categories: orderedCategories,
+                counts,
+                totalDeleted
+            });
+            res.json({ ok: true, counts, totalDeleted });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.get('/db-cleanup/history', (_req, res) => {
+        res.json({ history: cleanupHistory });
     });
     router.use((error, _req, res, _next) => {
         logger_1.logger.error('Admin route error', error);

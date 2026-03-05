@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.resolveBestCategoryId = resolveBestCategoryId;
 exports.queryGroqAssistant = queryGroqAssistant;
 exports.generateFinancialGoals = generateFinancialGoals;
 const env_1 = require("../config/env");
@@ -122,6 +123,219 @@ function buildGoalsActionReference(goals, currency) {
 }
 /** Max transactions to embed in the system prompt (keeps token usage reasonable). */
 const PROMPT_TX_LIMIT = 15;
+/**
+ * Canonical keyword → category-name mapping.
+ * Used to build a dynamic guide that maps common Brazilian transaction keywords
+ * to whatever category names the user actually has.
+ */
+const CATEGORY_KEYWORD_MAP = {
+    // Transport
+    'transporte': ['gasolina', 'combustivel', 'alcool', 'etanol', 'diesel', 'uber', '99', '99pop', 'cabify', 'taxi', 'onibus', 'metro', 'trem', 'pedagio', 'estacionamento', 'estacionar', 'ipva', 'seguro do carro', 'seguro auto', 'manutencao do carro', 'oficina', 'borracharia', 'pneu', 'oleo', 'lavagem', 'lava jato', 'passagem', 'passagem aerea', 'viagem', 'moto', 'bicicleta', 'bike', 'patinete'],
+    // Food
+    'alimentacao': ['supermercado', 'mercado', 'feira', 'acougue', 'padaria', 'restaurante', 'lanche', 'lanchonete', 'fast food', 'mcdonalds', 'burger king', 'pizza', 'pizzaria', 'comida', 'almoco', 'janta', 'jantar', 'cafe', 'cafeteria', 'delivery', 'ifood', 'rappi', 'uber eats', 'marmita', 'marmitex', 'salgado', 'doce', 'sorvete', 'bar', 'cerveja', 'bebida', 'agua', 'suco', 'acai', 'hortifruti', 'verdura', 'fruta'],
+    // Housing
+    'moradia': ['aluguel', 'condominio', 'iptu', 'luz', 'energia', 'conta de luz', 'agua', 'conta de agua', 'gas', 'conta de gas', 'internet', 'wifi', 'telefone', 'celular', 'tv a cabo', 'streaming', 'netflix', 'amazon prime', 'disney', 'hbo', 'spotify', 'apple music', 'youtube premium', 'reforma', 'pintura', 'eletricista', 'encanador', 'mudanca', 'moveis', 'eletrodomestico', 'decoracao'],
+    // Health
+    'saude': ['farmacia', 'remedio', 'medicamento', 'medico', 'consulta', 'exame', 'hospital', 'clinica', 'dentista', 'oculista', 'oftalmologista', 'terapia', 'psicologo', 'psiquiatra', 'fisioterapia', 'academia', 'gym', 'plano de saude', 'convenio', 'cirurgia', 'vacina', 'laboratorio'],
+    // Education
+    'educacao': ['escola', 'faculdade', 'universidade', 'curso', 'cursinho', 'livro', 'material escolar', 'mensalidade', 'matricula', 'aula', 'professor', 'idioma', 'ingles', 'treinamento', 'certificacao', 'apostila'],
+    // Entertainment/Leisure
+    'lazer': ['cinema', 'teatro', 'show', 'ingresso', 'parque', 'viagem', 'hotel', 'pousada', 'airbnb', 'passeio', 'praia', 'festa', 'balada', 'jogo', 'game', 'videogame', 'playstation', 'xbox', 'nintendo', 'brinquedo', 'hobby', 'esporte', 'futebol', 'museu'],
+    // Clothing
+    'vestuario': ['roupa', 'calcado', 'sapato', 'tenis', 'camisa', 'camiseta', 'calca', 'vestido', 'blusa', 'jaqueta', 'casaco', 'acessorio', 'bolsa', 'relogio', 'oculos', 'joalheria', 'bijuteria', 'costura', 'alfaiate', 'lavanderia'],
+    // Personal care
+    'cuidados pessoais': ['cabelo', 'cabeleireiro', 'barbearia', 'salao', 'manicure', 'pedicure', 'cosmeticos', 'maquiagem', 'perfume', 'shampoo', 'creme', 'higiene', 'depilacao', 'estetica', 'spa'],
+    // Pets
+    'pets': ['veterinario', 'vet', 'racao', 'petshop', 'pet shop', 'banho e tosa', 'cachorro', 'gato', 'animal'],
+    // Subscriptions/Services
+    'assinaturas': ['assinatura', 'mensalidade', 'anuidade', 'plano', 'servico', 'seguro', 'seguro de vida'],
+    // Income categories
+    'salario': ['salario', 'holerite', 'contracheque', 'pagamento', 'remuneracao', 'pro labore'],
+    'freelance': ['freelance', 'freela', 'trampo', 'bico', 'servico prestado', 'nota fiscal', 'nf'],
+    'investimentos': ['investimento', 'rendimento', 'dividendo', 'juros', 'acao', 'acoes', 'fundo', 'cdb', 'tesouro', 'poupanca', 'cripto', 'bitcoin'],
+    'presente': ['presente', 'doacao', 'mesada', 'ajuda', 'auxilio', 'bonus'],
+    // Other
+    'outros': ['imposto', 'taxa', 'multa', 'cartorio', 'documento', 'cnh', 'rg', 'passaporte']
+};
+const CATEGORY_TOKEN_STOPWORDS = new Set([
+    'a', 'as', 'o', 'os', 'um', 'uma', 'de', 'do', 'da', 'dos', 'das',
+    'no', 'na', 'nos', 'nas', 'em', 'por', 'pra', 'pro', 'para', 'com',
+    'e', 'ou'
+]);
+function normalizeCategoryText(value) {
+    return value
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .trim();
+}
+function tokenizeCategoryText(value) {
+    return normalizeCategoryText(value)
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter((token) => token.length > 2 && !CATEGORY_TOKEN_STOPWORDS.has(token));
+}
+function compactCategoryText(value) {
+    return normalizeCategoryText(value).replace(/[^a-z0-9]/g, '');
+}
+function findCategoryByCanonicalName(categories, canonical) {
+    const normalizedCanonical = normalizeCategoryText(canonical);
+    if (!normalizedCanonical)
+        return null;
+    let best = null;
+    const canonicalTokens = tokenizeCategoryText(normalizedCanonical);
+    for (const category of categories) {
+        const name = normalizeCategoryText(category.name);
+        if (!name)
+            continue;
+        let score = 0;
+        if (name === normalizedCanonical) {
+            score = 400;
+        }
+        else if (name.includes(normalizedCanonical)) {
+            score = 300;
+        }
+        else if (normalizedCanonical.includes(name)) {
+            score = 200;
+        }
+        else if (canonicalTokens.length > 0) {
+            const categoryTokens = tokenizeCategoryText(name);
+            const overlap = categoryTokens.filter((token) => canonicalTokens.includes(token)).length;
+            if (overlap > 0)
+                score = 100 + overlap;
+        }
+        if (score === 0)
+            continue;
+        score += name.length;
+        if (!best || score > best.score) {
+            best = { category, score };
+        }
+    }
+    return best?.category ?? null;
+}
+function findMentionedCategory(categories, text) {
+    const normalizedText = normalizeCategoryText(text);
+    if (!normalizedText)
+        return null;
+    const compactText = compactCategoryText(normalizedText);
+    const textTokens = new Set(tokenizeCategoryText(normalizedText));
+    let best = null;
+    for (const category of categories) {
+        const normalizedName = normalizeCategoryText(category.name);
+        if (!normalizedName)
+            continue;
+        const compactName = compactCategoryText(normalizedName);
+        const nameTokens = tokenizeCategoryText(normalizedName);
+        let matched = false;
+        let score = 0;
+        if (compactName && compactText.includes(compactName)) {
+            matched = true;
+            score = Math.max(score, 300 + compactName.length);
+        }
+        if (normalizedText.includes(normalizedName)) {
+            matched = true;
+            score = Math.max(score, 250 + normalizedName.length);
+        }
+        if (nameTokens.length > 0 && nameTokens.every((token) => textTokens.has(token))) {
+            matched = true;
+            score = Math.max(score, 200 + nameTokens.length * 10 + normalizedName.length);
+        }
+        if (!matched)
+            continue;
+        if (!best || score > best.score) {
+            best = { category, score };
+        }
+    }
+    return best?.category ?? null;
+}
+/**
+ * Build a keyword → user-category-ID guide for the system prompt.
+ * Maps common transaction keywords to the user's real category IDs using fuzzy name matching.
+ */
+function buildCategoryKeywordGuide(categories) {
+    if (categories.length === 0)
+        return '';
+    // Build a map: canonical name → user category
+    const matched = new Map();
+    for (const [canonical, _keywords] of Object.entries(CATEGORY_KEYWORD_MAP)) {
+        const match = findCategoryByCanonicalName(categories, canonical);
+        if (match) {
+            matched.set(canonical, match);
+        }
+    }
+    const sortedCategories = [...categories].sort((a, b) => {
+        if (a.type !== b.type)
+            return a.type.localeCompare(b.type);
+        return a.name.localeCompare(b.name, 'pt-BR');
+    });
+    const lines = ['GUIA DIRETO DE CATEGORIAS DO USUARIO (nome -> categoryId):'];
+    for (const category of sortedCategories) {
+        lines.push(`- "${category.name}" (tipo: ${category.type}) -> categoryId: "${category.id}"`);
+    }
+    if (matched.size > 0) {
+        lines.push('');
+        lines.push('GUIA DE PALAVRAS-CHAVE PARA CATEGORIAS (fallback):');
+        for (const [canonical, cat] of matched.entries()) {
+            const keywords = CATEGORY_KEYWORD_MAP[canonical];
+            if (!keywords || keywords.length === 0)
+                continue;
+            const topKeywords = keywords.slice(0, 12).map(k => `"${k}"`).join(', ');
+            lines.push(`- ${topKeywords} -> use categoryId: "${cat.id}" (${cat.name})`);
+        }
+    }
+    return lines.join('\n');
+}
+/**
+ * Smart category resolution: given the AI's possibly-hallucinated categoryId,
+ * the user message text, and the transaction description, find the best real category.
+ * Exported for use by assistant.ts.
+ */
+function resolveBestCategoryId(aiCategoryId, categories, transactionType, description, userMessage) {
+    if (categories.length === 0)
+        return null;
+    const typedCategories = categories.filter((c) => c.type === transactionType);
+    const searchCategories = typedCategories.length > 0 ? typedCategories : categories;
+    const combinedText = `${description} ${userMessage || ''}`.trim();
+    // 1. Prefer category explicitly mentioned by the user text.
+    const mentionedCategory = findMentionedCategory(searchCategories, combinedText);
+    if (mentionedCategory)
+        return mentionedCategory.id;
+    // 2. Exact match on ID from AI.
+    const exact = searchCategories.find((c) => c.id === aiCategoryId);
+    if (exact)
+        return exact.id;
+    // 3. Match by name (AI may return name instead of ID).
+    const normalizedAiCategory = normalizeCategoryText(aiCategoryId);
+    const byName = searchCategories.find((c) => normalizeCategoryText(c.name) === normalizedAiCategory);
+    if (byName)
+        return byName.id;
+    // 4. Smart keyword matching with canonical map.
+    const normalizedText = normalizeCategoryText(combinedText);
+    let bestScore = 0;
+    let bestCategory = null;
+    for (const [canonical, keywords] of Object.entries(CATEGORY_KEYWORD_MAP)) {
+        const cat = findCategoryByCanonicalName(searchCategories, canonical);
+        if (!cat)
+            continue;
+        let score = 0;
+        for (const keyword of keywords) {
+            if (normalizedText.includes(normalizeCategoryText(keyword))) {
+                score += 1;
+            }
+        }
+        if (score > bestScore) {
+            bestScore = score;
+            bestCategory = cat;
+        }
+    }
+    if (bestCategory)
+        return bestCategory.id;
+    // 5. Fallback by type, preferring "Outros" then first category.
+    const fallbackOutros = searchCategories.find((c) => normalizeCategoryText(c.name) === 'outros');
+    if (fallbackOutros)
+        return fallbackOutros.id;
+    return searchCategories[0]?.id ?? null;
+}
 /**
  * Determines whether the current message is a simple conversational turn
  * (greeting, capabilities question, first message, conversation restart)
@@ -308,6 +522,8 @@ ${goalsReference}
 Categorias disponiveis:
 ${categoriesList || '(nenhuma categoria cadastrada)'}
 
+${buildCategoryKeywordGuide(categories)}
+
 Transacoes recentes (referencia interna; nao mostrar IDs):
 ${txList || '(nenhuma transacao)'}${txNote}
 
@@ -335,6 +551,11 @@ IDENTIDADE FINANCEIRA
 - Voce deve se posicionar como assistente financeiro.
 - Nao responda de forma vaga do tipo "posso ajudar com conversas gerais" sem detalhar funcoes financeiras.
 - Sempre que o usuario perguntar capacidades, destaque primeiro o que voce faz em financas e depois cite que tambem conversa sobre outros temas.
+
+MEMORIA E CONTINUIDADE
+- Voce tem acesso ao historico recente da conversa. Use-o para manter contexto e evitar perguntar informacoes que o usuario ja forneceu.
+- NAO se apresente novamente se ja houve troca de mensagens nesta conversa. Apenas responda ao pedido.
+- Evite dizer "Ola, sou o SaldoPro" ou listar capacidades a cada mensagem. Faca isso apenas na PRIMEIRA mensagem da conversa ou se o usuario pedir.
 
 ESTILO DE RESPOSTA
 - Natural, claro e pouco repetitivo.
@@ -454,9 +675,10 @@ REGRAS TECNICAS (OBRIGATORIO)
 12) Para excluir meta existente: use "delete_goal" com o "id" correto.
 13) Para enviar uma foto ou arquivo guardado pelo usuario: use "fetch_document". A AI vai fazer uma busca simples pelo nome.
 14) Para conversas gerais, duvidas, orientacoes e informacoes: use {"action":"none"}.
-15) Se faltar o VALOR (nao a categoria ou data), pergunte no "reply" e use action none. Se faltar categoria, escolha a mais adequada. Se faltar data, use hoje.
-16) NUNCA registre transacao quando o usuario usa frases descritivas/informativas ('minhas despesas sao', 'meu gasto mensal e', 'tenho de conta').
-17) Se o usuario citar MULTIPLAS acoes na mesma mensagem, adicione MULTIPLOS objetos em "actionObjects", na mesma ordem em que aparecem.
+15) Se faltar o VALOR (nao a categoria ou data), pergunte no "reply" e use action none. Se faltar categoria, escolha a mais adequada usando primeiro o GUIA DIRETO DE CATEGORIAS e depois o GUIA DE PALAVRAS-CHAVE. Se faltar data, use hoje.
+16) REGRA CRITICA DE CATEGORIA: O campo "categoryId" no actionObject DEVE ser EXATAMENTE um dos IDs listados em "Categorias disponiveis" acima. NUNCA invente IDs como "gasolina", "combustivel", "alimentacao" etc. Use SEMPRE o ID real da categoria do usuario (ex: "abc123"). Priorize categoria explicitamente citada pelo usuario na mensagem.
+17) NUNCA registre transacao quando o usuario usa frases descritivas/informativas ('minhas despesas sao', 'meu gasto mensal e', 'tenho de conta').
+18) Se o usuario citar MULTIPLAS acoes na mesma mensagem, adicione MULTIPLOS objetos em "actionObjects", na mesma ordem em que aparecem.
 
 FORMATOS DE ACTIONOBJECT
 - {"action":"none"}

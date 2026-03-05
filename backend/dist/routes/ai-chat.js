@@ -70,27 +70,43 @@ function createAiChatRouter() {
                 amount: t.amount,
                 type: t.type,
                 category: t.category,
-                monthKey: t.monthKey || t.date?.substring(0, 7) || '',
+                monthKey: ('monthKey' in t && t.monthKey) ? t.monthKey : t.date?.substring(0, 7) || '',
                 paymentMethod: 'pix',
                 createdAt: '',
                 updatedAt: ''
             }));
-            const context = {
-                profile,
-                settings,
-                categories,
-                recentTransactions
-            };
             // Convert frontend messages to GroqChatMessage format
             const groqMessages = body.messages.map(msg => ({
                 role: msg.role,
                 content: msg.content,
                 ...(msg.imageBase64 ? { imageDataUrl: msg.imageBase64 } : {})
             }));
+            // Detect conversation context flags for the web chat
+            const userMessages = groqMessages.filter(m => m.role === 'user');
+            const lastUserMsg = userMessages[userMessages.length - 1]?.content ?? '';
+            const normalizedLastMsg = lastUserMsg
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .toLowerCase()
+                .trim();
+            const isFirstMessage = userMessages.length <= 1;
+            const isGreeting = /^(oi|ola|hey|hi|hello|bom dia|boa tarde|boa noite|e ai|opa|fala|salve|beleza)\b/.test(normalizedLastMsg) && normalizedLastMsg.length < 30;
+            const isCapabilitiesQuestion = /\b(o que voce faz|o que vc faz|como funciona|me ajuda|quais funcoes|o que sabe fazer|como posso usar|help)\b/.test(normalizedLastMsg);
+            const context = {
+                profile,
+                settings,
+                categories,
+                recentTransactions,
+                isFirstMessage,
+                isGreeting,
+                isCapabilitiesQuestion
+            };
             logger_1.logger.info('Web AI chat request', {
                 uid,
                 messageCount: groqMessages.length,
-                hasImage: groqMessages.some(m => m.imageDataUrl)
+                hasImage: groqMessages.some(m => Boolean(m.imageDataUrl)),
+                isFirstMessage,
+                isGreeting
             });
             const result = await (0, groq_1.queryGroqAssistant)(groqMessages, context);
             res.json({

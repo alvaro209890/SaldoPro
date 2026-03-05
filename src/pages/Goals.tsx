@@ -2,11 +2,13 @@ import { useMemo, useState } from 'react';
 import { useFinancialProfile } from '@/hooks/useFinancialProfile';
 import { useGoals } from '@/hooks/useGoals';
 import { FinancialQuestionnaire } from '@/components/goals/FinancialQuestionnaire';
+import { FinancialProfileEditor } from '@/components/goals/FinancialProfileEditor';
 import { GoalCard } from '@/components/goals/GoalCard';
 import { GoalForm } from '@/components/goals/GoalForm';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
+import { toast } from 'sonner';
 import {
     ArrowDownRight,
     ArrowUpRight,
@@ -25,6 +27,15 @@ import {
 import type { FinancialProfileFormData, Goal, GoalFormData } from '@/types';
 
 type GoalsViewFilter = 'all' | 'active' | 'focus' | 'completed' | 'cancelled';
+type GoalsTab = 'goals' | 'financialProfile';
+
+function getErrorMessage(error: unknown, fallback: string): string {
+    if (error instanceof Error && error.message.trim()) {
+        return error.message;
+    }
+
+    return fallback;
+}
 
 function formatCurrency(value: number): string {
     return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -89,7 +100,9 @@ export function Goals() {
     const [isFormOpen, setIsFormOpen] = useState(false);
     const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
     const [submittingProfile, setSubmittingProfile] = useState(false);
+    const [savingProfile, setSavingProfile] = useState(false);
     const [viewFilter, setViewFilter] = useState<GoalsViewFilter>('all');
+    const [activeTab, setActiveTab] = useState<GoalsTab>('goals');
 
     const isLoading = profileLoading || goalsLoading;
 
@@ -153,14 +166,57 @@ export function Goals() {
         setSubmittingProfile(true);
         try {
             await saveProfile(data);
-            await generateAI();
+            toast.success('Perfil financeiro salvo com sucesso.');
+
+            try {
+                await generateAI();
+                toast.success('Metas geradas com IA.');
+            } catch (error) {
+                toast.error(getErrorMessage(error, 'Perfil salvo, mas nao foi possivel gerar metas agora.'));
+            }
+        } catch (error) {
+            toast.error(getErrorMessage(error, 'Nao foi possivel salvar o perfil financeiro.'));
         } finally {
             setSubmittingProfile(false);
         }
     };
 
+    const regenerateAIGoals = async () => {
+        try {
+            await generateAI();
+            toast.success('Novas metas adicionadas com IA.');
+        } catch (error) {
+            const message = getErrorMessage(error, 'Nao foi possivel regenerar metas com IA.');
+            toast.error(message);
+            throw error;
+        }
+    };
+
     const handleRegenerateAI = async () => {
-        await generateAI();
+        try {
+            await regenerateAIGoals();
+        } catch {
+            // Feedback ja exibido para o usuario.
+        }
+    };
+
+    const handleSaveFinancialProfile = async (data: FinancialProfileFormData) => {
+        setSavingProfile(true);
+        try {
+            await saveProfile(data);
+            toast.success('Perfil financeiro atualizado.');
+        } catch (error) {
+            const message = getErrorMessage(error, 'Nao foi possivel salvar o perfil financeiro.');
+            toast.error(message);
+            throw error;
+        } finally {
+            setSavingProfile(false);
+        }
+    };
+
+    const handleRegenerateFromProfile = async () => {
+        await regenerateAIGoals();
+        setActiveTab('goals');
     };
 
     const handleCreate = () => {
@@ -236,6 +292,39 @@ export function Goals() {
 
     return (
         <div className="animate-fade-in space-y-6 pb-20 lg:pb-0">
+            <div className="flex w-full flex-col gap-1 rounded-2xl border border-surface-700/40 bg-surface-900/60 p-1 sm:w-auto sm:flex-row sm:gap-0">
+                <button
+                    type="button"
+                    onClick={() => setActiveTab('goals')}
+                    className={`flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-all ${
+                        activeTab === 'goals'
+                            ? 'bg-indigo-500/15 text-indigo-200 shadow-sm'
+                            : 'text-gray-400 hover:bg-white/[0.04] hover:text-gray-200'
+                    }`}
+                >
+                    <Target className="h-4 w-4" />
+                    Metas
+                </button>
+                <button
+                    type="button"
+                    onClick={() => {
+                        setActiveTab('financialProfile');
+                        setIsFormOpen(false);
+                        setEditingGoal(null);
+                    }}
+                    className={`flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-all ${
+                        activeTab === 'financialProfile'
+                            ? 'bg-indigo-500/15 text-indigo-200 shadow-sm'
+                            : 'text-gray-400 hover:bg-white/[0.04] hover:text-gray-200'
+                    }`}
+                >
+                    <Wallet className="h-4 w-4" />
+                    Perfil financeiro
+                </button>
+            </div>
+
+            {activeTab === 'goals' ? (
+                <>
             <div className="grid gap-4 xl:grid-cols-[1.6fr_1fr]">
                 <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(99,102,241,0.22),transparent_45%),radial-gradient(circle_at_85%_30%,rgba(16,185,129,0.14),transparent_35%),linear-gradient(135deg,rgba(15,23,42,0.92),rgba(15,23,42,0.68))] p-6">
                     <div className="absolute -right-10 -top-10 h-36 w-36 rounded-full bg-indigo-400/10 blur-3xl" />
@@ -492,6 +581,18 @@ export function Goals() {
                 initialData={editingGoal}
                 onDelete={editingGoal ? handleDeleteEditingGoal : undefined}
             />
+                </>
+            ) : profile ? (
+                <FinancialProfileEditor
+                    profile={profile}
+                    isSaving={savingProfile}
+                    isGenerating={generating}
+                    onSave={handleSaveFinancialProfile}
+                    onRegenerateNow={handleRegenerateFromProfile}
+                />
+            ) : (
+                <LoadingSkeleton variant="card" />
+            )}
         </div>
     );
 }

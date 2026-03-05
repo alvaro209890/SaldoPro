@@ -182,7 +182,7 @@ function createDataRouter(signupWelcomeDispatcher) {
         const categories = await (0, firestore_1.getUserCategories)(uid);
         res.json(categories);
     });
-    router.post('/categories', async (req, res) => {
+    router.post('/categories', async (req, res, next) => {
         const uid = getUid(req);
         const body = (req.body ?? {});
         const name = asString(body.name);
@@ -193,20 +193,38 @@ function createDataRouter(signupWelcomeDispatcher) {
             res.status(400).json({ error: 'Campos invalidos para categoria.' });
             return;
         }
-        const id = await (0, firestore_1.addUserCategory)(uid, { name, type, color, icon });
-        res.json({ id });
+        try {
+            const id = await (0, firestore_1.addUserCategory)(uid, { name, type, color, icon });
+            res.json({ id });
+        }
+        catch (error) {
+            if (error instanceof firestore_1.DuplicateCategoryError) {
+                res.status(409).json({ error: error.message });
+                return;
+            }
+            next(error);
+        }
     });
-    router.patch('/categories/:id', async (req, res) => {
+    router.patch('/categories/:id', async (req, res, next) => {
         const uid = getUid(req);
         const categoryId = req.params.id;
         const body = (req.body ?? {});
-        await (0, firestore_1.updateUserCategory)(uid, categoryId, {
-            ...(typeof body.name === 'string' ? { name: body.name } : {}),
-            ...(body.type === 'income' || body.type === 'expense' ? { type: body.type } : {}),
-            ...(typeof body.color === 'string' ? { color: body.color } : {}),
-            ...(typeof body.icon === 'string' ? { icon: body.icon } : {})
-        });
-        res.json({ ok: true });
+        try {
+            await (0, firestore_1.updateUserCategory)(uid, categoryId, {
+                ...(typeof body.name === 'string' ? { name: body.name } : {}),
+                ...(body.type === 'income' || body.type === 'expense' ? { type: body.type } : {}),
+                ...(typeof body.color === 'string' ? { color: body.color } : {}),
+                ...(typeof body.icon === 'string' ? { icon: body.icon } : {})
+            });
+            res.json({ ok: true });
+        }
+        catch (error) {
+            if (error instanceof firestore_1.DuplicateCategoryError) {
+                res.status(409).json({ error: error.message });
+                return;
+            }
+            next(error);
+        }
     });
     router.delete('/categories/:id', async (req, res) => {
         const uid = getUid(req);
