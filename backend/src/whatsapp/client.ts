@@ -188,17 +188,25 @@ function isUndoMessage(text: string): boolean {
 
 function buildDocumentSavedReply(title: string): string {
   return [
-    `Arquivo salvo com sucesso como "${title}".`,
+    `📎 *Arquivo salvo com sucesso!*`,
+    '━━━━━━━━━━━━━━━━━',
     '',
-    `Quando quiser receber de volta, voce pode enviar: "me manda o arquivo ${title}".`,
-    `Tambem funciona: "procura ${title}" ou "manda de volta ${title}".`
+    `Nome: *${title}*`,
+    '',
+    '💡 _Para pedir de volta, envie:_',
+    `"Manda o arquivo ${title}"`,
+    `"Procura ${title}"`
   ].join('\n');
 }
 
 function buildDocumentFetchReply(title: string): string {
   return [
-    `Encontrei o arquivo "${title}" e estou te enviando agora.`,
-    'Se quiser outra, me diga uma parte do nome ou da descricao.'
+    `📂 *Arquivo encontrado*`,
+    '━━━━━━━━━━━━━━━━━',
+    '',
+    `Aqui está o arquivo *"${title}"* que você pediu.`,
+    '',
+    '💡 _Precisa de outro? Me diga o nome ou parte dele!_'
   ].join('\n');
 }
 
@@ -264,20 +272,20 @@ const DOCUMENT_EXTENSION_TO_MIME: Record<string, string> = {
   zip: 'application/zip'
 };
 const DOCUMENT_UNSUPPORTED_MEDIA_REPLY =
-  'Por enquanto so consigo guardar imagens, PDFs e arquivos ZIP. Esse tipo de arquivo ainda nao e suportado.';
+  '❌ *Formato não suportado*\n\nPor enquanto só consigo guardar *imagens, PDFs e arquivos ZIP*. Esse tipo de arquivo ainda não é suportado.';
 const DOCUMENT_PENDING_PROMPT_REPLY =
-  'Recebi o arquivo. Me diga o titulo que voce quer usar para salvar. Exemplo: "comprovante de luz". Se quiser, voce tambem pode mandar: "comprovante de luz descricao conta de marco".';
+  '📥 *Recebi o arquivo*\n\nMe diga o *nome* que você quer usar para salvar.\n\n_Exemplo: "comprovante de luz" ou "comprovante luz conta março"._';
 const DOCUMENT_PENDING_PROMPT_FILE_REPLY =
-  'Recebi o arquivo. Me diga o titulo que voce quer usar para salvar. Exemplo: "contrato de aluguel" ou "nota fiscal marco".';
+  '📥 *Recebi o arquivo*\n\nMe diga o *nome* que você quer usar para salvar.\n\n_Exemplo: "contrato de aluguel" ou "nota fiscal março"._';
 const DOCUMENT_PENDING_CONFIRM_FILE_REPLY =
-  'Recebi o arquivo e a legenda, mas ela nao deixou claro se voce quer salvar. Se quiser guardar, me diga o titulo que devo usar. Exemplo: "contrato de aluguel".';
-const DOCUMENT_PENDING_CANCELLED_REPLY = 'Salvamento cancelado.';
+  '🤔 *Dúvida sobre o arquivo*\n\nRecebi o arquivo e a mensagem, mas não ficou claro se é para salvar. Se for para guardar, me diga o *título*.\n\n_Exemplo: "contrato de aluguel"._';
+const DOCUMENT_PENDING_CANCELLED_REPLY = '🚫 *Salvamento cancelado.*';
 const DOCUMENT_SAVE_ERROR_REPLY =
-  'Nao consegui concluir essa operacao com arquivos agora. Tente novamente em instantes.';
+  '⚠️ *Erro no salvamento*\n\nNão consegui concluir a operação com arquivos agora. Tente novamente em instantes.';
 const DOCUMENT_IMAGE_READ_ERROR_REPLY =
-  'Recebi seu pedido para guardar o arquivo, mas nao consegui ler o conteudo enviado. Tente reenviar em alguns instantes.';
+  '⚠️ *Erro na leitura*\n\nRecebi seu pedido, mas não consegui ler o conteúdo do arquivo enviado. Tente enviar novamente em instantes.';
 const DOCUMENT_PLAN_REQUIRED_REPLY =
-  'Salvar e acessar imagens, PDFs e arquivos exige um plano ativo. Ative um plano no painel para liberar essa funcao.';
+  '⭐ *Recurso Premium*\n\nSalvar e buscar imagens, PDFs e arquivos é uma função exclusiva para assinantes.\n\n_Ative um plano no painel para liberar este recurso!_';
 const FREE_WHATSAPP_LIMIT_REACHED_REPLY = [
   'Voce atingiu o limite gratis de mensagens no WhatsApp hoje.',
   'Assine um plano para continuar usando a IA sem travas e liberar o uso ilimitado.',
@@ -2147,7 +2155,7 @@ export class WhatsAppClient {
         ownerUid,
         remoteJid,
         remotePhone,
-        'Nao encontrei nenhum arquivo com esse nome ou descricao.',
+        '🔍 *Nenhum arquivo encontrado*\n\nNão encontrei nenhum arquivo salvo na sua conta.',
         `[Arquivo solicitado] ${query || '(sem filtro)'}`
       );
       return;
@@ -2177,7 +2185,7 @@ export class WhatsAppClient {
           ownerUid,
           remoteJid,
           remotePhone,
-          'Nao encontrei nenhum arquivo com esse nome ou descricao.',
+          '🔍 *Nenhum arquivo encontrado*\n\nNão encontrei nenhum arquivo correspondente à sua busca.',
           `[Arquivo solicitado] ${query}`
         );
         return;
@@ -2201,7 +2209,7 @@ export class WhatsAppClient {
         ownerUid,
         remoteJid,
         remotePhone,
-        'Nao encontrei nenhum arquivo com esse nome ou descricao.',
+        '🔍 *Nenhum arquivo encontrado*\n\nNão encontrei nenhum arquivo salvo que corresponda à busca.',
         `[Arquivo solicitado] ${query || '(sem filtro)'}`
       );
       return;
@@ -2218,11 +2226,15 @@ export class WhatsAppClient {
         query,
         candidates: candidates.map((entry) => ({ title: entry.document.title, score: entry.score }))
       });
+      const summaryList = candidates
+        .slice(0, 3)
+        .map((entry, index) => `${index + 1}. *${entry.document.title}*`)
+        .join('\n');
       await this.sendDocumentTextReply(
         ownerUid,
         remoteJid,
         remotePhone,
-        `Encontrei mais de um arquivo parecido: ${summary}. Me diga qual nome voce quer.`,
+        `🤔 *Qual arquivo você quer?*\n\nEncontrei mais de uma opção parecida:\n\n${summaryList}\n\n_Por favor, responda com o nome exato da melhor opção._`,
         `[Arquivo solicitado] ${query || '(sem filtro)'}`
       );
       return;
@@ -2239,7 +2251,7 @@ export class WhatsAppClient {
         ownerUid,
         remoteJid,
         remotePhone,
-        'Nao encontrei nenhum arquivo com esse nome ou descricao.',
+        '🔍 *Nenhum arquivo encontrado*\n\nNão foi possível recuperar o arquivo correspondente.',
         `[Arquivo solicitado] ${query || '(sem filtro)'}`
       );
       return;

@@ -9,7 +9,7 @@
     "build:admin": "vite build --config admin.vite.config.ts",
     "build:all": "npm run build && npm run build:admin",
     "preview": "vite preview",
-    "deploy": "npm run build && firebase deploy"
+    "deploy": "npm run build:all && firebase deploy --only hosting:app,hosting:admin"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",
