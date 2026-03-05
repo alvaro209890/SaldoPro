@@ -80,7 +80,7 @@ export function BalanceLineChart({ transactions, monthKey }: BalanceLineChartPro
     return (
         <Card title="Fluxo Diario (Entradas x Saidas)" icon={Activity} className="h-full">
             {isEmpty ? (
-                <div className="flex h-[300px] items-center justify-center mt-4 bg-surface-900/30 rounded-xl border border-white/5">
+                <div className="flex h-[300px] items-center justify-center mt-4 bg-[#151921]/30 rounded-xl border border-white/[0.04]">
                     <EmptyState
                         icon={Activity}
                         title="Sem movimentacoes"
@@ -92,7 +92,7 @@ export function BalanceLineChart({ transactions, monthKey }: BalanceLineChartPro
                 <div className="h-[300px] mt-6 -ml-4">
                     <ResponsiveContainer width="100%" height="100%">
                         <ComposedChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#cbd5e1" strokeOpacity={0.1} vertical={false} />
+                            <CartesianGrid strokeDasharray="3 3" stroke="#2A3040" strokeOpacity={0.5} vertical={false} />
                             <XAxis
                                 dataKey="date"
                                 stroke="#94a3b8"
@@ -124,27 +124,27 @@ export function BalanceLineChart({ transactions, monthKey }: BalanceLineChartPro
                                 }}
                                 cursor={{ stroke: '#64748b', strokeWidth: 1, strokeDasharray: '4 4' }}
                                 contentStyle={{
-                                    backgroundColor: 'rgba(15, 23, 42, 0.9)',
-                                    backdropFilter: 'blur(10px)',
-                                    border: '1px solid rgba(255,255,255,0.1)',
+                                    backgroundColor: 'rgba(21, 25, 33, 0.95)',
+                                    backdropFilter: 'blur(16px)',
+                                    border: '1px solid rgba(255,255,255,0.06)',
                                     borderRadius: '12px',
                                     color: '#f8fafc',
                                     fontWeight: 500,
-                                    boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.3)'
+                                    boxShadow: '0 10px 25px -3px rgba(0, 0, 0, 0.4)'
                                 }}
                                 itemStyle={{ color: '#e2e8f0', fontWeight: 700 }}
                             />
                             <Bar
                                 dataKey="income"
                                 name="Entradas"
-                                fill="#10b981"
+                                fill="#00C9A7"
                                 radius={[6, 6, 0, 0]}
                                 maxBarSize={18}
                             />
                             <Bar
                                 dataKey="expense"
                                 name="Saidas"
-                                fill="#f43f5e"
+                                fill="#FF6B6B"
                                 radius={[6, 6, 0, 0]}
                                 maxBarSize={18}
                             />

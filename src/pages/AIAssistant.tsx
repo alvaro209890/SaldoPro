@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTransactions } from '@/hooks/useTransactions';
 import { useCategories } from '@/hooks/useCategories';
 import { useChats } from '@/hooks/useChats';
@@ -33,27 +33,79 @@ export function AIAssistant() {
     const [input, setInput] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
 
+    // Optimistic local messages (shown instantly, before Firebase sync)
+    const [optimisticMessages, setOptimisticMessages] = useState<Array<{ id: string; role: 'user' | 'assistant'; content: string }>>([]);
+
+    // Typewriter state for AI response
+    const [streamingText, setStreamingText] = useState('');
+    const [fullAIResponse, setFullAIResponse] = useState('');
+    const [isTyping, setIsTyping] = useState(false);
+
     // Image handling
     const [imagePreview, setImagePreview] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const [showMobileSidebar, setShowMobileSidebar] = useState(false);
 
-    const scrollToBottom = () => {
+    const scrollToBottom = useCallback(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    };
+    }, []);
 
     useEffect(() => {
         scrollToBottom();
-    }, [chatHistory, isProcessing]);
+    }, [chatHistory, isProcessing, optimisticMessages, streamingText, scrollToBottom]);
 
-    const handleCreateSession = async () => {
-        try {
-            const newId = await addSession('Nova Conversa');
-            setActiveSessionId(newId);
-        } catch (e) {
-            // Error managed by hook toast
+    // Clear optimistic messages when Firebase snapshot arrives with matching content
+    useEffect(() => {
+        if (chatHistory.length > 0 && optimisticMessages.length > 0) {
+            // Firebase snapshot has caught up — remove optimistic messages that now exist in chatHistory
+            setOptimisticMessages(prev => {
+                const lastFirebaseContent = chatHistory[chatHistory.length - 1]?.content;
+                const lastOptimisticContent = prev[prev.length - 1]?.content;
+                if (lastFirebaseContent === lastOptimisticContent || chatHistory.length >= prev.length) {
+                    return [];
+                }
+                return prev;
+            });
         }
+    }, [chatHistory, optimisticMessages.length]);
+
+    // Typewriter effect: progressively reveal AI response
+    useEffect(() => {
+        if (!fullAIResponse || !isTyping) return;
+
+        let charIndex = 0;
+        setStreamingText('');
+
+        const interval = setInterval(() => {
+            charIndex++;
+            const nextChunk = fullAIResponse.slice(0, charIndex);
+            setStreamingText(nextChunk);
+
+            if (charIndex >= fullAIResponse.length) {
+                clearInterval(interval);
+                setIsTyping(false);
+                setStreamingText('');
+                setFullAIResponse('');
+            }
+        }, 12); // ~12ms per char ≈ ~83 chars/sec = very fast but visible
+
+        return () => clearInterval(interval);
+    }, [fullAIResponse, isTyping]);
+
+    const handleCreateSession = () => {
+        // Instantly create a temp session and switch to it — Firebase runs in background
+        const tempId = `temp-${Date.now()}`;
+        setActiveSessionId(tempId);
+        setOptimisticMessages([]);
+
+        addSession('Nova Conversa').then((realId) => {
+            // Swap temp → real ID seamlessly
+            setActiveSessionId((current) => current === tempId ? realId : current);
+        }).catch(() => {
+            // Revert on failure
+            setActiveSessionId(null);
+        });
     };
 
     const handleDeleteSession = async (e: React.MouseEvent, id: string) => {
@@ -91,40 +143,48 @@ export function AIAssistant() {
 
     const handleSend = async () => {
         if (!input.trim() && !imagePreview) return;
-        if (catsLoading || chatsLoading || txLoading || !activeSessionId) {
+        if (catsLoading || txLoading || !activeSessionId) {
             toast.error(activeSessionId ? 'Aguarde o carregamento das suas transacoes e categorias...' : 'Crie uma nova conversa primeiro.');
             return;
         }
 
         const userText = input.trim();
         const base64Image = imagePreview;
+        const persistedUserContent = userText || (base64Image ? '[Imagem enviada para analise]' : '');
 
+        // ── INSTANT: show user message optimistically ──
         setInput('');
         handleRemoveImage();
+        setOptimisticMessages(prev => [...prev, { id: `opt-${Date.now()}`, role: 'user', content: persistedUserContent }]);
         setIsProcessing(true);
 
         try {
-            // Update session title if it's the very first message
-            if (chatHistory.length === 0 && userText) {
+            // Update session title if it's the very first message (fire-and-forget)
+            if (chatHistory.length === 0 && optimisticMessages.length === 0 && userText) {
                 const newTitle = userText.length > 25 ? userText.substring(0, 25) + '...' : userText;
-                await editSession(activeSessionId, newTitle);
+                editSession(activeSessionId, newTitle).catch(() => { });
             }
 
-            const persistedUserContent = userText || (base64Image ? '[Imagem enviada para analise]' : '');
-
-            // 1. Save user message to the backend history without persisting the image file
-            await saveChatMessage({
+            // Save user message to Firebase in background (don't await)
+            saveChatMessage({
                 sessionId: activeSessionId,
                 role: 'user',
                 content: persistedUserContent
+            }).catch(() => {
+                toast.error('Erro ao salvar mensagem no histórico.');
             });
 
-            // 3. Prepare full dialog history for the prompt
+            // Prepare full dialog history for the AI prompt
             const mappedHistory: ChatMessage[] = chatHistory.map(msg => ({
                 role: msg.role as 'user' | 'assistant' | 'system',
                 content: msg.content,
                 imageBase64: msg.imageUrl
             }));
+
+            // Include optimistic messages in the history
+            for (const opt of optimisticMessages) {
+                mappedHistory.push({ role: opt.role, content: opt.content });
+            }
 
             mappedHistory.push({
                 role: 'user',
@@ -132,7 +192,6 @@ export function AIAssistant() {
                 imageBase64: base64Image ?? undefined
             });
 
-            // Keep history limited to last 10 interactions mapped to limit payload size
             const recentHistory = mappedHistory.slice(-10);
 
             const aiResponse = await chatWithAI(recentHistory, categories, transactions);
@@ -158,50 +217,42 @@ export function AIAssistant() {
                     addedCount += 1;
                     continue;
                 }
-
                 if (action.action === 'update_transaction') {
                     await update(action.id, action.changes);
                     updatedCount += 1;
                     continue;
                 }
-
                 if (action.action === 'delete_transaction') {
                     await remove(action.id);
                     deletedCount += 1;
                 }
             }
 
-            if (addedCount > 0) {
-                toast.success(addedCount === 1
-                    ? 'Transacao adicionada pela IA!'
-                    : `${addedCount} transacoes adicionadas pela IA!`);
-            }
-            if (updatedCount > 0) {
-                toast.success(updatedCount === 1
-                    ? 'Transacao atualizada pela IA!'
-                    : `${updatedCount} transacoes atualizadas pela IA!`);
-            }
-            if (deletedCount > 0) {
-                toast.success(deletedCount === 1
-                    ? 'Transacao excluida pela IA!'
-                    : `${deletedCount} transacoes excluidas pela IA!`);
-            }
+            if (addedCount > 0) toast.success(addedCount === 1 ? 'Transacao adicionada pela IA!' : `${addedCount} transacoes adicionadas pela IA!`);
+            if (updatedCount > 0) toast.success(updatedCount === 1 ? 'Transacao atualizada pela IA!' : `${updatedCount} transacoes atualizadas pela IA!`);
+            if (deletedCount > 0) toast.success(deletedCount === 1 ? 'Transacao excluida pela IA!' : `${deletedCount} transacoes excluidas pela IA!`);
 
-            // 3. Save assistant reply to the backend history
-            await saveChatMessage({
+            // ── TYPEWRITER: reveal AI response progressively ──
+            setIsProcessing(false);
+            setFullAIResponse(aiResponse.message);
+            setIsTyping(true);
+
+            // Save assistant reply in background (don't block UI)
+            saveChatMessage({
                 sessionId: activeSessionId,
                 role: 'assistant',
                 content: aiResponse.message
-            });
+            }).catch(() => { });
 
         } catch (error: any) {
             toast.error(error.message || 'Erro ao processar mensagem com IA.');
-            await saveChatMessage({
+            const errorMsg = 'Ops, tive um problema de conexão. Possíveis causas: limite excedido na Groq ou erro de rede. Tente novamente!';
+            setOptimisticMessages(prev => [...prev, { id: `opt-err-${Date.now()}`, role: 'assistant', content: errorMsg }]);
+            saveChatMessage({
                 sessionId: activeSessionId,
                 role: 'assistant',
-                content: 'Ops, tive um problema de conexão. Possíveis causas: limite excedido na Groq ou erro de rede. Tente novamente!'
-            });
-        } finally {
+                content: errorMsg
+            }).catch(() => { });
             setIsProcessing(false);
         }
     };
@@ -213,22 +264,28 @@ export function AIAssistant() {
         }
     };
 
+    // Merge Firebase history + optimistic local messages
+    const mergedHistory = [
+        ...chatHistory,
+        ...optimisticMessages,
+    ];
+
     // If chat is entirely empty (first time user), show a greeting manually as a visual stub
-    const displayHistory = (chatHistory && chatHistory.length > 0)
-        ? chatHistory
+    const displayHistory = mergedHistory.length > 0
+        ? mergedHistory
         : [{ id: 'intro', role: 'assistant' as const, content: 'Olá! Sou o SaldoPro AI. Posso te ajudar a analisar seus gastos, lançar novas despesas ou editar antigos lançamentos.\n\nDescreva seu lançamento em texto para eu adicionar automaticamente!' }];
 
     return (
-        <div className="flex h-full w-full overflow-hidden bg-gray-950 text-gray-100 font-sans relative">
+        <div className="flex h-full w-full overflow-hidden bg-[#0B0E14] text-gray-100 font-sans relative">
 
             {/* Sidebar with Sessions */}
-            <div className={`w-full md:w-80 shrink-0 flex-col border-r border-surface-800 bg-surface-900/95 md:bg-surface-900/50 absolute inset-y-0 left-0 md:relative z-30 md:z-10 h-full backdrop-blur-xl md:backdrop-blur-none transition-transform duration-300 ${showMobileSidebar ? 'flex translate-x-0' : 'hidden md:flex md:translate-x-0'}`}>
-                <div className="p-4 border-b border-surface-800 flex flex-col gap-4">
+            <div className={`w-full md:w-80 shrink-0 flex-col border-r border-surface-700/40 bg-[#0B0E14]/95 md:bg-[#0f1218]/60 absolute inset-y-0 left-0 md:relative z-30 md:z-10 h-full backdrop-blur-xl md:backdrop-blur-none transition-transform duration-300 ${showMobileSidebar ? 'flex translate-x-0' : 'hidden md:flex md:translate-x-0'}`}>
+                <div className="p-4 border-b border-surface-700/40 flex flex-col gap-4">
 
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
-                                <Sparkles className="w-5 h-5 text-indigo-400" />
+                            <div className="w-10 h-10 rounded-xl bg-finance-primary/10 border border-finance-primary/20 flex items-center justify-center shrink-0">
+                                <Sparkles className="w-5 h-5 text-finance-primary-light" />
                             </div>
                             <div>
                                 <h1 className="text-xl font-bold text-white leading-tight">SaldoPro AI</h1>
@@ -250,7 +307,7 @@ export function AIAssistant() {
                             handleCreateSession();
                             setShowMobileSidebar(false);
                         }}
-                        className="w-full justify-start gap-2 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/20 rounded-xl h-11 transition-all"
+                        className="w-full justify-start gap-2 bg-finance-primary/10 hover:bg-finance-primary/20 text-finance-primary-light border border-finance-primary/20 rounded-xl h-11 transition-all"
                     >
                         <MessageSquarePlus className="w-4 h-4" />
                         Nova Conversa
@@ -271,20 +328,20 @@ export function AIAssistant() {
                                     setShowMobileSidebar(false);
                                 }}
                                 className={`group flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all duration-200 ${activeSessionId === session.id
-                                    ? 'bg-indigo-500/10 text-indigo-400 relative'
-                                    : 'bg-transparent text-gray-400 hover:bg-surface-800/50 hover:text-gray-200'
+                                    ? 'bg-finance-primary/10 text-finance-primary-light relative'
+                                    : 'bg-transparent text-gray-400 hover:bg-white/[0.04] hover:text-gray-200'
                                     }`}
                             >
                                 {activeSessionId === session.id && (
-                                    <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-indigo-500 rounded-r-full" />
+                                    <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-finance-primary rounded-r-full" />
                                 )}
                                 <div className="flex items-center gap-3 overflow-hidden">
-                                    <MessageSquare className={`w-4 h-4 shrink-0 transition-colors ${activeSessionId === session.id ? 'text-indigo-400' : 'text-surface-500 group-hover:text-surface-400'}`} />
+                                    <MessageSquare className={`w-4 h-4 shrink-0 transition-colors ${activeSessionId === session.id ? 'text-finance-primary-light' : 'text-surface-500 group-hover:text-surface-400'}`} />
                                     <span className="text-sm truncate font-medium">{session.title}</span>
                                 </div>
                                 <button
                                     onClick={(e) => handleDeleteSession(e, session.id)}
-                                    className="opacity-100 md:opacity-0 group-hover:opacity-100 p-1.5 text-gray-500 hover:text-red-400 hover:bg-surface-700 rounded-lg transition-all shrink-0"
+                                    className="opacity-100 md:opacity-0 group-hover:opacity-100 p-1.5 text-gray-500 hover:text-finance-expense hover:bg-finance-expense/10 rounded-lg transition-all shrink-0"
                                     title="Apagar conversa"
                                 >
                                     <Trash2 className="w-3.5 h-3.5" />
@@ -296,34 +353,34 @@ export function AIAssistant() {
             </div>
 
             {/* Main Chat Area */}
-            <div className="flex-1 bg-surface-950 flex flex-col overflow-hidden relative w-full">
+            <div className="flex-1 bg-[#0B0E14] flex flex-col overflow-hidden relative w-full">
 
                 {/* Mobile Header Toggle */}
-                <div className="md:hidden p-4 border-b border-surface-800 bg-surface-900/50 flex flex-row items-center gap-3 z-10 relative">
+                <div className="md:hidden p-4 border-b border-surface-700/40 bg-[#0f1218]/60 backdrop-blur-md flex flex-row items-center gap-3 z-10 relative">
                     <button onClick={() => setShowMobileSidebar(true)} className="p-2 -ml-2 text-gray-400 hover:text-white rounded-lg transition-colors">
                         <Menu className="w-6 h-6" />
                     </button>
                     <div className="flex items-center gap-2">
-                        <Sparkles className="w-4 h-4 text-indigo-400" />
+                        <Sparkles className="w-4 h-4 text-finance-primary-light" />
                         <span className="font-semibold text-white">SaldoPro AI</span>
                     </div>
                 </div>
 
                 {/* Decorative background gradients */}
-                <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-indigo-500/5 rounded-full blur-[120px] pointer-events-none" />
-                <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-indigo-500/5 rounded-full blur-[150px] pointer-events-none" />
+                <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-finance-primary/[0.03] rounded-full blur-[120px] pointer-events-none" />
+                <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-finance-primary/[0.03] rounded-full blur-[150px] pointer-events-none" />
 
                 {!activeSessionId ? (
                     <div className="flex-1 flex flex-col items-center justify-center text-center p-8 relative z-10 animate-in fade-in duration-500">
                         <div className="relative mb-8">
-                            <div className="absolute inset-0 bg-indigo-500/20 blur-2xl rounded-full animate-pulse" />
-                            <div className="w-24 h-24 rounded-[2rem] bg-surface-800/60 border border-surface-700/50 backdrop-blur-xl flex items-center justify-center shadow-2xl relative z-10 transform transition-transform hover:scale-105 duration-300">
-                                <Sparkles className="w-12 h-12 text-indigo-400" />
+                            <div className="absolute inset-0 bg-finance-primary/20 blur-2xl rounded-full animate-pulse" />
+                            <div className="w-24 h-24 rounded-[2rem] bg-[#151921]/60 border border-surface-700/50 backdrop-blur-xl flex items-center justify-center shadow-2xl relative z-10 transform transition-transform hover:scale-105 duration-300">
+                                <Sparkles className="w-12 h-12 text-finance-primary-light" />
                             </div>
                         </div>
                         <h2 className="text-3xl font-bold text-white mb-3">Como posso ajudar?</h2>
                         <p className="text-gray-400 max-w-md text-sm leading-relaxed mb-8">Selecione uma conversa ao lado ou crie uma nova para começar a interagir com seu assistente financeiro inteligente.</p>
-                        <Button onClick={handleCreateSession} className="gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-8 py-6 shadow-lg border-none transition-all font-medium text-base">
+                        <Button onClick={handleCreateSession} className="gap-2 bg-finance-primary hover:bg-finance-primary-light text-white rounded-xl px-8 py-6 shadow-lg shadow-finance-primary/25 border-none transition-all font-medium text-base">
                             <MessageSquarePlus className="w-5 h-5" /> Iniciar Nova Conversa
                         </Button>
                     </div>
@@ -336,7 +393,7 @@ export function AIAssistant() {
                                 return (
                                     <div key={idx} className={`flex gap-4 animate-in slide-in-from-bottom-4 duration-500 fade-in ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
                                         <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 border shadow-sm
-                                            ${isUser ? 'bg-surface-800 border-surface-700 text-gray-400' : 'bg-indigo-900/40 border-indigo-500/30 text-indigo-400 backdrop-blur-sm'}`}>
+                                            ${isUser ? 'bg-[#151921] border-surface-700/40 text-gray-400' : 'bg-finance-primary/10 border-finance-primary/20 text-finance-primary-light backdrop-blur-sm'}`}>
                                             {isUser ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
                                         </div>
                                         <div className={`space-y-2 ${isUser ? 'max-w-[85%] items-end flex flex-col' : 'w-full max-w-[95%] items-start flex flex-col'}`}>
@@ -349,8 +406,8 @@ export function AIAssistant() {
                                             )}
                                             <div className={`px-5 py-4 text-[15px] whitespace-pre-wrap leading-relaxed shadow-sm w-full
                                                 ${isUser
-                                                    ? 'bg-indigo-600 text-white rounded-2xl rounded-br-sm max-w-full'
-                                                    : 'bg-surface-900 border border-surface-800 text-gray-200 rounded-2xl rounded-tl-sm prose prose-invert prose-p:leading-relaxed prose-pre:bg-surface-950 prose-pre:border prose-pre:border-surface-800 hover:prose-a:text-indigo-400'}`}>
+                                                    ? 'bg-finance-primary text-white rounded-2xl rounded-br-sm max-w-full'
+                                                    : 'bg-[#151921] border border-surface-700/30 text-gray-200 rounded-2xl rounded-tl-sm prose prose-invert prose-p:leading-relaxed prose-pre:bg-[#0B0E14] prose-pre:border prose-pre:border-surface-700/30 hover:prose-a:text-finance-primary-light'}`}>
                                                 {isUser ? (
                                                     msg.content
                                                 ) : (
@@ -364,15 +421,36 @@ export function AIAssistant() {
                                 );
                             })}
 
+                            {/* "IA pensando..." indicator while waiting for API */}
                             {isProcessing && (
-                                <div className="flex gap-4">
-                                    <div className="w-10 h-10 rounded-full bg-surface-800/80 border border-surface-700/50 text-indigo-400 flex items-center justify-center shrink-0 shadow-sm backdrop-blur-sm">
+                                <div className="flex gap-4 animate-fade-in">
+                                    <div className="w-10 h-10 rounded-full bg-finance-primary/10 border border-finance-primary/20 text-finance-primary-light flex items-center justify-center shrink-0 shadow-sm backdrop-blur-sm">
                                         <Bot className="w-6 h-6" />
                                     </div>
-                                    <div className="bg-surface-800/80 border border-surface-700/50 rounded-3xl rounded-tl-md px-5 py-4 flex items-center gap-1.5 w-fit h-[52px] shadow-md backdrop-blur-sm">
-                                        <div className="w-2 h-2 rounded-full bg-indigo-400/80 animate-pulse" />
-                                        <div className="w-2 h-2 rounded-full bg-indigo-400/80 animate-pulse" style={{ animationDelay: '0.15s' }} />
-                                        <div className="w-2 h-2 rounded-full bg-indigo-400/80 animate-pulse" style={{ animationDelay: '0.3s' }} />
+                                    <div className="bg-[#151921] border border-surface-700/30 rounded-3xl rounded-tl-md px-5 py-4 flex items-center gap-3 w-fit shadow-md backdrop-blur-sm">
+                                        <div className="flex items-center gap-1.5">
+                                            <div className="w-2 h-2 rounded-full bg-finance-primary-light" style={{ animation: 'typing-dot 1.2s ease-in-out infinite' }} />
+                                            <div className="w-2 h-2 rounded-full bg-finance-primary-light" style={{ animation: 'typing-dot 1.2s ease-in-out 0.2s infinite' }} />
+                                            <div className="w-2 h-2 rounded-full bg-finance-primary-light" style={{ animation: 'typing-dot 1.2s ease-in-out 0.4s infinite' }} />
+                                        </div>
+                                        <span className="text-sm text-gray-400 font-medium">IA pensando...</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Typewriter: AI response appearing progressively */}
+                            {isTyping && streamingText && (
+                                <div className="flex gap-4 animate-fade-in">
+                                    <div className="w-10 h-10 rounded-full bg-finance-primary/10 border border-finance-primary/20 text-finance-primary-light flex items-center justify-center shrink-0 shadow-sm backdrop-blur-sm">
+                                        <Bot className="w-5 h-5" />
+                                    </div>
+                                    <div className="w-full max-w-[95%] items-start flex flex-col">
+                                        <div className="px-5 py-4 text-[15px] whitespace-pre-wrap leading-relaxed shadow-sm w-full bg-[#151921] border border-surface-700/30 text-gray-200 rounded-2xl rounded-tl-sm prose prose-invert prose-p:leading-relaxed">
+                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                {streamingText}
+                                            </ReactMarkdown>
+                                            <span className="inline-block w-0.5 h-4 bg-finance-primary-light animate-pulse ml-0.5 align-text-bottom" />
+                                        </div>
                                     </div>
                                 </div>
                             )}
@@ -380,9 +458,9 @@ export function AIAssistant() {
                         </div>
 
                         {/* Input Area */}
-                        <div className="p-4 sm:px-6 md:px-12 pb-6 shrink-0 relative z-20 bg-gradient-to-t from-surface-950 via-surface-950/90 to-transparent pt-12">
+                        <div className="p-4 sm:px-6 md:px-12 pb-6 shrink-0 relative z-20 bg-gradient-to-t from-[#0B0E14] via-[#0B0E14]/90 to-transparent pt-12">
                             <div className="max-w-4xl mx-auto relative group">
-                                <div className="relative flex items-end bg-surface-900 border border-surface-800 rounded-xl shadow-lg focus-within:border-indigo-500/50 focus-within:ring-1 focus-within:ring-indigo-500/50 transition-all pl-2">
+                                <div className="relative flex items-end bg-[#151921] border border-surface-700/30 rounded-xl shadow-lg focus-within:border-finance-primary/50 focus-within:ring-1 focus-within:ring-finance-primary/50 transition-all pl-2">
                                     <div className="relative flex-1 py-[14px]">
                                         <textarea
                                             value={input}
@@ -402,7 +480,7 @@ export function AIAssistant() {
                                             disabled={(!input.trim() && !imagePreview) || isProcessing}
                                             className={`h-9 w-9 flex items-center justify-center rounded-lg transition-all
                                                 ${(input.trim() || imagePreview) && !isProcessing
-                                                    ? 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-sm'
+                                                    ? 'bg-finance-primary text-white hover:bg-finance-primary-light shadow-sm shadow-finance-primary/20'
                                                     : 'bg-surface-800 text-gray-500 cursor-not-allowed'}`}
                                         >
                                             {!isProcessing ? (

@@ -12,7 +12,7 @@ interface ExpensePieChartProps {
 }
 
 // Beautiful standard fallback palette if a category has no color (or dull color)
-const VIBRANT_PALETTE = ['#f43f5e', '#a855f7', '#3b82f6', '#10b981', '#f59e0b', '#ec4899', '#06b6d4'];
+const VIBRANT_PALETTE = ['#FF6B6B', '#7C3AED', '#3b82f6', '#00C9A7', '#f59e0b', '#ec4899', '#06b6d4'];
 
 export function ExpensePieChart({ transactions, categories }: ExpensePieChartProps) {
     const data = useMemo(() => {
@@ -42,7 +42,7 @@ export function ExpensePieChart({ transactions, categories }: ExpensePieChartPro
     if (data.length === 0) {
         return (
             <Card title="Despesas por Categoria" icon={PieChartIcon} className="h-full">
-                <div className="flex h-[300px] items-center justify-center mt-4 bg-surface-900/30 rounded-xl border border-white/5">
+                <div className="flex h-[300px] items-center justify-center mt-4 bg-[#151921]/30 rounded-xl border border-white/[0.04]">
                     <EmptyState
                         icon={PieChartIcon}
                         title="Nenhuma despesa"
@@ -80,12 +80,12 @@ export function ExpensePieChart({ transactions, categories }: ExpensePieChartPro
                         <Tooltip
                             formatter={(value: number) => formatBRL(value)}
                             contentStyle={{
-                                backgroundColor: 'rgba(15, 23, 42, 0.9)',
-                                backdropFilter: 'blur(10px)',
-                                border: '1px solid rgba(255,255,255,0.1)',
+                                backgroundColor: 'rgba(21, 25, 33, 0.95)',
+                                backdropFilter: 'blur(16px)',
+                                border: '1px solid rgba(255,255,255,0.06)',
                                 borderRadius: '12px',
                                 color: '#f8fafc',
-                                boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.3)'
+                                boxShadow: '0 10px 25px -3px rgba(0, 0, 0, 0.4)'
                             }}
                             itemStyle={{ color: '#f8fafc', fontWeight: 700 }}
                         />

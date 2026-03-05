@@ -22,16 +22,16 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         ref
     ) => {
         const baseStyles =
-            'inline-flex items-center justify-center rounded-lg font-medium transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-950 disabled:opacity-50 disabled:cursor-not-allowed';
+            'inline-flex items-center justify-center rounded-lg font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[#0B0E14] disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.97]';
 
         const variants = {
             primary:
-                'bg-gradient-to-r from-indigo-500 to-indigo-600 text-white hover:from-indigo-400 hover:to-indigo-500 focus:ring-indigo-500 shadow-lg shadow-indigo-500/25',
+                'bg-gradient-to-r from-finance-primary to-finance-primary-dark text-white hover:from-finance-primary-light hover:to-finance-primary focus:ring-finance-primary shadow-lg shadow-finance-primary/25',
             secondary:
                 'bg-surface-800 text-gray-200 hover:bg-surface-700 focus:ring-gray-500 border border-surface-700',
             danger:
-                'bg-red-500/10 text-red-500 hover:bg-red-500/20 focus:ring-red-500 border border-red-500/20',
-            ghost: 'text-gray-400 hover:text-white hover:bg-surface-800 focus:ring-gray-500',
+                'bg-finance-expense/10 text-finance-expense hover:bg-finance-expense/20 focus:ring-finance-expense border border-finance-expense/20',
+            ghost: 'text-gray-400 hover:text-white hover:bg-white/[0.06] focus:ring-gray-500',
         };
 
         const sizes = {

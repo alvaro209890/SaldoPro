@@ -35,6 +35,7 @@ import { getBrasiliaDate, getBrasiliaISOString } from '../lib/date-utils';
 import { logger } from '../lib/logger';
 import {
   queryGroqAssistant,
+  resolveBestCategoryId,
   type AIAction,
   type AIActionAdd,
   type AIActionAddRecurring,
@@ -1876,9 +1877,13 @@ async function executeAction(
         return { kind: 'none' };
       }
 
-      const categoryExists = categories.find((c) => c.id === action.categoryId);
-      const fallbackCategory = categories.find((c) => c.type === action.type);
-      const category = categoryExists?.id ?? fallbackCategory?.id;
+      const category = resolveBestCategoryId(
+        action.categoryId,
+        categories,
+        action.type,
+        action.description || '',
+        options.latestUserMessageText
+      );
       if (!category) {
         return { kind: 'none' };
       }
@@ -2002,9 +2007,13 @@ async function executeAction(
         return { kind: 'none' };
       }
 
-      const categoryExists = categories.find((c) => c.id === action.categoryId);
-      const fallbackCategory = categories.find((c) => c.type === action.type);
-      const category = categoryExists?.id ?? fallbackCategory?.id;
+      const category = resolveBestCategoryId(
+        action.categoryId,
+        categories,
+        action.type,
+        action.description || '',
+        options.latestUserMessageText
+      );
       if (!category) {
         return { kind: 'none' };
       }

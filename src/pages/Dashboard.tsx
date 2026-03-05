@@ -47,6 +47,39 @@ export function Dashboard() {
         return { income: incomeAcc, expense: expenseAcc, balance: incomeAcc - expenseAcc };
     }, [transactions]);
 
+    // Calculate last 7-day trends for sparklines
+    const { incomeTrend, expenseTrend, balanceTrend } = useMemo(() => {
+        if (transactions.length === 0) return { incomeTrend: [], expenseTrend: [], balanceTrend: [] };
+
+        const today = new Date();
+        const days: string[] = [];
+        for (let i = 6; i >= 0; i--) {
+            const d = new Date(today);
+            d.setDate(d.getDate() - i);
+            days.push(d.toISOString().split('T')[0]);
+        }
+
+        const dailyInc: number[] = [];
+        const dailyExp: number[] = [];
+        const dailyBal: number[] = [];
+
+        for (const day of days) {
+            let dayIncome = 0;
+            let dayExpense = 0;
+            for (const t of transactions) {
+                if (t.date === day) {
+                    if (t.type === 'income') dayIncome += t.amount;
+                    else dayExpense += t.amount;
+                }
+            }
+            dailyInc.push(dayIncome);
+            dailyExp.push(dayExpense);
+            dailyBal.push(dayIncome - dayExpense);
+        }
+
+        return { incomeTrend: dailyInc, expenseTrend: dailyExp, balanceTrend: dailyBal };
+    }, [transactions]);
+
     const handleEdit = (transaction: Transaction) => {
         setTransactionToEdit(transaction);
         setIsModalOpen(true);
@@ -77,13 +110,13 @@ export function Dashboard() {
     }, [monthKey]);
 
     return (
-        <div className="space-y-6 pb-20 lg:pb-0 animate-fade-in">
+        <div className="space-y-8 pb-20 lg:pb-0 animate-fade-in">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                     <h1 className="text-2xl font-bold text-white">
-                        Olá, {displayName?.split(' ')[0] || 'Usuário'}! 👋
+                        Olá, <span className="gradient-text-name">{displayName?.split(' ')[0] || 'Usuário'}</span>! 👋
                     </h1>
-                    <p className="text-sm text-gray-400 mt-1">
+                    <p className="text-sm text-gray-500 mt-1">
                         Aqui está o resumo financeiro do seu mês.
                     </p>
                 </div>
@@ -103,10 +136,13 @@ export function Dashboard() {
                 expense={expense}
                 balance={balance}
                 budget={settings?.budget}
+                incomeTrend={incomeTrend}
+                expenseTrend={expenseTrend}
+                balanceTrend={balanceTrend}
             />
 
             {!isLoading && transactions.length === 0 ? (
-                <div className="rounded-2xl border border-surface-700 bg-surface-900/50 glass-card p-6">
+                <div className="rounded-2xl border border-surface-700/30 bg-[#151921]/40 glass-card p-6">
                     <EmptyState
                         icon={Plus}
                         title="Comece por aqui"
@@ -129,7 +165,8 @@ export function Dashboard() {
 
             <button
                 onClick={handleCreate}
-                className="fixed bottom-6 right-6 lg:hidden z-40 flex h-14 w-14 items-center justify-center rounded-full bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 transition-transform active:scale-95"
+                className="fixed bottom-6 right-6 lg:hidden z-40 flex h-14 w-14 items-center justify-center rounded-full bg-finance-primary text-white shadow-lg shadow-finance-primary/30 transition-transform active:scale-95"
+                aria-label="Nova transação"
             >
                 <Plus className="h-6 w-6" />
             </button>

@@ -24,12 +24,14 @@ function getPasswordResetUrl(): string {
         }
     }
 
-    if (authDomain) {
-        return new URL('/reset-password', `https://${authDomain}`).toString();
-    }
-
+    // Prefer the actual app URL (web.app) — this is where /reset-password is served.
+    // authDomain (firebaseapp.com) is for OAuth flows and does NOT serve the app's routes.
     if (configuredAppUrl) {
         return new URL('/reset-password', configuredAppUrl).toString();
+    }
+
+    if (authDomain) {
+        return new URL('/reset-password', `https://${authDomain}`).toString();
     }
 
     if (typeof window !== 'undefined') {

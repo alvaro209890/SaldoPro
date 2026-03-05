@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ManualTab } from '@/components/settings/ManualTab';
 import { toast } from 'sonner';
 import { normalizePhoneNumber } from '@/utils/whatsapp';
+import { WhatsAppOnboarding } from '@/components/settings/WhatsAppOnboarding';
 
 const settingsSchema = z.object({
     budget: z.number().min(0, 'O orcamento nao pode ser negativo'),
@@ -127,7 +128,7 @@ export function Settings() {
         <div className="max-w-4xl mx-auto py-8 px-4 sm:px-6 lg:px-8 animate-fade-in">
             <div className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
-                    <h1 className="text-3xl font-bold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">
+                    <h1 className="text-3xl font-bold gradient-text-name">
                         {activeTab === 'settings' ? 'Configurações' : 'Manual do Usuário'}
                     </h1>
                     <p className="text-sm text-gray-500 mt-2 max-w-lg">
@@ -137,17 +138,17 @@ export function Settings() {
                     </p>
                 </div>
 
-                <div className="flex w-full flex-col gap-1 rounded-xl border border-surface-800 bg-[#0c1216] p-1 sm:w-auto sm:flex-row sm:gap-0">
+                <div className="flex w-full flex-col gap-1 rounded-xl border border-surface-700/30 bg-[#0f1218] p-1 sm:w-auto sm:flex-row sm:gap-0">
                     <button
                         onClick={() => setActiveTab('settings')}
-                        className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all sm:flex-none sm:px-5 ${activeTab === 'settings' ? 'bg-indigo-600/20 text-indigo-400 shadow-sm' : 'text-gray-400 hover:text-gray-200 hover:bg-surface-800/50'}`}
+                        className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all sm:flex-none sm:px-5 ${activeTab === 'settings' ? 'bg-finance-primary/15 text-finance-primary-light shadow-sm' : 'text-gray-400 hover:text-gray-200 hover:bg-white/[0.04]'}`}
                     >
                         <SettingsIcon className="w-4 h-4" />
                         Ajustes
                     </button>
                     <button
                         onClick={() => setActiveTab('manual')}
-                        className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all sm:flex-none sm:px-5 ${activeTab === 'manual' ? 'bg-indigo-600/20 text-indigo-400 shadow-sm' : 'text-gray-400 hover:text-gray-200 hover:bg-surface-800/50'}`}
+                        className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all sm:flex-none sm:px-5 ${activeTab === 'manual' ? 'bg-finance-primary/15 text-finance-primary-light shadow-sm' : 'text-gray-400 hover:text-gray-200 hover:bg-white/[0.04]'}`}
                     >
                         <BookOpen className="w-4 h-4" />
                         Manual
@@ -158,27 +159,27 @@ export function Settings() {
             {activeTab === 'settings' ? (
                 <div className="space-y-8">
                     {/* Profile Section */}
-                    <section className="relative overflow-hidden rounded-3xl border border-surface-800 bg-[#0c1216] shadow-2xl">
-                        <div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-br from-indigo-900/20 to-purple-900/20 opacity-50" />
+                    <section className="relative overflow-hidden rounded-3xl border border-surface-700/30 bg-[#0f1218] shadow-2xl">
+                        <div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-br from-finance-primary/10 to-purple-900/10 opacity-50" />
 
                         <div className="relative p-6 sm:p-10">
                             <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6 mb-8 text-center sm:text-left">
                                 <div className="relative">
-                                    <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center text-4xl font-bold text-white uppercase shadow-xl shadow-indigo-500/20 ring-4 ring-surface-900 ring-offset-2 ring-offset-[#0c1216] z-10">
+                                    <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-finance-primary to-purple-600 flex items-center justify-center text-4xl font-bold text-white uppercase shadow-xl shadow-finance-primary/20 ring-4 ring-[#0f1218] ring-offset-2 ring-offset-[#0f1218] z-10">
                                         {displayName?.charAt(0) || user?.email?.charAt(0) || 'U'}
                                     </div>
-                                    <div className="absolute inset-0 rounded-full bg-indigo-500 blur-xl opacity-40 animate-pulse" />
+                                    <div className="absolute inset-0 rounded-full bg-finance-primary blur-xl opacity-40 animate-pulse" />
                                 </div>
 
                                 <div className="mt-2 sm:mt-4">
                                     <h2 className="text-2xl font-semibold text-white tracking-tight">{displayName || 'Usuário SaldoPro'}</h2>
-                                    <p className="text-indigo-400 font-medium">{user?.email}</p>
+                                    <p className="text-finance-primary-light font-medium">{user?.email}</p>
                                 </div>
                             </div>
 
                             <div className="bg-[#0f1419] rounded-2xl p-5 border border-surface-800/60 inline-block w-full text-sm text-gray-400">
                                 <div className="flex gap-2 items-center mb-2">
-                                    <User className="w-4 h-4 text-indigo-400" />
+                                    <User className="w-4 h-4 text-finance-primary-light" />
                                     <span className="font-medium text-gray-300">Detalhes da Conta</span>
                                 </div>
                                 <p className="mb-1">Conta criada em: <span className="text-gray-200">{user?.metadata.creationTime ? new Date(user.metadata.creationTime).toLocaleDateString('pt-BR') : 'Desconhecido'}</span></p>
@@ -188,7 +189,7 @@ export function Settings() {
                     </section>
 
                     {/* Preferences Section */}
-                    <section className="rounded-3xl border border-surface-800 bg-[#0c1216] shadow-2xl overflow-hidden relative">
+                    <section className="rounded-3xl border border-surface-700/30 bg-[#0f1218] shadow-2xl overflow-hidden relative">
                         <div className="p-6 sm:p-10 border-b border-surface-800/50 bg-[#0c1216]">
                             <h2 className="text-xl font-semibold text-white flex items-center gap-2">
                                 Preferências do Aplicativo
@@ -198,7 +199,7 @@ export function Settings() {
                             </p>
                         </div>
 
-                        <form onSubmit={handleSubmit(onSubmit)} className="p-6 sm:p-10 space-y-8 bg-[#0a0f12]">
+                        <form onSubmit={handleSubmit(onSubmit)} className="p-6 sm:p-10 space-y-8 bg-[#0B0E14]">
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                                 <div className="md:col-span-2 hidden bg-[#0f1419] p-6 rounded-2xl border border-surface-800/80">
                                     <Input
@@ -249,7 +250,7 @@ export function Settings() {
                                     type="submit"
                                     isLoading={isSaving}
                                     disabled={!isDirty}
-                                    className="px-8 py-6 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium shadow-lg shadow-indigo-500/25 transition-all w-full sm:w-auto text-lg"
+                                    className="px-8 py-6 rounded-2xl bg-finance-primary hover:bg-finance-primary-light text-white font-medium shadow-lg shadow-finance-primary/25 transition-all w-full sm:w-auto text-lg"
                                 >
                                     <Save className="w-5 h-5 mr-3" />
                                     Salvar Preferências
@@ -292,21 +293,25 @@ export function Settings() {
                             </div>
 
                             {whatsappAllowedNumbers.length === 0 ? (
-                                <div className="bg-[#0f1419] rounded-2xl p-8 border border-surface-800/60 text-center">
-                                    <p className="text-gray-500">
-                                        Nenhum número autorizado ainda. As mensagens recebidas serão ignoradas.
-                                    </p>
+                                <div className="bg-[#0B0E14] rounded-2xl p-8 border border-surface-700/30 text-center">
+                                    <WhatsAppOnboarding />
                                 </div>
                             ) : (
                                 <div className="space-y-3">
                                     {whatsappAllowedNumbers.map((phone) => (
                                         <div
                                             key={phone}
-                                            className="flex flex-col gap-3 rounded-xl border border-surface-800/80 bg-[#0f1419] px-5 py-4 shadow-sm sm:flex-row sm:items-center sm:justify-between"
+                                            className="flex flex-col gap-3 rounded-xl border border-surface-700/30 bg-[#0B0E14] px-5 py-4 shadow-sm sm:flex-row sm:items-center sm:justify-between"
                                         >
                                             <div className="flex min-w-0 items-center gap-3">
-                                                <div className="w-8 h-8 rounded-full bg-green-500/10 flex items-center justify-center">
-                                                    <Phone className="w-4 h-4 text-green-500" />
+                                                <div className="w-8 h-8 rounded-full bg-emerald-500/10 flex items-center justify-center relative">
+                                                    <Phone className="w-4 h-4 text-emerald-500" />
+                                                    {/* Green check indicator */}
+                                                    <div className="absolute -top-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full flex items-center justify-center ring-2 ring-[#0f1218]">
+                                                        <svg className="w-2 h-2 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                                                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                                                        </svg>
+                                                    </div>
                                                 </div>
                                                 <span className="min-w-0 break-all text-sm font-medium text-gray-200">{phone}</span>
                                             </div>
@@ -329,7 +334,7 @@ export function Settings() {
                                     isLoading={isSavingNumbers}
                                     disabled={!hasNumbersChanged}
                                     onClick={handleSaveNumbers}
-                                    className="px-8 py-6 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium shadow-lg shadow-indigo-500/25 transition-all w-full sm:w-auto text-lg"
+                                    className="px-8 py-6 rounded-2xl bg-finance-primary hover:bg-finance-primary-light text-white font-medium shadow-lg shadow-finance-primary/25 transition-all w-full sm:w-auto text-lg"
                                 >
                                     <Save className="w-5 h-5 mr-3" />
                                     Salvar Números

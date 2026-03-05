@@ -119,7 +119,7 @@ export function Transactions() {
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                     <h1 className="text-2xl font-bold text-white">Transações</h1>
-                    <p className="text-sm text-gray-400 mt-1">
+                    <p className="text-sm text-gray-500 mt-1">
                         Gerencie suas receitas e despesas.
                     </p>
                 </div>
@@ -139,9 +139,9 @@ export function Transactions() {
                 categories={categories}
             />
 
-            <div className="rounded-2xl border border-surface-700 bg-surface-900/50 glass-card">
+            <div className="rounded-2xl border border-surface-700/30 bg-[#151921]/40 glass-card">
                 {isLoading ? (
-                    <div className="divide-y divide-surface-800">
+                    <div className="divide-y divide-surface-700/30">
                         {[...Array(5)].map((_, i) => (
                             <LoadingSkeleton key={i} variant="row" className="bg-transparent border-none rounded-none" />
                         ))}
@@ -165,7 +165,7 @@ export function Transactions() {
                         />
                     </div>
                 ) : (
-                    <div className="divide-y divide-surface-800 px-3 py-2 sm:px-4">
+                    <div className="divide-y divide-surface-700/30 px-3 py-2 sm:px-4">
                         {filteredTransactions.map((t) => (
                             <TransactionRow
                                 key={t.id}
@@ -184,7 +184,8 @@ export function Transactions() {
             {/* Floating Action Button for mobile */}
             <button
                 onClick={handleCreate}
-                className="fixed bottom-6 right-6 lg:hidden z-40 flex h-14 w-14 items-center justify-center rounded-full bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 transition-transform active:scale-95"
+                className="fixed bottom-6 right-6 lg:hidden z-40 flex h-14 w-14 items-center justify-center rounded-full bg-finance-primary text-white shadow-lg shadow-finance-primary/30 transition-transform active:scale-95"
+                aria-label="Nova transação"
             >
                 <Plus className="h-6 w-6" />
             </button>

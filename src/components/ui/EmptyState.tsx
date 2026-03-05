@@ -19,14 +19,18 @@ export function EmptyState({
     className = '',
 }: EmptyStateProps) {
     return (
-        <div className={`flex flex-col items-center justify-center rounded-2xl border border-dashed border-surface-700 bg-surface-900/30 p-8 text-center animate-fade-in ${className}`}>
-            <div className="mb-4 rounded-full bg-surface-800 p-4">
-                <Icon className="h-8 w-8 text-gray-500" />
+        <div className={`flex flex-col items-center justify-center rounded-2xl border border-dashed border-surface-700/50 bg-surface-900/20 p-8 text-center animate-fade-in ${className}`}>
+            <div className="relative mb-5">
+                {/* Animated pulse ring */}
+                <div className="absolute inset-0 rounded-full bg-finance-primary/20 animate-pulse-ring" />
+                <div className="relative rounded-full bg-gradient-to-br from-finance-primary/20 to-finance-primary/5 p-4 ring-1 ring-finance-primary/10 animate-float">
+                    <Icon className="h-8 w-8 text-finance-primary-light" />
+                </div>
             </div>
-            <h3 className="mb-2 text-lg font-semibold text-gray-200">{title}</h3>
-            <p className="mb-6 max-w-sm text-sm text-gray-500">{description}</p>
+            <h3 className="mb-2 text-lg font-semibold gradient-text">{title}</h3>
+            <p className="mb-6 max-w-sm text-sm text-gray-500 leading-relaxed">{description}</p>
             {actionLabel && onAction && (
-                <Button onClick={onAction} variant="secondary">
+                <Button onClick={onAction} variant="primary">
                     {actionLabel}
                 </Button>
             )}

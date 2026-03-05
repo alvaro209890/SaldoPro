@@ -39,18 +39,19 @@ export function Modal({ isOpen, onClose, title, children, size = 'md' }: ModalPr
     return createPortal(
         <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-6">
             <div
-                className="fixed inset-0 bg-gray-950/80 backdrop-blur-sm transition-opacity"
+                className="fixed inset-0 bg-[#0B0E14]/85 backdrop-blur-md transition-opacity animate-fade-in"
                 onClick={onClose}
             />
             <div
-                className={`relative flex max-h-[calc(100dvh-0.75rem)] w-full flex-col rounded-t-3xl border border-b-0 border-x-0 border-surface-700 bg-surface-900 shadow-2xl animate-scale-in sm:max-h-[calc(100vh-3rem)] sm:rounded-2xl sm:border sm:border-surface-700 ${sizes[size]}`}
+                className={`relative flex max-h-[calc(100dvh-0.75rem)] w-full flex-col glass-modal rounded-t-3xl border-t border-x-0 border-b-0 border-surface-700/50 shadow-2xl shadow-black/40 sm:max-h-[calc(100vh-3rem)] sm:rounded-2xl sm:border sm:border-surface-700/40 ${sizes[size]} animate-slide-up sm:animate-scale-in`}
                 onClick={(e) => e.stopPropagation()}
             >
-                <div className="flex items-center justify-between border-b border-surface-700 px-4 py-4 sm:px-6">
+                <div className="flex items-center justify-between border-b border-surface-700/40 px-4 py-4 sm:px-6">
                     <h2 className="text-base font-semibold text-white sm:text-lg">{title}</h2>
                     <button
                         onClick={onClose}
-                        className="rounded-lg p-1 text-gray-400 hover:bg-surface-800 hover:text-white transition-colors"
+                        className="rounded-lg p-1.5 text-gray-400 hover:bg-white/[0.06] hover:text-white transition-all hover:ring-1 hover:ring-white/10"
+                        aria-label="Fechar"
                     >
                         <X className="h-5 w-5" />
                     </button>

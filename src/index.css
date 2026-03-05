@@ -2,27 +2,27 @@
 @plugin "@tailwindcss/typography";
 
 @theme {
-  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-sans: 'Plus Jakarta Sans', 'Inter', ui-sans-serif, system-ui, sans-serif;
 
-  /* Finance Colors */
-  --color-finance-income: #10b981;
-  --color-finance-income-light: #34d399;
-  --color-finance-income-dark: #059669;
-  --color-finance-expense: #ef4444;
-  --color-finance-expense-light: #f87171;
-  --color-finance-expense-dark: #dc2626;
-  --color-finance-primary: #6366f1;
-  --color-finance-primary-light: #818cf8;
-  --color-finance-primary-dark: #4f46e5;
+  /* Finance Colors — vibrant fintech palette */
+  --color-finance-income: #00C9A7;
+  --color-finance-income-light: #34E4C8;
+  --color-finance-income-dark: #00A88A;
+  --color-finance-expense: #FF6B6B;
+  --color-finance-expense-light: #FF8E8E;
+  --color-finance-expense-dark: #E05555;
+  --color-finance-primary: #7C3AED;
+  --color-finance-primary-light: #A78BFA;
+  --color-finance-primary-dark: #6D28D9;
 
-  /* Surface Colors */
+  /* Surface Colors — blue-tinted dark */
   --color-surface-50: #f8fafc;
   --color-surface-100: #f1f5f9;
   --color-surface-200: #e2e8f0;
-  --color-surface-700: #334155;
-  --color-surface-800: #1e293b;
-  --color-surface-900: #0f172a;
-  --color-surface-950: #020617;
+  --color-surface-700: #2A3040;
+  --color-surface-800: #151921;
+  --color-surface-900: #101318;
+  --color-surface-950: #0B0E14;
 }
 
 /* Dark scrollbar */
@@ -32,28 +32,28 @@
 }
 
 ::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: #0B0E14;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: #2A3040;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #3B4455;
 }
 
 /* Firefox scrollbar */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #334155 #0f172a;
+  scrollbar-color: #2A3040 #0B0E14;
 }
 
 /* Base styles */
 body {
-  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  background-color: #030712;
+  font-family: 'Plus Jakarta Sans', 'Inter', ui-sans-serif, system-ui, sans-serif;
+  background-color: #0B0E14;
   color: #f3f4f6;
   min-height: 100vh;
 }
@@ -64,26 +64,49 @@ body {
 
 /* Glass morphism utility */
 .glass {
-  background: rgba(15, 23, 42, 0.6);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(99, 102, 241, 0.1);
+  background: rgba(21, 25, 33, 0.65);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(124, 58, 237, 0.08);
 }
 
 .glass-card {
-  background: rgba(15, 23, 42, 0.5);
-  backdrop-filter: blur(16px);
-  border: 1px solid rgba(148, 163, 184, 0.1);
+  background: rgba(21, 25, 33, 0.55);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.glass-sidebar {
+  background: rgba(11, 14, 20, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-right: 1px solid rgba(42, 48, 64, 0.6);
+}
+
+.glass-modal {
+  background: rgba(16, 19, 24, 0.88);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(42, 48, 64, 0.5);
 }
 
 /* Gradient text */
 .gradient-text {
-  background: linear-gradient(135deg, #818cf8, #6366f1, #4f46e5);
+  background: linear-gradient(135deg, #A78BFA, #7C3AED, #6D28D9);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
-/* Animations */
+.gradient-text-name {
+  background: linear-gradient(135deg, #ffffff 0%, #A78BFA 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Animations ── */
 @keyframes fade-in {
   from {
     opacity: 0;
@@ -128,6 +151,68 @@ body {
   }
 }
 
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes float {
+
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes typing-dot {
+
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+
+  30% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.8;
+  }
+
+  80%,
+  100% {
+    transform: scale(1.8);
+    opacity: 0;
+  }
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .animate-fade-in {
   animation: fade-in 0.3s ease-out;
 }
@@ -144,6 +229,24 @@ body {
   animation: scale-in 0.2s ease-out;
 }
 
+.animate-shimmer {
+  background: linear-gradient(90deg, transparent 25%, rgba(124, 58, 237, 0.04) 50%, transparent 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.8s ease-in-out infinite;
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.35s ease-out;
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 1.5s cubic-bezier(0.455, 0.03, 0.515, 0.955) infinite;
+}
+
 /* Gallery card hover */
 .gallery-card-hover {
   transition: transform 0.2s ease, box-shadow 0.2s ease;
@@ -151,7 +254,7 @@ body {
 
 .gallery-card-hover:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.08);
+  box-shadow: 0 8px 24px rgba(124, 58, 237, 0.08);
 }
 
 /* Gallery card action overlay */
@@ -166,14 +269,14 @@ body {
 
 /* Dark select dropdown styling */
 select option {
-  background-color: #0f172a;
+  background-color: #0B0E14;
   color: #e2e8f0;
   padding: 8px 12px;
 }
 
 select option:checked,
 select option:hover {
-  background-color: #1e293b;
+  background-color: #151921;
   color: #ffffff;
 }
 
