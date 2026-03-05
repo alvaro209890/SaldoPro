@@ -73,7 +73,31 @@ interface SubscriptionRecord {
   createdAt: string;
   updatedAt: string;
 }
-type Tab = 'overview' | 'operations' | 'users' | 'storage' | 'subscriptions';
+type Tab = 'overview' | 'operations' | 'users' | 'storage' | 'subscriptions' | 'maintenance';
+type CleanupCategory = 'whatsapp_messages' | 'chat_sessions' | 'old_reminders' | 'expired_pending_docs' | 'ai_quotas' | 'billing_events';
+interface CleanupHistoryItem { id: string; timestamp: string; cutoffDate: string; categories: CleanupCategory[]; counts: Record<string, number>; totalDeleted: number; }
+const CLEANUP_CATEGORIES: { key: CleanupCategory; label: string; desc: string; icon: string }[] = [
+  { key: 'whatsapp_messages', label: 'Mensagens WhatsApp', desc: 'Logs de mensagens enviadas e recebidas', icon: '💬' },
+  { key: 'chat_sessions', label: 'Sessões de Chat', desc: 'Sessões e mensagens do chat web da IA', icon: '🤖' },
+  { key: 'old_reminders', label: 'Lembretes Pagos', desc: 'Lembretes com status "pago" antigos', icon: '🔔' },
+  { key: 'expired_pending_docs', label: 'Docs Pendentes Expirados', desc: 'Documentos do WhatsApp que expiraram', icon: '📄' },
+  { key: 'ai_quotas', label: 'Quotas de IA', desc: 'Registros diários de uso da IA', icon: '⚡' },
+  { key: 'billing_events', label: 'Eventos de Billing', desc: 'Webhooks de pagamento antigos processados', icon: '💳' },
+];
+const PERIOD_OPTIONS = [
+  { value: '3m', label: 'Últimos 3 meses' },
+  { value: '6m', label: 'Últimos 6 meses' },
+  { value: '1y', label: 'Último ano' },
+  { value: 'custom', label: 'Personalizado' },
+];
+function periodToCutoff(period: string, customDate: string): string {
+  if (period === 'custom') return customDate ? new Date(customDate).toISOString() : '';
+  const now = new Date();
+  if (period === '3m') now.setMonth(now.getMonth() - 3);
+  else if (period === '6m') now.setMonth(now.getMonth() - 6);
+  else if (period === '1y') now.setFullYear(now.getFullYear() - 1);
+  return now.toISOString();
+}
 
 /* ───── Helpers ───── */
 function fmtDate(v: string | null) {
@@ -132,6 +156,7 @@ const IconSend = () => <Icon d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" size={16} 
 const IconPhone = () => <Icon d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6A19.79 19.79 0 012.12 4.18 2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z" />;
 const IconStorage = () => <Icon d="M20 7H4V5a2 2 0 012-2h12a2 2 0 012 2v2zM4 7h16v12a2 2 0 01-2 2H6a2 2 0 01-2-2V7zM9 11h6M9 15h6" />;
 const IconCreditCard = () => <Icon d="M1 4h22v16H1zM1 10h22M6 16h4" />;
+const IconTrash = () => <Icon d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6" />;
 
 /* ───── Stat Card ───── */
 function StatCard({ label, value, sub, glow = '' }: { label: string; value: string | number; sub?: string; glow?: string }) {
@@ -206,6 +231,18 @@ export function App() {
   const [blockingUid, setBlockingUid] = useState('');
   const [subscriptionActionUid, setSubscriptionActionUid] = useState('');
 
+  // Maintenance / DB Cleanup tab
+  const [cleanupCats, setCleanupCats] = useState<Set<CleanupCategory>>(new Set());
+  const [cleanupPeriod, setCleanupPeriod] = useState('6m');
+  const [cleanupCustomDate, setCleanupCustomDate] = useState('');
+  const [cleanupPreview, setCleanupPreview] = useState<{ counts: Record<string, number>; total: number } | null>(null);
+  const [cleanupLoading, setCleanupLoading] = useState(false);
+  const [cleanupExecuting, setCleanupExecuting] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState<{ counts: Record<string, number>; totalDeleted: number } | null>(null);
+  const [cleanupHistory, setCleanupHistory] = useState<CleanupHistoryItem[]>([]);
+  const [confirmText, setConfirmText] = useState('');
+  const [confirmModal, setConfirmModal] = useState(false);
+
   /* Session check */
   useEffect(() => {
     if (!token) { setChecking(false); return; }
@@ -266,6 +303,49 @@ export function App() {
   }, [detailUid, token]);
 
   useEffect(() => { setDm(''); setDmOk(false); }, [selUid]);
+
+  /* Cleanup functions */
+  function toggleCleanupCat(cat: CleanupCategory) {
+    setCleanupCats(prev => { const n = new Set(prev); n.has(cat) ? n.delete(cat) : n.add(cat); return n; });
+    setCleanupPreview(null); setCleanupResult(null);
+  }
+
+  async function loadCleanupPreview() {
+    if (!token || cleanupCats.size === 0) return;
+    const cutoff = periodToCutoff(cleanupPeriod, cleanupCustomDate);
+    if (!cutoff) { setError('Selecione uma data de corte válida.'); return; }
+    setCleanupLoading(true); setCleanupPreview(null); setCleanupResult(null); setError('');
+    try {
+      const r = await apiFetch<{ counts: Record<string, number>; total: number }>('/api/admin/db-cleanup/preview', token, {
+        method: 'POST', body: JSON.stringify({ categories: [...cleanupCats], cutoffDate: cutoff })
+      });
+      setCleanupPreview(r);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Falha na pré-visualização.'); }
+    finally { setCleanupLoading(false); }
+  }
+
+  async function executeCleanup() {
+    if (!token || cleanupCats.size === 0 || confirmText !== 'CONFIRMAR') return;
+    const cutoff = periodToCutoff(cleanupPeriod, cleanupCustomDate);
+    if (!cutoff) return;
+    setCleanupExecuting(true); setError('');
+    try {
+      const r = await apiFetch<{ counts: Record<string, number>; totalDeleted: number }>('/api/admin/db-cleanup/execute', token, {
+        method: 'POST', body: JSON.stringify({ categories: [...cleanupCats], cutoffDate: cutoff, confirmation: 'CONFIRMAR' })
+      });
+      setCleanupResult(r); setCleanupPreview(null); setConfirmModal(false); setConfirmText('');
+      void loadCleanupHistory();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Falha na limpeza.'); }
+    finally { setCleanupExecuting(false); }
+  }
+
+  async function loadCleanupHistory() {
+    if (!token) return;
+    try {
+      const r = await apiFetch<{ history: CleanupHistoryItem[] }>('/api/admin/db-cleanup/history', token);
+      setCleanupHistory(r.history);
+    } catch { }
+  }
 
   /* Actions */
   async function login(e: FormEvent) {
@@ -628,6 +708,7 @@ export function App() {
           <button onClick={() => setTab('users')} className={`sidebar-link w-full ${tab === 'users' ? 'active' : ''}`}><IconUsers /> Usuários</button>
           <button onClick={() => { setTab('subscriptions'); void loadSubscriptions(); }} className={`sidebar-link w-full ${tab === 'subscriptions' ? 'active' : ''}`}><IconCreditCard /> Assinaturas</button>
           <button onClick={() => setTab('storage')} className={`sidebar-link w-full ${tab === 'storage' ? 'active' : ''}`}><IconStorage /> Storage</button>
+          <button onClick={() => { setTab('maintenance'); void loadCleanupHistory(); }} className={`sidebar-link w-full ${tab === 'maintenance' ? 'active' : ''}`}><IconTrash /> Manutenção</button>
         </nav>
         <div className="border-t border-white/6 pt-4 space-y-1">
           <button onClick={() => void refresh()} disabled={loading} className="sidebar-link w-full"><IconRefresh /> {loading ? 'Atualizando...' : 'Atualizar'}</button>
@@ -639,9 +720,9 @@ export function App() {
       <div className="lg:hidden fixed top-0 left-0 right-0 z-50 bg-black/80 backdrop-blur-xl border-b border-white/6 px-4 py-3 flex items-center justify-between">
         <p className="text-sm font-bold text-white">💰 SaldoPro Admin</p>
         <div className="flex gap-2">
-          {(['overview', 'operations', 'users', 'subscriptions', 'storage'] as Tab[]).map(t => (
-            <button key={t} onClick={() => { setTab(t); if (t === 'subscriptions') void loadSubscriptions(); }} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${tab === t ? 'bg-emerald-500/20 text-emerald-300' : 'text-zinc-400'}`}>
-              {t === 'overview' ? 'Geral' : t === 'operations' ? 'Op.' : t === 'users' ? 'Users' : t === 'subscriptions' ? 'Assin.' : 'Storage'}
+          {(['overview', 'operations', 'users', 'subscriptions', 'storage', 'maintenance'] as Tab[]).map(t => (
+            <button key={t} onClick={() => { setTab(t); if (t === 'subscriptions') void loadSubscriptions(); if (t === 'maintenance') void loadCleanupHistory(); }} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${tab === t ? 'bg-emerald-500/20 text-emerald-300' : 'text-zinc-400'}`}>
+              {t === 'overview' ? 'Geral' : t === 'operations' ? 'Op.' : t === 'users' ? 'Users' : t === 'subscriptions' ? 'Assin.' : t === 'storage' ? 'Storage' : 'Manut.'}
             </button>
           ))}
         </div>
@@ -1195,6 +1276,205 @@ export function App() {
                     </button>
                   </form>
                 )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ──── MAINTENANCE TAB ──── */}
+        {tab === 'maintenance' && (
+          <div className="space-y-5">
+            <div>
+              <h1 className="text-2xl font-bold text-white">Manutenção do Banco de Dados</h1>
+              <p className="text-sm text-zinc-500 mt-1">Identifique e remova dados obsoletos para otimizar performance e armazenamento</p>
+            </div>
+
+            {/* Period selector */}
+            <div className="card p-5">
+              <p className="text-xs uppercase tracking-widest text-zinc-500 mb-4">Período de Corte</p>
+              <p className="text-xs text-zinc-400 mb-3">Registros <strong>anteriores</strong> à data de corte serão incluídos na limpeza</p>
+              <div className="flex flex-wrap gap-2 items-end">
+                <div>
+                  <select value={cleanupPeriod} onChange={e => { setCleanupPeriod(e.target.value); setCleanupPreview(null); setCleanupResult(null); }}
+                    className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-white outline-none focus:border-emerald-400/40 transition">
+                    {PERIOD_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </div>
+                {cleanupPeriod === 'custom' && (
+                  <div>
+                    <input type="date" value={cleanupCustomDate} onChange={e => { setCleanupCustomDate(e.target.value); setCleanupPreview(null); setCleanupResult(null); }}
+                      className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-white outline-none focus:border-emerald-400/40 transition" />
+                  </div>
+                )}
+                <p className="text-xs text-zinc-500 ml-2">
+                  Corte: {cleanupPeriod === 'custom'
+                    ? (cleanupCustomDate ? new Date(cleanupCustomDate).toLocaleDateString('pt-BR') : '—')
+                    : new Date(periodToCutoff(cleanupPeriod, '')).toLocaleDateString('pt-BR')}
+                </p>
+              </div>
+            </div>
+
+            {/* Category selection */}
+            <div className="card p-5">
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-xs uppercase tracking-widest text-zinc-500">Categorias de Dados</p>
+                <button onClick={() => { cleanupCats.size === CLEANUP_CATEGORIES.length ? setCleanupCats(new Set()) : setCleanupCats(new Set(CLEANUP_CATEGORIES.map(c => c.key))); setCleanupPreview(null); setCleanupResult(null); }}
+                  className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold transition">
+                  {cleanupCats.size === CLEANUP_CATEGORIES.length ? 'Desmarcar todos' : 'Selecionar todos'}
+                </button>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {CLEANUP_CATEGORIES.map(cat => (
+                  <button key={cat.key} onClick={() => toggleCleanupCat(cat.key)}
+                    className={`cleanup-category text-left rounded-xl p-4 border transition ${cleanupCats.has(cat.key) ? 'border-emerald-400/30 bg-emerald-500/8' : 'border-white/8 bg-white/3 hover:border-white/15'}`}>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xl">{cat.icon}</span>
+                      <div>
+                        <p className={`text-sm font-semibold ${cleanupCats.has(cat.key) ? 'text-emerald-300' : 'text-white'}`}>{cat.label}</p>
+                        <p className="text-xs text-zinc-500 mt-0.5">{cat.desc}</p>
+                      </div>
+                      <div className={`ml-auto w-5 h-5 rounded-md border-2 flex items-center justify-center transition ${cleanupCats.has(cat.key) ? 'border-emerald-400 bg-emerald-400' : 'border-zinc-600'}`}>
+                        {cleanupCats.has(cat.key) && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Preview button */}
+            <div className="flex flex-wrap gap-3 items-center">
+              <button onClick={() => void loadCleanupPreview()} disabled={cleanupLoading || cleanupCats.size === 0}
+                className="rounded-xl bg-sky-500/15 border border-sky-500/25 px-5 py-2.5 text-sm font-semibold text-sky-300 hover:bg-sky-500/25 transition disabled:opacity-40">
+                {cleanupLoading ? 'Analisando...' : '🔍 Pré-visualizar'}
+              </button>
+              {cleanupCats.size === 0 && <p className="text-xs text-zinc-500">Selecione ao menos uma categoria</p>}
+            </div>
+
+            {/* Preview results */}
+            {cleanupPreview && (
+              <div className="card p-5">
+                <p className="text-xs uppercase tracking-widest text-zinc-500 mb-4">Pré-visualização — Registros que serão excluídos</p>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 mb-4">
+                  {CLEANUP_CATEGORIES.filter(c => cleanupCats.has(c.key)).map(cat => {
+                    const count = cleanupPreview.counts[cat.key] ?? 0;
+                    return (
+                      <div key={cat.key} className={`rounded-xl p-4 border ${count > 0 ? 'border-amber-400/20 bg-amber-500/6' : 'border-white/8 bg-white/3'}`}>
+                        <div className="flex items-center gap-2 mb-2">
+                          <span>{cat.icon}</span>
+                          <p className="text-sm font-medium text-zinc-300">{cat.label}</p>
+                        </div>
+                        <p className={`text-2xl font-bold ${count > 0 ? 'text-amber-300' : 'text-zinc-600'}`}>{count.toLocaleString('pt-BR')}</p>
+                        <p className="text-xs text-zinc-500 mt-1">registro(s)</p>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex items-center justify-between border-t border-white/6 pt-4">
+                  <div>
+                    <p className="text-sm text-zinc-400">Total de registros a remover:</p>
+                    <p className="text-3xl font-bold text-amber-300">{cleanupPreview.total.toLocaleString('pt-BR')}</p>
+                  </div>
+                  {cleanupPreview.total > 0 && (
+                    <button onClick={() => { setConfirmModal(true); setConfirmText(''); }}
+                      className="rounded-xl bg-rose-500/15 border border-rose-500/25 px-5 py-2.5 text-sm font-semibold text-rose-300 hover:bg-rose-500/25 transition">
+                      🗑️ Executar Limpeza
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Confirmation modal */}
+            {confirmModal && (
+              <div className="modal-overlay" onClick={() => setConfirmModal(false)}>
+                <div className="modal-content" onClick={e => e.stopPropagation()}>
+                  <div className="text-center mb-6">
+                    <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-rose-500/15 border border-rose-500/25 mb-3">
+                      <span className="text-2xl">⚠️</span>
+                    </div>
+                    <h2 className="text-xl font-bold text-white">Confirmar Limpeza</h2>
+                    <p className="text-sm text-zinc-400 mt-2">Esta ação é <strong className="text-rose-300">irreversível</strong>. Os dados excluídos não poderão ser recuperados.</p>
+                  </div>
+                  <div className="rounded-xl border border-amber-400/20 bg-amber-500/8 p-3 mb-4">
+                    <p className="text-xs text-amber-200 font-medium mb-1">Resumo da operação:</p>
+                    <ul className="text-xs text-zinc-400 space-y-1">
+                      {CLEANUP_CATEGORIES.filter(c => cleanupCats.has(c.key)).map(cat => (
+                        <li key={cat.key}>• {cat.label}: <span className="text-white font-semibold">{(cleanupPreview?.counts[cat.key] ?? 0).toLocaleString('pt-BR')}</span> registro(s)</li>
+                      ))}
+                    </ul>
+                    <p className="text-xs text-amber-300 font-semibold mt-2">Total: {(cleanupPreview?.total ?? 0).toLocaleString('pt-BR')} registro(s)</p>
+                  </div>
+                  <div className="mb-4">
+                    <label className="block text-xs font-medium text-zinc-400 mb-2 uppercase tracking-wider">Digite <span className="text-rose-300 font-bold">CONFIRMAR</span> para prosseguir</label>
+                    <input type="text" value={confirmText} onChange={e => setConfirmText(e.target.value)} placeholder="CONFIRMAR"
+                      className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-white outline-none focus:border-rose-400/40 transition text-center font-bold tracking-widest" autoFocus />
+                  </div>
+                  <div className="flex gap-3">
+                    <button onClick={() => setConfirmModal(false)}
+                      className="flex-1 rounded-xl bg-white/5 border border-white/10 px-4 py-2.5 text-sm font-semibold text-zinc-400 hover:bg-white/10 transition">
+                      Cancelar
+                    </button>
+                    <button onClick={() => void executeCleanup()} disabled={confirmText !== 'CONFIRMAR' || cleanupExecuting}
+                      className="flex-1 rounded-xl bg-rose-500/20 border border-rose-500/30 px-4 py-2.5 text-sm font-bold text-rose-300 hover:bg-rose-500/30 transition disabled:opacity-40">
+                      {cleanupExecuting ? 'Executando...' : '🗑️ Confirmar Exclusão'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Execution result */}
+            {cleanupResult && (
+              <div className="card p-5 card-glow-green">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/25 flex items-center justify-center text-xl">✅</div>
+                  <div>
+                    <p className="text-sm font-bold text-emerald-300">Limpeza concluída com sucesso</p>
+                    <p className="text-xs text-zinc-500">{cleanupResult.totalDeleted.toLocaleString('pt-BR')} registro(s) removidos</p>
+                  </div>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {Object.entries(cleanupResult.counts).map(([key, count]) => {
+                    const cat = CLEANUP_CATEGORIES.find(c => c.key === key);
+                    return (
+                      <div key={key} className="rounded-lg bg-white/4 border border-white/6 p-3 flex items-center gap-2">
+                        <span>{cat?.icon ?? '📦'}</span>
+                        <span className="text-sm text-zinc-400">{cat?.label ?? key}</span>
+                        <span className="ml-auto text-sm font-bold text-emerald-300">{count.toLocaleString('pt-BR')}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Cleanup history */}
+            {cleanupHistory.length > 0 && (
+              <div className="card p-5">
+                <p className="text-xs uppercase tracking-widest text-zinc-500 mb-4">Histórico de Limpezas</p>
+                <div className="overflow-x-auto">
+                  <table className="data-table">
+                    <thead><tr><th>Data</th><th>Categorias</th><th>Corte</th><th>Total Removido</th></tr></thead>
+                    <tbody>
+                      {cleanupHistory.map(h => (
+                        <tr key={h.id}>
+                          <td className="text-white text-xs">{fmtDate(h.timestamp)}</td>
+                          <td>
+                            <div className="flex flex-wrap gap-1">
+                              {h.categories.map(cat => {
+                                const info = CLEANUP_CATEGORIES.find(c => c.key === cat);
+                                return <span key={cat} className="badge text-xs">{info?.icon} {info?.label ?? cat}</span>;
+                              })}
+                            </div>
+                          </td>
+                          <td className="text-xs text-zinc-400">{fmtDate(h.cutoffDate)}</td>
+                          <td className="text-white font-bold">{h.totalDeleted.toLocaleString('pt-BR')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
           </div>
