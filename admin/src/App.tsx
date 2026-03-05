@@ -82,6 +82,33 @@ interface MaintenanceSignal {
 type Tab = 'overview' | 'operations' | 'users' | 'storage' | 'subscriptions' | 'maintenance';
 type CleanupCategory = 'whatsapp_messages' | 'chat_sessions' | 'old_reminders' | 'expired_pending_docs' | 'ai_quotas' | 'billing_events';
 interface CleanupHistoryItem { id: string; timestamp: string; cutoffDate: string; categories: CleanupCategory[]; counts: Record<string, number>; totalDeleted: number; }
+type CleanupRiskLevel = 'low' | 'warning' | 'critical';
+type CleanupEstimationMethod = 'sample_json' | 'size_column_sample';
+interface CleanupCategoryInsight {
+  category: CleanupCategory;
+  totalCount: number;
+  eligibleCount: number;
+  eligiblePct: number;
+  estimatedTotalBytes: number;
+  estimatedRecoverableBytes: number;
+  avgBytesPerRecord: number;
+  oldestAt: string | null;
+  newestAt: string | null;
+  riskLevel: CleanupRiskLevel;
+  estimationMethod: CleanupEstimationMethod;
+  note?: string;
+}
+interface CleanupInsightsResponse {
+  cutoffDate: string;
+  totals: {
+    totalRecords: number;
+    eligibleRecords: number;
+    estimatedTotalBytes: number;
+    estimatedRecoverableBytes: number;
+  };
+  categories: CleanupCategoryInsight[];
+  generatedAt: string;
+}
 const CLEANUP_CATEGORIES: { key: CleanupCategory; label: string; desc: string; icon: string }[] = [
   { key: 'whatsapp_messages', label: 'Mensagens WhatsApp', desc: 'Logs de mensagens enviadas e recebidas', icon: '💬' },
   { key: 'chat_sessions', label: 'Sessões de Chat', desc: 'Sessões e mensagens do chat web da IA', icon: '🤖' },
@@ -90,6 +117,8 @@ const CLEANUP_CATEGORIES: { key: CleanupCategory; label: string; desc: string; i
   { key: 'ai_quotas', label: 'Quotas de IA', desc: 'Registros diários de uso da IA', icon: '⚡' },
   { key: 'billing_events', label: 'Eventos de Billing', desc: 'Webhooks de pagamento antigos processados', icon: '💳' },
 ];
+const CLEANUP_CATEGORY_ORDER: CleanupCategory[] = CLEANUP_CATEGORIES.map((item) => item.key);
+const CLEANUP_CATEGORY_META = new Map(CLEANUP_CATEGORIES.map((item) => [item.key, item] as const));
 const PERIOD_OPTIONS = [
   { value: '3m', label: 'Últimos 3 meses' },
   { value: '6m', label: 'Últimos 6 meses' },
@@ -258,6 +287,10 @@ export function App() {
   const [cleanupExecuting, setCleanupExecuting] = useState(false);
   const [cleanupResult, setCleanupResult] = useState<{ counts: Record<string, number>; totalDeleted: number } | null>(null);
   const [cleanupHistory, setCleanupHistory] = useState<CleanupHistoryItem[]>([]);
+  const [cleanupInsights, setCleanupInsights] = useState<CleanupInsightsResponse | null>(null);
+  const [cleanupInsightsLoading, setCleanupInsightsLoading] = useState(false);
+  const [cleanupInsightsError, setCleanupInsightsError] = useState('');
+  const [cleanupInsightMetric, setCleanupInsightMetric] = useState<'bytes' | 'records'>('bytes');
   const [confirmText, setConfirmText] = useState('');
   const [confirmModal, setConfirmModal] = useState(false);
 
@@ -327,15 +360,48 @@ export function App() {
     void loadSubscriptions();
   }, [tab, token, subscriptions.length]);
 
+  useEffect(() => {
+    if (tab !== 'maintenance' || !token) return;
+    void loadCleanupInsights();
+  }, [tab, token, cleanupPeriod, cleanupCustomDate]);
+
   /* Cleanup functions */
   function toggleCleanupCat(cat: CleanupCategory) {
     setCleanupCats(prev => { const n = new Set(prev); n.has(cat) ? n.delete(cat) : n.add(cat); return n; });
     setCleanupPreview(null); setCleanupResult(null);
   }
 
+  function resolveCleanupCutoff(): string | null {
+    const cutoff = periodToCutoff(cleanupPeriod, cleanupCustomDate);
+    return cutoff || null;
+  }
+
+  async function loadCleanupInsights() {
+    if (!token) return;
+    const cutoff = resolveCleanupCutoff();
+    if (!cutoff) {
+      setCleanupInsights(null);
+      setCleanupInsightsError('Selecione uma data de corte valida para calcular os insights.');
+      return;
+    }
+
+    setCleanupInsightsLoading(true);
+    setCleanupInsightsError('');
+    try {
+      const encodedCutoff = encodeURIComponent(cutoff);
+      const payload = await apiFetch<CleanupInsightsResponse>(`/api/admin/db-cleanup/insights?cutoffDate=${encodedCutoff}`, token);
+      setCleanupInsights(payload);
+    } catch (e) {
+      setCleanupInsights(null);
+      setCleanupInsightsError(e instanceof Error ? e.message : 'Falha ao carregar insights de categorias.');
+    } finally {
+      setCleanupInsightsLoading(false);
+    }
+  }
+
   async function loadCleanupPreview() {
     if (!token || cleanupCats.size === 0) return;
-    const cutoff = periodToCutoff(cleanupPeriod, cleanupCustomDate);
+    const cutoff = resolveCleanupCutoff();
     if (!cutoff) { setError('Selecione uma data de corte válida.'); return; }
     setCleanupLoading(true); setCleanupPreview(null); setCleanupResult(null); setError('');
     try {
@@ -349,7 +415,7 @@ export function App() {
 
   async function executeCleanup() {
     if (!token || cleanupCats.size === 0 || confirmText !== 'CONFIRMAR') return;
-    const cutoff = periodToCutoff(cleanupPeriod, cleanupCustomDate);
+    const cutoff = resolveCleanupCutoff();
     if (!cutoff) return;
     setCleanupExecuting(true); setError('');
     try {
@@ -370,6 +436,41 @@ export function App() {
     } catch { }
   }
 
+  function selectTopImpactCategories(limit = 3) {
+    if (!cleanupInsights) return;
+    const top = [...cleanupInsights.categories]
+      .filter((item) => item.eligibleCount > 0)
+      .sort((a, b) => b.estimatedRecoverableBytes - a.estimatedRecoverableBytes)
+      .slice(0, limit)
+      .map((item) => item.category);
+    setCleanupCats(new Set(top));
+    setCleanupPreview(null);
+    setCleanupResult(null);
+  }
+
+  function selectCriticalCategories() {
+    if (!cleanupInsights) return;
+    const critical = cleanupInsights.categories
+      .filter((item) => item.riskLevel === 'critical' && item.eligibleCount > 0)
+      .map((item) => item.category);
+    setCleanupCats(new Set(critical));
+    setCleanupPreview(null);
+    setCleanupResult(null);
+  }
+
+  function applyCleanupPreset(preset: 'conservative' | 'balanced' | 'aggressive') {
+    const presets: Record<'conservative' | 'balanced' | 'aggressive', CleanupCategory[]> = {
+      conservative: ['expired_pending_docs', 'old_reminders', 'ai_quotas'],
+      balanced: ['expired_pending_docs', 'old_reminders', 'ai_quotas', 'billing_events'],
+      aggressive: [...CLEANUP_CATEGORY_ORDER]
+    };
+    const allowed = new Set(CLEANUP_CATEGORY_ORDER);
+    const selected = presets[preset].filter((category) => allowed.has(category));
+    setCleanupCats(new Set(selected));
+    setCleanupPreview(null);
+    setCleanupResult(null);
+  }
+
   /* Actions */
   async function login(e: FormEvent) {
     e.preventDefault(); setAuthLoading(true); setAuthErr('');
@@ -383,7 +484,7 @@ export function App() {
 
   async function logout() {
     if (token) try { await apiFetch('/api/admin/auth/logout', token, { method: 'POST' }); } catch { }
-    persistToken(''); setToken(''); setOverview(null); setUsers([]); setStorageUsage(null);
+    persistToken(''); setToken(''); setOverview(null); setUsers([]); setStorageUsage(null); setCleanupInsights(null); setCleanupInsightsError('');
   }
 
   async function refresh() {
@@ -447,13 +548,15 @@ export function App() {
     setTab('maintenance');
     void loadCleanupHistory();
     void loadSubscriptions();
+    void loadCleanupInsights();
   }
 
   async function refreshMaintenanceData() {
     await Promise.allSettled([
       refresh(),
       loadCleanupHistory(),
-      loadSubscriptions()
+      loadSubscriptions(),
+      loadCleanupInsights()
     ]);
   }
 
@@ -618,6 +721,28 @@ export function App() {
       return Number.isFinite(p) && p >= Date.now() - 30 * 86400000;
     })
     .reduce((sum, entry) => sum + entry.totalDeleted, 0);
+  const cleanupInsightByCategory = useMemo(() => {
+    return new Map((cleanupInsights?.categories ?? []).map((item) => [item.category, item] as const));
+  }, [cleanupInsights]);
+  const cleanupImpactRanking = useMemo(() => {
+    return [...(cleanupInsights?.categories ?? [])]
+      .sort((a, b) => b.estimatedRecoverableBytes - a.estimatedRecoverableBytes)
+      .slice(0, 6);
+  }, [cleanupInsights]);
+  const cleanupImpactChartData = useMemo(() => {
+    return [...(cleanupInsights?.categories ?? [])]
+      .sort((a, b) => b.estimatedRecoverableBytes - a.estimatedRecoverableBytes)
+      .map((item) => {
+        const meta = CLEANUP_CATEGORY_META.get(item.category);
+        const shortLabel = meta?.label ? meta.label.replace('Mensagens ', '').replace('Eventos de ', '') : item.category;
+        return {
+          name: shortLabel,
+          bytes: item.estimatedRecoverableBytes,
+          records: item.eligibleCount
+        };
+      })
+      .slice(0, 6);
+  }, [cleanupInsights]);
   const maintenanceSignals = useMemo<MaintenanceSignal[]>(() => {
     const signals: MaintenanceSignal[] = [];
     const errors15m = overview?.backend.alerts.errors15m ?? 0;
@@ -1495,6 +1620,50 @@ export function App() {
             </div>
 
             <div className="card p-5">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-widest text-zinc-500">Diagnostico de categorias</p>
+                  <p className="mt-1 text-sm text-zinc-400">Visao total + recuperavel no corte selecionado</p>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-zinc-500">
+                  <span className="badge badge-sky">Estimativa</span>
+                  <span>{cleanupInsights?.generatedAt ? `Atualizado em ${fmtDate(cleanupInsights.generatedAt)}` : 'Sem dados carregados'}</span>
+                </div>
+              </div>
+
+              {cleanupInsightsLoading ? (
+                <p className="text-sm text-zinc-500">Carregando insights de categorias...</p>
+              ) : cleanupInsights ? (
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-lg border border-white/8 bg-white/4 p-3">
+                    <p className="text-xs text-zinc-500">Registros totais</p>
+                    <p className="mt-1 text-xl font-bold text-white">{cleanupInsights.totals.totalRecords.toLocaleString('pt-BR')}</p>
+                  </div>
+                  <div className="rounded-lg border border-white/8 bg-white/4 p-3">
+                    <p className="text-xs text-zinc-500">Elegiveis no corte</p>
+                    <p className="mt-1 text-xl font-bold text-amber-300">{cleanupInsights.totals.eligibleRecords.toLocaleString('pt-BR')}</p>
+                  </div>
+                  <div className="rounded-lg border border-white/8 bg-white/4 p-3">
+                    <p className="text-xs text-zinc-500">Armazenamento estimado total</p>
+                    <p className="mt-1 text-xl font-bold text-white">{fmtBytes(cleanupInsights.totals.estimatedTotalBytes)}</p>
+                  </div>
+                  <div className="rounded-lg border border-white/8 bg-white/4 p-3">
+                    <p className="text-xs text-zinc-500">Recuperavel estimado</p>
+                    <p className="mt-1 text-xl font-bold text-emerald-300">{fmtBytes(cleanupInsights.totals.estimatedRecoverableBytes)}</p>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-zinc-500">Sem insights de categorias para o periodo atual.</p>
+              )}
+
+              {cleanupInsightsError && (
+                <div className="mt-3 rounded-xl border border-rose-400/25 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                  {cleanupInsightsError}
+                </div>
+              )}
+            </div>
+
+            <div className="card p-5">
               <div className="flex items-center justify-between mb-4">
                 <p className="text-xs uppercase tracking-widest text-zinc-500">Sinais de Atencao</p>
                 <span className="text-xs text-zinc-500">{maintenanceSignals.length} item(ns)</span>
@@ -1654,6 +1823,121 @@ export function App() {
               </div>
             </div>
 
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="card p-5">
+                <div className="mb-4 flex items-center justify-between">
+                  <p className="text-xs uppercase tracking-widest text-zinc-500">Maior impacto de limpeza</p>
+                  <span className="text-xs text-zinc-500">Top 6 categorias</span>
+                </div>
+                {cleanupImpactRanking.length === 0 ? (
+                  <p className="text-sm text-zinc-500">Sem dados suficientes para ranking.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {cleanupImpactRanking.map((item) => {
+                      const meta = CLEANUP_CATEGORY_META.get(item.category);
+                      return (
+                        <div key={item.category} className="rounded-lg border border-white/8 bg-white/4 px-3 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <span>{meta?.icon ?? '📦'}</span>
+                            <p className="text-sm font-medium text-white">{meta?.label ?? item.category}</p>
+                            <span className={`ml-auto badge ${
+                              item.riskLevel === 'critical'
+                                ? 'badge-rose'
+                                : item.riskLevel === 'warning'
+                                  ? 'badge-amber'
+                                  : 'badge-sky'
+                            }`}>
+                              {item.riskLevel === 'critical' ? 'Critico' : item.riskLevel === 'warning' ? 'Atencao' : 'Baixo'}
+                            </span>
+                          </div>
+                          <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-400">
+                            <span>Recuperavel: <strong className="text-emerald-300">{fmtBytes(item.estimatedRecoverableBytes)}</strong></span>
+                            <span>Elegiveis: <strong className="text-amber-300">{item.eligibleCount.toLocaleString('pt-BR')}</strong></span>
+                            <span>Taxa: <strong className="text-sky-300">{item.eligiblePct.toFixed(1)}%</strong></span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="card p-5">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs uppercase tracking-widest text-zinc-500">Distribuicao por categoria</p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setCleanupInsightMetric('bytes')}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${cleanupInsightMetric === 'bytes' ? 'bg-sky-500/20 text-sky-300' : 'bg-white/5 text-zinc-400 hover:text-white'}`}
+                    >
+                      Bytes
+                    </button>
+                    <button
+                      onClick={() => setCleanupInsightMetric('records')}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${cleanupInsightMetric === 'records' ? 'bg-sky-500/20 text-sky-300' : 'bg-white/5 text-zinc-400 hover:text-white'}`}
+                    >
+                      Registros
+                    </button>
+                  </div>
+                </div>
+                {cleanupImpactChartData.length === 0 ? (
+                  <p className="text-sm text-zinc-500">Sem dados para o grafico.</p>
+                ) : (
+                  <div className="h-56">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={cleanupImpactChartData}>
+                        <XAxis dataKey="name" tick={{ fill: '#71717a', fontSize: 11 }} axisLine={false} tickLine={false} />
+                        <YAxis tick={{ fill: '#71717a', fontSize: 11 }} axisLine={false} tickLine={false} />
+                        <Tooltip contentStyle={{ background: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '12px' }} />
+                        <Bar dataKey={cleanupInsightMetric === 'bytes' ? 'bytes' : 'records'} fill="#34d399" radius={[6, 6, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="card p-5">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs uppercase tracking-widest text-zinc-500">Acoes rapidas de selecao</p>
+                <span className="text-xs text-zinc-500">Nao executa limpeza automaticamente</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => selectTopImpactCategories(3)}
+                  disabled={!cleanupInsights || cleanupInsightsLoading}
+                  className="rounded-xl bg-emerald-500/15 border border-emerald-500/25 px-4 py-2 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/25 transition disabled:opacity-40"
+                >
+                  Selecionar maior impacto
+                </button>
+                <button
+                  onClick={() => selectCriticalCategories()}
+                  disabled={!cleanupInsights || cleanupInsightsLoading}
+                  className="rounded-xl bg-rose-500/15 border border-rose-500/25 px-4 py-2 text-xs font-semibold text-rose-300 hover:bg-rose-500/25 transition disabled:opacity-40"
+                >
+                  Selecionar criticos
+                </button>
+                <button
+                  onClick={() => applyCleanupPreset('conservative')}
+                  className="rounded-xl bg-white/5 border border-white/10 px-4 py-2 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-white/10 transition"
+                >
+                  Preset Conservador
+                </button>
+                <button
+                  onClick={() => applyCleanupPreset('balanced')}
+                  className="rounded-xl bg-white/5 border border-white/10 px-4 py-2 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-white/10 transition"
+                >
+                  Preset Balanceado
+                </button>
+                <button
+                  onClick={() => applyCleanupPreset('aggressive')}
+                  className="rounded-xl bg-white/5 border border-white/10 px-4 py-2 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-white/10 transition"
+                >
+                  Preset Agressivo
+                </button>
+              </div>
+            </div>
+
             {/* Period selector */}
             <div className="card p-5">
               <p className="text-xs uppercase tracking-widest text-zinc-500 mb-4">Período de Corte</p>
@@ -1692,16 +1976,62 @@ export function App() {
                 {CLEANUP_CATEGORIES.map(cat => (
                   <button key={cat.key} onClick={() => toggleCleanupCat(cat.key)}
                     className={`cleanup-category text-left rounded-xl p-4 border transition ${cleanupCats.has(cat.key) ? 'border-emerald-400/30 bg-emerald-500/8' : 'border-white/8 bg-white/3 hover:border-white/15'}`}>
-                    <div className="flex items-center gap-3">
-                      <span className="text-xl">{cat.icon}</span>
-                      <div>
-                        <p className={`text-sm font-semibold ${cleanupCats.has(cat.key) ? 'text-emerald-300' : 'text-white'}`}>{cat.label}</p>
-                        <p className="text-xs text-zinc-500 mt-0.5">{cat.desc}</p>
-                      </div>
-                      <div className={`ml-auto w-5 h-5 rounded-md border-2 flex items-center justify-center transition ${cleanupCats.has(cat.key) ? 'border-emerald-400 bg-emerald-400' : 'border-zinc-600'}`}>
-                        {cleanupCats.has(cat.key) && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>}
-                      </div>
-                    </div>
+                    {(() => {
+                      const insight = cleanupInsightByCategory.get(cat.key);
+                      return (
+                        <>
+                          <div className="flex items-center gap-3">
+                            <span className="text-xl">{cat.icon}</span>
+                            <div>
+                              <p className={`text-sm font-semibold ${cleanupCats.has(cat.key) ? 'text-emerald-300' : 'text-white'}`}>{cat.label}</p>
+                              <p className="text-xs text-zinc-500 mt-0.5">{cat.desc}</p>
+                            </div>
+                            {insight && (
+                              <span className={`ml-auto badge ${
+                                insight.riskLevel === 'critical'
+                                  ? 'badge-rose'
+                                  : insight.riskLevel === 'warning'
+                                    ? 'badge-amber'
+                                    : 'badge-sky'
+                              }`}>
+                                {insight.riskLevel === 'critical' ? 'Critico' : insight.riskLevel === 'warning' ? 'Atencao' : 'Baixo'}
+                              </span>
+                            )}
+                            <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition ${cleanupCats.has(cat.key) ? 'border-emerald-400 bg-emerald-400' : 'border-zinc-600'}`}>
+                              {cleanupCats.has(cat.key) && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>}
+                            </div>
+                          </div>
+
+                          {insight ? (
+                            <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                              <div className="rounded-lg bg-black/20 border border-white/6 px-2 py-1.5">
+                                <p className="text-zinc-500">Totais</p>
+                                <p className="font-semibold text-white">{insight.totalCount.toLocaleString('pt-BR')}</p>
+                              </div>
+                              <div className="rounded-lg bg-black/20 border border-white/6 px-2 py-1.5">
+                                <p className="text-zinc-500">Elegiveis</p>
+                                <p className="font-semibold text-amber-300">{insight.eligibleCount.toLocaleString('pt-BR')} ({insight.eligiblePct.toFixed(1)}%)</p>
+                              </div>
+                              <div className="rounded-lg bg-black/20 border border-white/6 px-2 py-1.5">
+                                <p className="text-zinc-500">Estimado total</p>
+                                <p className="font-semibold text-white">{fmtBytes(insight.estimatedTotalBytes)}</p>
+                              </div>
+                              <div className="rounded-lg bg-black/20 border border-white/6 px-2 py-1.5">
+                                <p className="text-zinc-500">Recuperavel</p>
+                                <p className="font-semibold text-emerald-300">{fmtBytes(insight.estimatedRecoverableBytes)}</p>
+                              </div>
+                              {insight.note && (
+                                <div className="col-span-2 rounded-lg border border-amber-400/20 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200">
+                                  {insight.note}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <p className="mt-3 text-xs text-zinc-500">Sem diagnostico carregado para esta categoria.</p>
+                          )}
+                        </>
+                      );
+                    })()}
                   </button>
                 ))}
               </div>

@@ -12,6 +12,16 @@ const admin_auth_1 = require("../middleware/admin-auth");
 const supabase_1 = require("../lib/supabase");
 const cleanupHistory = [];
 const MAX_CLEANUP_HISTORY = 50;
+const DEFAULT_INSIGHTS_CUTOFF_MONTHS = 6;
+const INSIGHTS_SAMPLE_SIZE = 150;
+const CLEANUP_ORDER = [
+    'chat_sessions',
+    'whatsapp_messages',
+    'old_reminders',
+    'expired_pending_docs',
+    'ai_quotas',
+    'billing_events'
+];
 function isWhatsAppLog(entry) {
     if (entry.message.includes('WhatsApp'))
         return true;
@@ -96,6 +106,345 @@ async function loadSingleAdminUser(uid) {
     }
     const planAccess = await (0, subscription_access_1.getUserPlanAccessSummaryMap)([uid]);
     return mergeAdminUsers(snapshot ? [snapshot] : [], new Map([[uid, firebase]]), planAccess)[0] ?? null;
+}
+const CLEANUP_CATEGORY_CONFIG = {
+    whatsapp_messages: {
+        table: 'whatsapp_messages',
+        timestampColumn: 'created_at',
+        sampleColumns: 'id, owner_uid, direction, status, text, metadata, created_at, from_phone, to_phone',
+        estimationMethod: 'sample_json',
+        applyTotalFilters: (query) => query,
+        applyEligibleFilters: (query, context) => query.lt('created_at', context.cutoffDate)
+    },
+    chat_sessions: {
+        table: 'app_chat_sessions',
+        timestampColumn: 'updated_at',
+        sampleColumns: 'id, uid, title, created_at, updated_at',
+        estimationMethod: 'sample_json',
+        applyTotalFilters: (query) => query,
+        applyEligibleFilters: (query, context) => query.lt('updated_at', context.cutoffDate)
+    },
+    old_reminders: {
+        table: 'app_reminders',
+        timestampColumn: 'due_date',
+        sampleColumns: 'id, uid, reminder_kind, title, amount, due_date, status, type, created_at, updated_at',
+        estimationMethod: 'sample_json',
+        applyTotalFilters: (query) => query.eq('status', 'paid'),
+        applyEligibleFilters: (query, context) => query.eq('status', 'paid').lt('due_date', context.cutoffDate)
+    },
+    expired_pending_docs: {
+        table: 'app_whatsapp_pending_documents',
+        timestampColumn: 'expires_at',
+        sampleColumns: 'id, uid, source_phone, size_bytes, pending_reason, expires_at, created_at',
+        estimationMethod: 'size_column_sample',
+        sizeColumn: 'size_bytes',
+        applyTotalFilters: (query) => query,
+        applyEligibleFilters: (query, context) => query.lt('expires_at', context.nowIso)
+    },
+    ai_quotas: {
+        table: 'app_daily_ai_quotas',
+        timestampColumn: 'quota_date',
+        sampleColumns: 'uid, quota_date, channel, used_count, created_at, updated_at',
+        estimationMethod: 'sample_json',
+        applyTotalFilters: (query) => query,
+        applyEligibleFilters: (query, context) => query.lt('quota_date', context.cutoffDate)
+    },
+    billing_events: {
+        table: 'app_billing_events',
+        timestampColumn: 'created_at',
+        sampleColumns: 'id, provider, event_type, provider_event_id, processed, created_at, raw_payload',
+        estimationMethod: 'sample_json',
+        applyTotalFilters: (query) => query,
+        applyEligibleFilters: (query, context) => query.lt('created_at', context.cutoffDate)
+    }
+};
+function toIsoString(value) {
+    if (typeof value !== 'string' || !value.trim())
+        return null;
+    const parsed = new Date(value);
+    if (!Number.isFinite(parsed.getTime()))
+        return null;
+    return parsed.toISOString();
+}
+function defaultInsightsCutoffDate() {
+    const cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - DEFAULT_INSIGHTS_CUTOFF_MONTHS);
+    return cutoff.toISOString();
+}
+function resolveInsightsCutoffDate(rawValue) {
+    if (rawValue == null || rawValue === '') {
+        return { cutoffDate: defaultInsightsCutoffDate() };
+    }
+    const cutoffDate = toIsoString(rawValue);
+    if (!cutoffDate) {
+        return { error: 'cutoffDate invalida. Use uma data ISO valida.' };
+    }
+    return { cutoffDate };
+}
+function resolveRequiredCutoffDate(rawValue) {
+    const cutoffDate = toIsoString(rawValue);
+    if (!cutoffDate) {
+        return { error: 'Data de corte invalida.' };
+    }
+    return { cutoffDate };
+}
+function normalizeCleanupCategories(input) {
+    if (!Array.isArray(input))
+        return [];
+    const allowed = new Set(CLEANUP_ORDER);
+    return input.filter((value) => typeof value === 'string' && allowed.has(value));
+}
+function createCleanupFilterContext(cutoffDate) {
+    return {
+        cutoffDate,
+        nowIso: new Date().toISOString()
+    };
+}
+function readRowField(row, field) {
+    if (!row || typeof row !== 'object' || Array.isArray(row))
+        return undefined;
+    return row[field];
+}
+function toObjectRows(rows) {
+    if (!Array.isArray(rows))
+        return [];
+    return rows.filter((row) => Boolean(row) && typeof row === 'object' && !Array.isArray(row));
+}
+async function countCleanupCategoryRecords(category, context, scope) {
+    const config = CLEANUP_CATEGORY_CONFIG[category];
+    let query = supabase_1.supabaseAdmin
+        .from(config.table)
+        .select('*', { count: 'exact', head: true });
+    query = scope === 'eligible'
+        ? config.applyEligibleFilters(query, context)
+        : config.applyTotalFilters(query, context);
+    const { count, error } = await query;
+    if (error)
+        throw new Error(`${category} ${scope} count: ${error.message}`);
+    return count ?? 0;
+}
+async function getCategoryTimeRange(category, context) {
+    const config = CLEANUP_CATEGORY_CONFIG[category];
+    const column = config.timestampColumn;
+    let oldestQuery = supabase_1.supabaseAdmin
+        .from(config.table)
+        .select(column)
+        .not(column, 'is', null)
+        .order(column, { ascending: true })
+        .limit(1);
+    oldestQuery = config.applyTotalFilters(oldestQuery, context);
+    let newestQuery = supabase_1.supabaseAdmin
+        .from(config.table)
+        .select(column)
+        .not(column, 'is', null)
+        .order(column, { ascending: false })
+        .limit(1);
+    newestQuery = config.applyTotalFilters(newestQuery, context);
+    const [oldestResult, newestResult] = await Promise.all([oldestQuery, newestQuery]);
+    if (oldestResult.error)
+        throw new Error(`${category} oldestAt: ${oldestResult.error.message}`);
+    if (newestResult.error)
+        throw new Error(`${category} newestAt: ${newestResult.error.message}`);
+    const oldestAt = readRowField(oldestResult.data?.[0], column);
+    const newestAt = readRowField(newestResult.data?.[0], column);
+    return {
+        oldestAt: typeof oldestAt === 'string' ? oldestAt : null,
+        newestAt: typeof newestAt === 'string' ? newestAt : null
+    };
+}
+function averageBytesFromRows(rows) {
+    if (rows.length === 0)
+        return 0;
+    const totalBytes = rows.reduce((sum, row) => sum + Buffer.byteLength(JSON.stringify(row), 'utf8'), 0);
+    return totalBytes / rows.length;
+}
+async function estimateCategoryBytes(category, context, totalCount, eligibleCount) {
+    const config = CLEANUP_CATEGORY_CONFIG[category];
+    if (totalCount <= 0) {
+        return {
+            estimatedTotalBytes: 0,
+            estimatedRecoverableBytes: 0,
+            avgBytesPerRecord: 0,
+            estimationMethod: config.estimationMethod
+        };
+    }
+    try {
+        if (config.estimationMethod === 'size_column_sample' && config.sizeColumn) {
+            let query = supabase_1.supabaseAdmin
+                .from(config.table)
+                .select(config.sizeColumn)
+                .not(config.sizeColumn, 'is', null)
+                .limit(INSIGHTS_SAMPLE_SIZE);
+            query = config.applyTotalFilters(query, context);
+            if (config.timestampColumn) {
+                query = query.order(config.timestampColumn, { ascending: false });
+            }
+            const { data, error } = await query;
+            if (error)
+                throw new Error(error.message);
+            const sizes = toObjectRows((data ?? []))
+                .map((item) => Number(readRowField(item, config.sizeColumn)))
+                .filter((value) => Number.isFinite(value) && value >= 0);
+            const avgBytesPerRecord = sizes.length > 0
+                ? sizes.reduce((sum, value) => sum + value, 0) / sizes.length
+                : 0;
+            return {
+                estimatedTotalBytes: Math.round(avgBytesPerRecord * totalCount),
+                estimatedRecoverableBytes: Math.round(avgBytesPerRecord * eligibleCount),
+                avgBytesPerRecord: Number(avgBytesPerRecord.toFixed(2)),
+                estimationMethod: config.estimationMethod,
+                ...(sizes.length === 0 ? { note: 'Amostra sem dados de tamanho para estimativa.' } : {})
+            };
+        }
+        let query = supabase_1.supabaseAdmin
+            .from(config.table)
+            .select(config.sampleColumns)
+            .limit(INSIGHTS_SAMPLE_SIZE);
+        query = config.applyTotalFilters(query, context);
+        if (config.timestampColumn) {
+            query = query.order(config.timestampColumn, { ascending: false });
+        }
+        const { data, error } = await query;
+        if (error)
+            throw new Error(error.message);
+        const rows = toObjectRows((data ?? []));
+        const avgBytesPerRecord = averageBytesFromRows(rows);
+        return {
+            estimatedTotalBytes: Math.round(avgBytesPerRecord * totalCount),
+            estimatedRecoverableBytes: Math.round(avgBytesPerRecord * eligibleCount),
+            avgBytesPerRecord: Number(avgBytesPerRecord.toFixed(2)),
+            estimationMethod: config.estimationMethod,
+            ...(rows.length === 0 ? { note: 'Amostra vazia; valores estimados podem estar subestimados.' } : {})
+        };
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger_1.logger.warn('Admin cleanup insights sample failed', { category, message });
+        return {
+            estimatedTotalBytes: 0,
+            estimatedRecoverableBytes: 0,
+            avgBytesPerRecord: 0,
+            estimationMethod: config.estimationMethod,
+            note: 'Estimativa de armazenamento indisponivel para esta categoria.'
+        };
+    }
+}
+function classifyCleanupRisk(eligibleCount, eligiblePct, estimatedRecoverableBytes) {
+    if (eligibleCount <= 0)
+        return 'low';
+    const oneMb = 1024 * 1024;
+    if (estimatedRecoverableBytes >= 50 * oneMb ||
+        (eligiblePct >= 80 && eligibleCount >= 300) ||
+        eligibleCount >= 5000) {
+        return 'critical';
+    }
+    if (estimatedRecoverableBytes >= 10 * oneMb ||
+        eligiblePct >= 40 ||
+        eligibleCount >= 1000) {
+        return 'warning';
+    }
+    return 'low';
+}
+async function buildCategoryInsight(category, context) {
+    const [totalCount, eligibleCount, range] = await Promise.all([
+        countCleanupCategoryRecords(category, context, 'total'),
+        countCleanupCategoryRecords(category, context, 'eligible'),
+        getCategoryTimeRange(category, context)
+    ]);
+    const bytes = await estimateCategoryBytes(category, context, totalCount, eligibleCount);
+    const eligiblePct = totalCount > 0 ? Number(((eligibleCount / totalCount) * 100).toFixed(2)) : 0;
+    return {
+        category,
+        totalCount,
+        eligibleCount,
+        eligiblePct,
+        estimatedTotalBytes: bytes.estimatedTotalBytes,
+        estimatedRecoverableBytes: bytes.estimatedRecoverableBytes,
+        avgBytesPerRecord: bytes.avgBytesPerRecord,
+        oldestAt: range.oldestAt,
+        newestAt: range.newestAt,
+        riskLevel: classifyCleanupRisk(eligibleCount, eligiblePct, bytes.estimatedRecoverableBytes),
+        estimationMethod: bytes.estimationMethod,
+        ...(bytes.note ? { note: bytes.note } : {})
+    };
+}
+async function deleteCleanupCategoryRecords(category, context) {
+    switch (category) {
+        case 'whatsapp_messages': {
+            const { count, error } = await supabase_1.supabaseAdmin
+                .from('whatsapp_messages')
+                .delete({ count: 'exact' })
+                .lt('created_at', context.cutoffDate);
+            if (error)
+                throw new Error(`whatsapp_messages delete: ${error.message}`);
+            return count ?? 0;
+        }
+        case 'chat_sessions': {
+            const { data: sessions, error: fetchErr } = await supabase_1.supabaseAdmin
+                .from('app_chat_sessions')
+                .select('id')
+                .lt('updated_at', context.cutoffDate);
+            if (fetchErr)
+                throw new Error(`chat_sessions fetch: ${fetchErr.message}`);
+            if (!sessions || sessions.length === 0)
+                return 0;
+            const sessionIds = sessions
+                .map((entry) => entry.id)
+                .filter((id) => typeof id === 'string' && id.length > 0);
+            if (sessionIds.length === 0)
+                return 0;
+            const { error: msgErr } = await supabase_1.supabaseAdmin
+                .from('app_chat_messages')
+                .delete()
+                .in('session_id', sessionIds);
+            if (msgErr)
+                throw new Error(`chat_messages delete: ${msgErr.message}`);
+            const { count, error: sessErr } = await supabase_1.supabaseAdmin
+                .from('app_chat_sessions')
+                .delete({ count: 'exact' })
+                .lt('updated_at', context.cutoffDate);
+            if (sessErr)
+                throw new Error(`chat_sessions delete: ${sessErr.message}`);
+            return count ?? 0;
+        }
+        case 'old_reminders': {
+            const { count, error } = await supabase_1.supabaseAdmin
+                .from('app_reminders')
+                .delete({ count: 'exact' })
+                .lt('due_date', context.cutoffDate)
+                .eq('status', 'paid');
+            if (error)
+                throw new Error(`old_reminders delete: ${error.message}`);
+            return count ?? 0;
+        }
+        case 'expired_pending_docs': {
+            const { count, error } = await supabase_1.supabaseAdmin
+                .from('app_whatsapp_pending_documents')
+                .delete({ count: 'exact' })
+                .lt('expires_at', context.nowIso);
+            if (error)
+                throw new Error(`expired_pending_docs delete: ${error.message}`);
+            return count ?? 0;
+        }
+        case 'ai_quotas': {
+            const { count, error } = await supabase_1.supabaseAdmin
+                .from('app_daily_ai_quotas')
+                .delete({ count: 'exact' })
+                .lt('quota_date', context.cutoffDate);
+            if (error)
+                throw new Error(`ai_quotas delete: ${error.message}`);
+            return count ?? 0;
+        }
+        case 'billing_events': {
+            const { count, error } = await supabase_1.supabaseAdmin
+                .from('app_billing_events')
+                .delete({ count: 'exact' })
+                .lt('created_at', context.cutoffDate);
+            if (error)
+                throw new Error(`billing_events delete: ${error.message}`);
+            return count ?? 0;
+        }
+    }
 }
 function createAdminRouter(manager) {
     const router = (0, express_1.Router)();
@@ -425,173 +774,54 @@ function createAdminRouter(manager) {
         }
     });
     /* ───── DB Cleanup Routes ───── */
-    async function countForCategory(category, cutoff) {
-        let count = 0;
-        switch (category) {
-            case 'whatsapp_messages': {
-                const { count: c, error } = await supabase_1.supabaseAdmin
-                    .from('app_whatsapp_messages')
-                    .select('*', { count: 'exact', head: true })
-                    .lt('created_at', cutoff);
-                if (error)
-                    throw new Error(`whatsapp_messages count: ${error.message}`);
-                count = c ?? 0;
-                break;
+    router.get('/db-cleanup/insights', async (req, res, next) => {
+        try {
+            const resolvedCutoff = resolveInsightsCutoffDate(req.query?.cutoffDate);
+            if ('error' in resolvedCutoff) {
+                res.status(400).json({ error: resolvedCutoff.error });
+                return;
             }
-            case 'chat_sessions': {
-                const { count: c, error } = await supabase_1.supabaseAdmin
-                    .from('app_chat_sessions')
-                    .select('*', { count: 'exact', head: true })
-                    .lt('updated_at', cutoff);
-                if (error)
-                    throw new Error(`chat_sessions count: ${error.message}`);
-                count = c ?? 0;
-                break;
-            }
-            case 'old_reminders': {
-                const { count: c, error } = await supabase_1.supabaseAdmin
-                    .from('app_reminders')
-                    .select('*', { count: 'exact', head: true })
-                    .lt('due_date', cutoff)
-                    .eq('status', 'paid');
-                if (error)
-                    throw new Error(`old_reminders count: ${error.message}`);
-                count = c ?? 0;
-                break;
-            }
-            case 'expired_pending_docs': {
-                const { count: c, error } = await supabase_1.supabaseAdmin
-                    .from('app_whatsapp_pending_documents')
-                    .select('*', { count: 'exact', head: true })
-                    .lt('expires_at', new Date().toISOString());
-                if (error)
-                    throw new Error(`expired_pending_docs count: ${error.message}`);
-                count = c ?? 0;
-                break;
-            }
-            case 'ai_quotas': {
-                const { count: c, error } = await supabase_1.supabaseAdmin
-                    .from('app_daily_ai_quotas')
-                    .select('*', { count: 'exact', head: true })
-                    .lt('quota_date', cutoff);
-                if (error)
-                    throw new Error(`ai_quotas count: ${error.message}`);
-                count = c ?? 0;
-                break;
-            }
-            case 'billing_events': {
-                const { count: c, error } = await supabase_1.supabaseAdmin
-                    .from('app_billing_events')
-                    .select('*', { count: 'exact', head: true })
-                    .lt('created_at', cutoff);
-                if (error)
-                    throw new Error(`billing_events count: ${error.message}`);
-                count = c ?? 0;
-                break;
-            }
+            const context = createCleanupFilterContext(resolvedCutoff.cutoffDate);
+            const categories = await Promise.all(CLEANUP_ORDER.map((category) => buildCategoryInsight(category, context)));
+            const totals = categories.reduce((acc, item) => {
+                acc.totalRecords += item.totalCount;
+                acc.eligibleRecords += item.eligibleCount;
+                acc.estimatedTotalBytes += item.estimatedTotalBytes;
+                acc.estimatedRecoverableBytes += item.estimatedRecoverableBytes;
+                return acc;
+            }, {
+                totalRecords: 0,
+                eligibleRecords: 0,
+                estimatedTotalBytes: 0,
+                estimatedRecoverableBytes: 0
+            });
+            res.json({
+                cutoffDate: context.cutoffDate,
+                totals,
+                categories,
+                generatedAt: new Date().toISOString()
+            });
         }
-        return count;
-    }
-    async function deleteForCategory(category, cutoff) {
-        let deleted = 0;
-        switch (category) {
-            case 'whatsapp_messages': {
-                const { count, error } = await supabase_1.supabaseAdmin
-                    .from('app_whatsapp_messages')
-                    .delete({ count: 'exact' })
-                    .lt('created_at', cutoff);
-                if (error)
-                    throw new Error(`whatsapp_messages delete: ${error.message}`);
-                deleted = count ?? 0;
-                break;
-            }
-            case 'chat_sessions': {
-                // First get session IDs to delete their messages
-                const { data: sessions, error: fetchErr } = await supabase_1.supabaseAdmin
-                    .from('app_chat_sessions')
-                    .select('id')
-                    .lt('updated_at', cutoff);
-                if (fetchErr)
-                    throw new Error(`chat_sessions fetch: ${fetchErr.message}`);
-                if (sessions && sessions.length > 0) {
-                    const sessionIds = sessions.map((s) => s.id);
-                    // Delete messages first (FK constraint)
-                    const { error: msgErr } = await supabase_1.supabaseAdmin
-                        .from('app_chat_messages')
-                        .delete()
-                        .in('session_id', sessionIds);
-                    if (msgErr)
-                        throw new Error(`chat_messages delete: ${msgErr.message}`);
-                    // Then delete sessions
-                    const { count, error: sessErr } = await supabase_1.supabaseAdmin
-                        .from('app_chat_sessions')
-                        .delete({ count: 'exact' })
-                        .lt('updated_at', cutoff);
-                    if (sessErr)
-                        throw new Error(`chat_sessions delete: ${sessErr.message}`);
-                    deleted = count ?? 0;
-                }
-                break;
-            }
-            case 'old_reminders': {
-                const { count, error } = await supabase_1.supabaseAdmin
-                    .from('app_reminders')
-                    .delete({ count: 'exact' })
-                    .lt('due_date', cutoff)
-                    .eq('status', 'paid');
-                if (error)
-                    throw new Error(`old_reminders delete: ${error.message}`);
-                deleted = count ?? 0;
-                break;
-            }
-            case 'expired_pending_docs': {
-                const { count, error } = await supabase_1.supabaseAdmin
-                    .from('app_whatsapp_pending_documents')
-                    .delete({ count: 'exact' })
-                    .lt('expires_at', new Date().toISOString());
-                if (error)
-                    throw new Error(`expired_pending_docs delete: ${error.message}`);
-                deleted = count ?? 0;
-                break;
-            }
-            case 'ai_quotas': {
-                const { count, error } = await supabase_1.supabaseAdmin
-                    .from('app_daily_ai_quotas')
-                    .delete({ count: 'exact' })
-                    .lt('quota_date', cutoff);
-                if (error)
-                    throw new Error(`ai_quotas delete: ${error.message}`);
-                deleted = count ?? 0;
-                break;
-            }
-            case 'billing_events': {
-                const { count, error } = await supabase_1.supabaseAdmin
-                    .from('app_billing_events')
-                    .delete({ count: 'exact' })
-                    .lt('created_at', cutoff);
-                if (error)
-                    throw new Error(`billing_events delete: ${error.message}`);
-                deleted = count ?? 0;
-                break;
-            }
+        catch (error) {
+            next(error);
         }
-        return deleted;
-    }
+    });
     router.post('/db-cleanup/preview', async (req, res, next) => {
         try {
-            const categories = Array.isArray(req.body?.categories) ? req.body.categories : [];
-            const cutoffDate = typeof req.body?.cutoffDate === 'string' ? req.body.cutoffDate : '';
+            const categories = normalizeCleanupCategories(req.body?.categories);
+            const resolvedCutoff = resolveRequiredCutoffDate(req.body?.cutoffDate);
             if (categories.length === 0) {
                 res.status(400).json({ error: 'Selecione ao menos uma categoria.' });
                 return;
             }
-            if (!cutoffDate) {
-                res.status(400).json({ error: 'Data de corte é obrigatória.' });
+            if ('error' in resolvedCutoff) {
+                res.status(400).json({ error: resolvedCutoff.error });
                 return;
             }
+            const context = createCleanupFilterContext(resolvedCutoff.cutoffDate);
             const counts = {};
             for (const cat of categories) {
-                counts[cat] = await countForCategory(cat, cutoffDate);
+                counts[cat] = await countCleanupCategoryRecords(cat, context, 'eligible');
             }
             const total = Object.values(counts).reduce((s, v) => s + (v ?? 0), 0);
             res.json({ ok: true, counts, total });
@@ -602,35 +832,32 @@ function createAdminRouter(manager) {
     });
     router.post('/db-cleanup/execute', async (req, res, next) => {
         try {
-            const categories = Array.isArray(req.body?.categories) ? req.body.categories : [];
-            const cutoffDate = typeof req.body?.cutoffDate === 'string' ? req.body.cutoffDate : '';
+            const categories = normalizeCleanupCategories(req.body?.categories);
+            const resolvedCutoff = resolveRequiredCutoffDate(req.body?.cutoffDate);
             const confirmation = typeof req.body?.confirmation === 'string' ? req.body.confirmation : '';
             if (categories.length === 0) {
                 res.status(400).json({ error: 'Selecione ao menos uma categoria.' });
                 return;
             }
-            if (!cutoffDate) {
-                res.status(400).json({ error: 'Data de corte é obrigatória.' });
+            if ('error' in resolvedCutoff) {
+                res.status(400).json({ error: resolvedCutoff.error });
                 return;
             }
             if (confirmation !== 'CONFIRMAR') {
                 res.status(400).json({ error: 'Confirmação inválida. Digite CONFIRMAR.' });
                 return;
             }
-            // Process in a specific order to respect FK constraints
-            const orderedCategories = [
-                'chat_sessions', 'whatsapp_messages', 'old_reminders',
-                'expired_pending_docs', 'ai_quotas', 'billing_events'
-            ].filter(c => categories.includes(c));
+            const context = createCleanupFilterContext(resolvedCutoff.cutoffDate);
+            const orderedCategories = CLEANUP_ORDER.filter((category) => categories.includes(category));
             const counts = {};
             for (const cat of orderedCategories) {
-                counts[cat] = await deleteForCategory(cat, cutoffDate);
+                counts[cat] = await deleteCleanupCategoryRecords(cat, context);
             }
             const totalDeleted = Object.values(counts).reduce((s, v) => s + v, 0);
             const entry = {
                 id: crypto.randomUUID(),
                 timestamp: new Date().toISOString(),
-                cutoffDate,
+                cutoffDate: context.cutoffDate,
                 categories: orderedCategories,
                 counts,
                 totalDeleted
@@ -639,7 +866,7 @@ function createAdminRouter(manager) {
             if (cleanupHistory.length > MAX_CLEANUP_HISTORY)
                 cleanupHistory.length = MAX_CLEANUP_HISTORY;
             logger_1.logger.warn('Admin executed DB cleanup', {
-                cutoffDate,
+                cutoffDate: context.cutoffDate,
                 categories: orderedCategories,
                 counts,
                 totalDeleted
