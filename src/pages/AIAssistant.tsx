@@ -8,6 +8,126 @@ import { toast } from 'sonner';
 import { triggerDataRefresh } from '@/firebase/firestore';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import type { StoredChatMessage } from '@/types';
+
+type LocalAssistantPhase = 'thinking' | 'typing' | 'done';
+
+interface LocalChatMessage {
+    tempId: string;
+    sessionId: string;
+    role: 'user' | 'assistant';
+    content: string;
+    imageBase64?: string;
+    finalContent?: string;
+    phase?: LocalAssistantPhase;
+}
+
+interface DisplayChatMessage {
+    key: string;
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    imageUrl?: string;
+    phase?: LocalAssistantPhase;
+}
+
+function normalizeMessageContent(value: string): string {
+    return value.normalize('NFC').replace(/\r\n/g, '\n').trim();
+}
+
+function getComparableContent(
+    message: Pick<StoredChatMessage, 'content'> | Pick<LocalChatMessage, 'content' | 'finalContent'>
+): string {
+    if ('finalContent' in message) {
+        return normalizeMessageContent(message.finalContent ?? message.content);
+    }
+
+    return normalizeMessageContent(message.content);
+}
+
+function getMatchedPersistedMessageIds(
+    persistedMessages: StoredChatMessage[],
+    localMessages: LocalChatMessage[]
+): Set<string> {
+    const matchedPersistedIds = new Set<string>();
+    let localIndex = localMessages.length - 1;
+
+    for (let persistedIndex = persistedMessages.length - 1; persistedIndex >= 0 && localIndex >= 0; persistedIndex--) {
+        const persistedMessage = persistedMessages[persistedIndex];
+        const persistedContent = getComparableContent(persistedMessage);
+
+        while (localIndex >= 0) {
+            const localMessage = localMessages[localIndex];
+            const localContent = getComparableContent(localMessage);
+
+            localIndex--;
+
+            if (!localContent) {
+                continue;
+            }
+
+            if (localMessage.role === persistedMessage.role && localContent === persistedContent) {
+                matchedPersistedIds.add(persistedMessage.id);
+                break;
+            }
+        }
+    }
+
+    return matchedPersistedIds;
+}
+
+function buildDisplayMessages(
+    persistedMessages: StoredChatMessage[],
+    localMessages: LocalChatMessage[]
+): DisplayChatMessage[] {
+    const matchedPersistedIds = getMatchedPersistedMessageIds(persistedMessages, localMessages);
+
+    return [
+        ...persistedMessages
+            .filter(message => !matchedPersistedIds.has(message.id))
+            .map(message => ({
+                key: message.id,
+                role: message.role,
+                content: message.content,
+                imageUrl: message.imageUrl,
+            })),
+        ...localMessages.map(message => ({
+            key: message.tempId,
+            role: message.role,
+            content: message.content || message.finalContent || '',
+            imageUrl: message.imageBase64,
+            phase: message.phase,
+        })),
+    ];
+}
+
+function buildPromptHistory(
+    persistedMessages: StoredChatMessage[],
+    localMessages: LocalChatMessage[]
+): ChatMessage[] {
+    const matchedPersistedIds = getMatchedPersistedMessageIds(persistedMessages, localMessages);
+
+    const persistedHistory: ChatMessage[] = persistedMessages
+        .filter(message => !matchedPersistedIds.has(message.id))
+        .map(message => ({
+            role: message.role,
+            content: normalizeMessageContent(message.content),
+            imageBase64: message.imageUrl,
+        }));
+
+    const localHistory: ChatMessage[] = localMessages
+        .map(message => ({
+            role: message.role,
+            content: normalizeMessageContent(message.finalContent ?? message.content),
+            imageBase64: message.imageBase64,
+        }))
+        .filter(message => message.content.length > 0);
+
+    return [...persistedHistory, ...localHistory];
+}
+
+function createTempId(prefix: string): string {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 function formatAssistantMarkdown(content: string): string {
     return content
@@ -20,94 +140,158 @@ function formatAssistantMarkdown(content: string): string {
 }
 
 export function AIAssistant() {
-    // Sessions
     const { sessions, addSession, removeSession, editSession, loading: sessionsLoading } = useChatSessions();
     const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 
-    // Auto-select first session or wait for user to create one
     useEffect(() => {
         if (!sessionsLoading && sessions.length > 0 && !activeSessionId) {
             setActiveSessionId(sessions[0].id);
         }
     }, [sessions, sessionsLoading, activeSessionId]);
 
-    // Active Chat
     const { messages: chatHistory, addMessage: saveChatMessage } = useChats(activeSessionId);
 
     const [input, setInput] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
+    const [localMessagesBySession, setLocalMessagesBySession] = useState<Record<string, LocalChatMessage[]>>({});
 
-    // Optimistic local messages (shown instantly, before Firebase sync)
-    const [optimisticMessages, setOptimisticMessages] = useState<Array<{ id: string; role: 'user' | 'assistant'; content: string }>>([]);
-
-    // Typewriter state for AI response
-    const [streamingText, setStreamingText] = useState('');
-    const [fullAIResponse, setFullAIResponse] = useState('');
-    const [isTyping, setIsTyping] = useState(false);
-
-    // Image handling
     const [imagePreview, setImagePreview] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const [showMobileSidebar, setShowMobileSidebar] = useState(false);
+    const typingIntervalsRef = useRef<Record<string, number>>({});
+    const mountedRef = useRef(true);
 
     const scrollToBottom = useCallback(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, []);
 
-    useEffect(() => {
-        scrollToBottom();
-    }, [chatHistory, isProcessing, optimisticMessages, streamingText, scrollToBottom]);
+    const setSessionLocalMessages = useCallback((sessionId: string, updater: (current: LocalChatMessage[]) => LocalChatMessage[]) => {
+        setLocalMessagesBySession(prev => ({
+            ...prev,
+            [sessionId]: updater(prev[sessionId] ?? []),
+        }));
+    }, []);
 
-    // Clear optimistic messages when Firebase snapshot arrives with matching content
-    useEffect(() => {
-        if (chatHistory.length > 0 && optimisticMessages.length > 0) {
-            // Firebase snapshot has caught up — remove optimistic messages that now exist in chatHistory
-            setOptimisticMessages(prev => {
-                const lastFirebaseContent = chatHistory[chatHistory.length - 1]?.content;
-                const lastOptimisticContent = prev[prev.length - 1]?.content;
-                if (lastFirebaseContent === lastOptimisticContent || chatHistory.length >= prev.length) {
-                    return [];
-                }
-                return prev;
-            });
+    const updateSessionLocalMessage = useCallback((
+        sessionId: string,
+        tempId: string,
+        updater: (message: LocalChatMessage) => LocalChatMessage
+    ) => {
+        setSessionLocalMessages(sessionId, current =>
+            current.map(message => message.tempId === tempId ? updater(message) : message)
+        );
+    }, [setSessionLocalMessages]);
+
+    const clearTypingInterval = useCallback((tempId: string) => {
+        const intervalId = typingIntervalsRef.current[tempId];
+        if (intervalId) {
+            window.clearInterval(intervalId);
+            delete typingIntervalsRef.current[tempId];
         }
-    }, [chatHistory, optimisticMessages.length]);
+    }, []);
 
-    // Typewriter effect: progressively reveal AI response
-    useEffect(() => {
-        if (!fullAIResponse || !isTyping) return;
+    const startAssistantTyping = useCallback((
+        sessionId: string,
+        tempId: string,
+        fullResponse: string
+    ) => {
+        const normalizedResponse = normalizeMessageContent(fullResponse);
+        clearTypingInterval(tempId);
+
+        if (!normalizedResponse) {
+            updateSessionLocalMessage(sessionId, tempId, message => ({
+                ...message,
+                content: '',
+                finalContent: '',
+                phase: 'done',
+            }));
+            return;
+        }
 
         let charIndex = 0;
-        setStreamingText('');
+        updateSessionLocalMessage(sessionId, tempId, message => ({
+            ...message,
+            content: '',
+            finalContent: normalizedResponse,
+            phase: 'typing',
+        }));
 
-        const interval = setInterval(() => {
-            charIndex++;
-            const nextChunk = fullAIResponse.slice(0, charIndex);
-            setStreamingText(nextChunk);
-
-            if (charIndex >= fullAIResponse.length) {
-                clearInterval(interval);
-                setIsTyping(false);
-                setStreamingText('');
-                setFullAIResponse('');
+        const intervalId = window.setInterval(() => {
+            if (!mountedRef.current) {
+                clearTypingInterval(tempId);
+                return;
             }
-        }, 12); // ~12ms per char ≈ ~83 chars/sec = very fast but visible
 
-        return () => clearInterval(interval);
-    }, [fullAIResponse, isTyping]);
+            charIndex += 1;
+            const nextChunk = normalizedResponse.slice(0, charIndex);
+            const isDone = charIndex >= normalizedResponse.length;
+
+            updateSessionLocalMessage(sessionId, tempId, message => ({
+                ...message,
+                content: nextChunk,
+                finalContent: normalizedResponse,
+                phase: isDone ? 'done' : 'typing',
+            }));
+
+            if (isDone) {
+                clearTypingInterval(tempId);
+            }
+        }, 12);
+
+        typingIntervalsRef.current[tempId] = intervalId;
+    }, [clearTypingInterval, updateSessionLocalMessage]);
+
+    const sessionLocalMessages = activeSessionId ? (localMessagesBySession[activeSessionId] ?? []) : [];
+    const mergedHistory = activeSessionId ? buildDisplayMessages(chatHistory, sessionLocalMessages) : [];
+    const displayHistory: DisplayChatMessage[] = mergedHistory.length > 0
+        ? mergedHistory
+        : [{
+            key: 'intro',
+            role: 'assistant',
+            content: 'Ol\u00e1! Sou o SaldoPro AI. Posso te ajudar a analisar seus gastos, lan\u00e7ar novas despesas ou editar antigos lan\u00e7amentos.\n\nDescreva seu lan\u00e7amento em texto para eu adicionar automaticamente!',
+        }];
+
+    useEffect(() => {
+        scrollToBottom();
+    }, [displayHistory, scrollToBottom]);
+
+    useEffect(() => {
+        return () => {
+            mountedRef.current = false;
+            Object.values(typingIntervalsRef.current).forEach(intervalId => window.clearInterval(intervalId));
+            typingIntervalsRef.current = {};
+        };
+    }, []);
 
     const handleCreateSession = () => {
-        // Instantly create a temp session and switch to it — Firebase runs in background
         const tempId = `temp-${Date.now()}`;
         setActiveSessionId(tempId);
-        setOptimisticMessages([]);
 
         addSession('Nova Conversa').then((realId) => {
-            // Swap temp → real ID seamlessly
+            setLocalMessagesBySession(prev => {
+                if (!prev[tempId]) {
+                    return prev;
+                }
+
+                const tempMessages = prev[tempId];
+                const { [tempId]: _, ...rest } = prev;
+                return {
+                    ...rest,
+                    [realId]: tempMessages.map(message => ({ ...message, sessionId: realId })),
+                };
+            });
+
             setActiveSessionId((current) => current === tempId ? realId : current);
         }).catch(() => {
-            // Revert on failure
+            setLocalMessagesBySession(prev => {
+                if (!prev[tempId]) {
+                    return prev;
+                }
+
+                const { [tempId]: _, ...rest } = prev;
+                return rest;
+            });
             setActiveSessionId(null);
         });
     };
@@ -118,6 +302,16 @@ export function AIAssistant() {
 
         try {
             await removeSession(id);
+            const sessionLocal = localMessagesBySession[id] ?? [];
+            sessionLocal.forEach(message => clearTypingInterval(message.tempId));
+            setLocalMessagesBySession(prev => {
+                if (!prev[id]) {
+                    return prev;
+                }
+
+                const { [id]: _, ...rest } = prev;
+                return rest;
+            });
             if (activeSessionId === id) {
                 setActiveSessionId(null);
             }
@@ -152,74 +346,84 @@ export function AIAssistant() {
             return;
         }
 
-        const userText = input.normalize('NFC').trim();
+        const sessionId = activeSessionId;
+        const currentSessionLocalMessages = localMessagesBySession[sessionId] ?? [];
+        const userText = normalizeMessageContent(input);
         const base64Image = imagePreview;
         const persistedUserContent = userText || (base64Image ? '[Imagem enviada para analise]' : '');
+        const userTempId = createTempId('user');
+        const assistantTempId = createTempId('assistant');
 
-        // ── INSTANT: show user message optimistically ──
         setInput('');
         handleRemoveImage();
-        setOptimisticMessages(prev => [...prev, { id: `opt-${Date.now()}`, role: 'user', content: persistedUserContent }]);
         setIsProcessing(true);
 
-        try {
-            // Update session title if it's the very first message (fire-and-forget)
-            if (chatHistory.length === 0 && optimisticMessages.length === 0 && userText) {
-                const newTitle = userText.length > 25 ? userText.substring(0, 25) + '...' : userText;
-                editSession(activeSessionId, newTitle).catch(() => { });
-            }
-
-            // Save user message to Firebase in background (don't await)
-            saveChatMessage({
-                sessionId: activeSessionId,
-                role: 'user',
-                content: persistedUserContent
-            }).catch(() => {
-                toast.error('Erro ao salvar mensagem no histórico.');
-            });
-
-            // Prepare full dialog history for the AI prompt
-            const mappedHistory: ChatMessage[] = chatHistory.map(msg => ({
-                role: msg.role as 'user' | 'assistant' | 'system',
-                content: msg.content,
-                imageBase64: msg.imageUrl
-            }));
-
-            // Include optimistic messages in the history
-            for (const opt of optimisticMessages) {
-                mappedHistory.push({ role: opt.role, content: opt.content });
-            }
-
-            mappedHistory.push({
+        setSessionLocalMessages(sessionId, current => [
+            ...current,
+            {
+                tempId: userTempId,
+                sessionId,
                 role: 'user',
                 content: persistedUserContent,
-                imageBase64: base64Image ?? undefined
+                imageBase64: base64Image ?? undefined,
+            },
+            {
+                tempId: assistantTempId,
+                sessionId,
+                role: 'assistant',
+                content: '',
+                phase: 'thinking',
+            },
+        ]);
+
+        try {
+            if (chatHistory.length === 0 && currentSessionLocalMessages.length === 0 && userText) {
+                const newTitle = userText.length > 25 ? `${userText.substring(0, 25)}...` : userText;
+                editSession(sessionId, newTitle).catch(() => { });
+            }
+
+            saveChatMessage({
+                sessionId,
+                role: 'user',
+                content: persistedUserContent,
+            }).catch(() => {
+                toast.error('Erro ao salvar mensagem no hist\u00f3rico.');
             });
 
-            const recentHistory = mappedHistory.slice(-10);
+            const recentHistory = [
+                ...buildPromptHistory(chatHistory, currentSessionLocalMessages),
+                {
+                    role: 'user' as const,
+                    content: persistedUserContent,
+                    imageBase64: base64Image ?? undefined,
+                },
+            ].slice(-10);
+
             const aiResponse = await chatWithAI(recentHistory);
             triggerDataRefresh();
-
-            // ── TYPEWRITER: reveal AI response progressively ──
             setIsProcessing(false);
-            setFullAIResponse(aiResponse.message);
-            setIsTyping(true);
 
-            // Save assistant reply in background (don't block UI)
+            startAssistantTyping(sessionId, assistantTempId, aiResponse.message);
+
             saveChatMessage({
-                sessionId: activeSessionId,
+                sessionId,
                 role: 'assistant',
-                content: aiResponse.message
+                content: aiResponse.message,
             }).catch(() => { });
-
         } catch (error: any) {
+            const errorMsg = 'Ops, tive um problema de conex\u00e3o. Poss\u00edveis causas: limite excedido na Groq ou erro de rede. Tente novamente!';
             toast.error(error.message || 'Erro ao processar mensagem com IA.');
-            const errorMsg = 'Ops, tive um problema de conexão. Possíveis causas: limite excedido na Groq ou erro de rede. Tente novamente!';
-            setOptimisticMessages(prev => [...prev, { id: `opt-err-${Date.now()}`, role: 'assistant', content: errorMsg }]);
+            clearTypingInterval(assistantTempId);
+            updateSessionLocalMessage(sessionId, assistantTempId, message => ({
+                ...message,
+                content: errorMsg,
+                finalContent: errorMsg,
+                phase: 'done',
+            }));
             saveChatMessage({
-                sessionId: activeSessionId,
+                sessionId,
                 role: 'assistant',
-                content: errorMsg
+                content: errorMsg,
             }).catch(() => { });
             setIsProcessing(false);
         }
@@ -232,24 +436,10 @@ export function AIAssistant() {
         }
     };
 
-    // Merge Firebase history + optimistic local messages
-    const mergedHistory = [
-        ...chatHistory,
-        ...optimisticMessages,
-    ];
-
-    // If chat is entirely empty (first time user), show a greeting manually as a visual stub
-    const displayHistory = mergedHistory.length > 0
-        ? mergedHistory
-        : [{ id: 'intro', role: 'assistant' as const, content: 'Olá! Sou o SaldoPro AI. Posso te ajudar a analisar seus gastos, lançar novas despesas ou editar antigos lançamentos.\n\nDescreva seu lançamento em texto para eu adicionar automaticamente!' }];
-
     return (
         <div className="flex h-full w-full overflow-hidden bg-[#0B0E14] text-gray-100 font-sans relative">
-
-            {/* Sidebar with Sessions */}
             <div className={`w-full md:w-80 shrink-0 flex-col border-r border-surface-700/40 bg-[#0B0E14]/95 md:bg-[#0f1218]/60 absolute inset-y-0 left-0 md:relative z-30 md:z-10 h-full backdrop-blur-xl md:backdrop-blur-none transition-transform duration-300 ${showMobileSidebar ? 'flex translate-x-0' : 'hidden md:flex md:translate-x-0'}`}>
                 <div className="p-4 border-b border-surface-700/40 flex flex-col gap-4">
-
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                             <div className="w-10 h-10 rounded-xl bg-finance-primary/10 border border-finance-primary/20 flex items-center justify-center shrink-0">
@@ -269,7 +459,6 @@ export function AIAssistant() {
                 </div>
 
                 <div className="px-4 pt-4 pb-2">
-
                     <Button
                         onClick={() => {
                             handleCreateSession();
@@ -320,10 +509,7 @@ export function AIAssistant() {
                 </div>
             </div>
 
-            {/* Main Chat Area */}
             <div className="flex-1 bg-[#0B0E14] flex flex-col overflow-hidden relative w-full">
-
-                {/* Mobile Header Toggle */}
                 <div className="md:hidden p-4 border-b border-surface-700/40 bg-[#0f1218]/60 backdrop-blur-md flex flex-row items-center gap-3 z-10 relative">
                     <button onClick={() => setShowMobileSidebar(true)} className="p-2 -ml-2 text-gray-400 hover:text-white rounded-lg transition-colors">
                         <Menu className="w-6 h-6" />
@@ -334,7 +520,6 @@ export function AIAssistant() {
                     </div>
                 </div>
 
-                {/* Decorative background gradients */}
                 <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-finance-primary/[0.03] rounded-full blur-[120px] pointer-events-none" />
                 <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-finance-primary/[0.03] rounded-full blur-[150px] pointer-events-none" />
 
@@ -347,86 +532,65 @@ export function AIAssistant() {
                             </div>
                         </div>
                         <h2 className="text-3xl font-bold text-white mb-3">Como posso ajudar?</h2>
-                        <p className="text-gray-400 max-w-md text-sm leading-relaxed mb-8">Selecione uma conversa ao lado ou crie uma nova para começar a interagir com seu assistente financeiro inteligente.</p>
+                        <p className="text-gray-400 max-w-md text-sm leading-relaxed mb-8">Selecione uma conversa ao lado ou crie uma nova para come\u00e7ar a interagir com seu assistente financeiro inteligente.</p>
                         <Button onClick={handleCreateSession} className="gap-2 bg-finance-primary hover:bg-finance-primary-light text-white rounded-xl px-8 py-6 shadow-lg shadow-finance-primary/25 border-none transition-all font-medium text-base">
                             <MessageSquarePlus className="w-5 h-5" /> Iniciar Nova Conversa
                         </Button>
                     </div>
                 ) : (
                     <>
-                        {/* Chat History View */}
                         <div className="flex-1 overflow-y-auto px-4 sm:px-6 md:px-12 py-8 custom-scrollbar space-y-8 relative z-10">
-                            {displayHistory.map((msg, idx) => {
+                            {displayHistory.map((msg) => {
                                 const isUser = msg.role === 'user';
-                                const formattedAssistantContent = isUser ? '' : formatAssistantMarkdown(msg.content);
+                                const isThinking = msg.phase === 'thinking';
+                                const isTyping = msg.phase === 'typing';
+                                const formattedAssistantContent = isUser || isThinking ? '' : formatAssistantMarkdown(msg.content);
+
                                 return (
-                                    <div key={idx} className={`flex gap-4 animate-in slide-in-from-bottom-4 duration-500 fade-in ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
-                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 border shadow-sm
-                                            ${isUser ? 'bg-[#151921] border-surface-700/40 text-gray-400' : 'bg-finance-primary/10 border-finance-primary/20 text-finance-primary-light backdrop-blur-sm'}`}>
+                                    <div key={msg.key} className={`flex gap-4 animate-in slide-in-from-bottom-4 duration-500 fade-in ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 border shadow-sm ${isUser ? 'bg-[#151921] border-surface-700/40 text-gray-400' : 'bg-finance-primary/10 border-finance-primary/20 text-finance-primary-light backdrop-blur-sm'}`}>
                                             {isUser ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
                                         </div>
                                         <div className={`space-y-2 ${isUser ? 'max-w-[85%] items-end flex flex-col' : 'w-full max-w-[95%] items-start flex flex-col'}`}>
-                                            {('imageUrl' in msg && msg.imageUrl) && (
+                                            {msg.imageUrl && (
                                                 <div className="p-1 rounded-2xl bg-surface-800/80 backdrop-blur-md border border-surface-700 w-fit shrink-0 overflow-hidden shadow-md">
                                                     <a href={msg.imageUrl} target="_blank" rel="noopener noreferrer">
                                                         <img src={msg.imageUrl} alt="Anexo" className="max-h-[240px] w-auto rounded-xl object-contain cursor-pointer hover:opacity-90 transition-opacity" />
                                                     </a>
                                                 </div>
                                             )}
-                                            <div className={`px-5 py-4 text-[15px] whitespace-pre-wrap leading-relaxed shadow-sm w-full
-                                                ${isUser
-                                                    ? 'bg-finance-primary text-white rounded-2xl rounded-br-sm max-w-full'
-                                                    : 'bg-[#151921] border border-surface-700/30 text-gray-200 rounded-2xl rounded-tl-sm prose prose-invert prose-p:my-0 prose-p:leading-relaxed prose-strong:font-semibold prose-strong:text-white prose-em:text-gray-300 prose-ul:my-3 prose-li:my-1 prose-pre:bg-[#0B0E14] prose-pre:border prose-pre:border-surface-700/30 hover:prose-a:text-finance-primary-light'}`}>
+                                            <div className={`px-5 py-4 text-[15px] whitespace-pre-wrap leading-relaxed shadow-sm w-full ${isUser
+                                                ? 'bg-finance-primary text-white rounded-2xl rounded-br-sm max-w-full'
+                                                : 'bg-[#151921] border border-surface-700/30 text-gray-200 rounded-2xl rounded-tl-sm prose prose-invert prose-p:my-0 prose-p:leading-relaxed prose-strong:font-semibold prose-strong:text-white prose-em:text-gray-300 prose-ul:my-3 prose-li:my-1 prose-pre:bg-[#0B0E14] prose-pre:border prose-pre:border-surface-700/30 hover:prose-a:text-finance-primary-light'}`}>
                                                 {isUser ? (
                                                     msg.content
+                                                ) : isThinking ? (
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="flex items-center gap-1.5">
+                                                            <div className="w-2 h-2 rounded-full bg-finance-primary-light" style={{ animation: 'typing-dot 1.2s ease-in-out infinite' }} />
+                                                            <div className="w-2 h-2 rounded-full bg-finance-primary-light" style={{ animation: 'typing-dot 1.2s ease-in-out 0.2s infinite' }} />
+                                                            <div className="w-2 h-2 rounded-full bg-finance-primary-light" style={{ animation: 'typing-dot 1.2s ease-in-out 0.4s infinite' }} />
+                                                        </div>
+                                                        <span className="text-sm text-gray-400 font-medium not-prose">IA pensando...</span>
+                                                    </div>
                                                 ) : (
-                                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                                        {formattedAssistantContent}
-                                                    </ReactMarkdown>
+                                                    <>
+                                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                            {formattedAssistantContent}
+                                                        </ReactMarkdown>
+                                                        {isTyping && (
+                                                            <span className="inline-block w-0.5 h-4 bg-finance-primary-light animate-pulse ml-0.5 align-text-bottom not-prose" />
+                                                        )}
+                                                    </>
                                                 )}
                                             </div>
                                         </div>
                                     </div>
                                 );
                             })}
-
-                            {/* "IA pensando..." indicator while waiting for API */}
-                            {isProcessing && (
-                                <div className="flex gap-4 animate-fade-in">
-                                    <div className="w-10 h-10 rounded-full bg-finance-primary/10 border border-finance-primary/20 text-finance-primary-light flex items-center justify-center shrink-0 shadow-sm backdrop-blur-sm">
-                                        <Bot className="w-6 h-6" />
-                                    </div>
-                                    <div className="bg-[#151921] border border-surface-700/30 rounded-3xl rounded-tl-md px-5 py-4 flex items-center gap-3 w-fit shadow-md backdrop-blur-sm">
-                                        <div className="flex items-center gap-1.5">
-                                            <div className="w-2 h-2 rounded-full bg-finance-primary-light" style={{ animation: 'typing-dot 1.2s ease-in-out infinite' }} />
-                                            <div className="w-2 h-2 rounded-full bg-finance-primary-light" style={{ animation: 'typing-dot 1.2s ease-in-out 0.2s infinite' }} />
-                                            <div className="w-2 h-2 rounded-full bg-finance-primary-light" style={{ animation: 'typing-dot 1.2s ease-in-out 0.4s infinite' }} />
-                                        </div>
-                                        <span className="text-sm text-gray-400 font-medium">IA pensando...</span>
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Typewriter: AI response appearing progressively */}
-                            {isTyping && streamingText && (
-                                <div className="flex gap-4 animate-fade-in">
-                                    <div className="w-10 h-10 rounded-full bg-finance-primary/10 border border-finance-primary/20 text-finance-primary-light flex items-center justify-center shrink-0 shadow-sm backdrop-blur-sm">
-                                        <Bot className="w-5 h-5" />
-                                    </div>
-                                    <div className="w-full max-w-[95%] items-start flex flex-col">
-                                        <div className="px-5 py-4 text-[15px] whitespace-pre-wrap leading-relaxed shadow-sm w-full bg-[#151921] border border-surface-700/30 text-gray-200 rounded-2xl rounded-tl-sm prose prose-invert prose-p:my-0 prose-p:leading-relaxed prose-strong:font-semibold prose-strong:text-white prose-em:text-gray-300 prose-ul:my-3 prose-li:my-1">
-                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                                {formatAssistantMarkdown(streamingText)}
-                                            </ReactMarkdown>
-                                            <span className="inline-block w-0.5 h-4 bg-finance-primary-light animate-pulse ml-0.5 align-text-bottom" />
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
                             <div ref={messagesEndRef} />
                         </div>
 
-                        {/* Input Area */}
                         <div className="p-4 sm:px-6 md:px-12 pb-6 shrink-0 relative z-20 bg-gradient-to-t from-[#0B0E14] via-[#0B0E14]/90 to-transparent pt-12">
                             <div className="max-w-4xl mx-auto relative group">
                                 <div className="relative flex items-end bg-[#151921] border border-surface-700/30 rounded-xl shadow-lg focus-within:border-finance-primary/50 focus-within:ring-1 focus-within:ring-finance-primary/50 transition-all pl-2">
@@ -439,7 +603,7 @@ export function AIAssistant() {
                                             lang="pt-BR"
                                             spellCheck
                                             autoCorrect="on"
-                                            placeholder="Descreva seu lançamento..."
+                                            placeholder="Descreva seu lan\u00e7amento..."
                                             className="w-full h-6 max-h-[120px] resize-none bg-transparent text-[15px] text-gray-100 placeholder-gray-500 focus:outline-none custom-scrollbar disabled:opacity-50 !p-0 leading-[24px]"
                                             rows={1}
                                             style={{ minHeight: '24px' }}
@@ -450,10 +614,9 @@ export function AIAssistant() {
                                         <button
                                             onClick={handleSend}
                                             disabled={(!input.trim() && !imagePreview) || isProcessing}
-                                            className={`h-9 w-9 flex items-center justify-center rounded-lg transition-all
-                                                ${(input.trim() || imagePreview) && !isProcessing
-                                                    ? 'bg-finance-primary text-white hover:bg-finance-primary-light shadow-sm shadow-finance-primary/20'
-                                                    : 'bg-surface-800 text-gray-500 cursor-not-allowed'}`}
+                                            className={`h-9 w-9 flex items-center justify-center rounded-lg transition-all ${(input.trim() || imagePreview) && !isProcessing
+                                                ? 'bg-finance-primary text-white hover:bg-finance-primary-light shadow-sm shadow-finance-primary/20'
+                                                : 'bg-surface-800 text-gray-500 cursor-not-allowed'}`}
                                         >
                                             {!isProcessing ? (
                                                 <Send className="w-[18px] h-[18px] ml-0.5" />
@@ -465,7 +628,7 @@ export function AIAssistant() {
                                 </div>
 
                                 <div className="text-center mt-3 text-xs text-surface-500">
-                                    O SaldoPro AI pode cometer erros de interpretação. Verifique os lançamentos.
+                                    O SaldoPro AI pode cometer erros de interpreta\u00e7\u00e3o. Verifique os lan\u00e7amentos.
                                 </div>
                             </div>
                         </div>
