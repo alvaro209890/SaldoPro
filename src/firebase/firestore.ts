@@ -30,6 +30,10 @@ function notifyRefresh(): void {
     }
 }
 
+export function triggerDataRefresh(): void {
+    notifyRefresh();
+}
+
 async function getAuthHeaders(): Promise<Record<string, string>> {
     const user = auth.currentUser;
     if (!user) {

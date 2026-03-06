@@ -1,21 +1,24 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useTransactions } from '@/hooks/useTransactions';
-import { useCategories } from '@/hooks/useCategories';
 import { useChats } from '@/hooks/useChats';
 import { useChatSessions } from '@/hooks/useChatSessions';
 import { chatWithAI, type ChatMessage } from '@/services/ai';
 import { Button } from '@/components/ui/Button';
 import { Sparkles, Send, Bot, X, User, MessageSquarePlus, MessageSquare, Trash2, Menu } from 'lucide-react';
 import { toast } from 'sonner';
-import { getCurrentMonthKey } from '@/utils/date';
+import { triggerDataRefresh } from '@/firebase/firestore';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-export function AIAssistant() {
-    const currentMonthKey = getCurrentMonthKey();
-    const { transactions, loading: txLoading, add, update, remove } = useTransactions(currentMonthKey);
-    const { categories, loading: catsLoading } = useCategories();
+function formatAssistantMarkdown(content: string): string {
+    return content
+        .replace(/\r\n/g, '\n')
+        .trim()
+        .replace(/\*([^\n*]+)\*/g, '**$1**')
+        .replace(/_([^\n_]+)_/g, '*$1*')
+        .replace(/\n/g, '  \n');
+}
 
+export function AIAssistant() {
     // Sessions
     const { sessions, addSession, removeSession, editSession, loading: sessionsLoading } = useChatSessions();
     const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -28,7 +31,7 @@ export function AIAssistant() {
     }, [sessions, sessionsLoading, activeSessionId]);
 
     // Active Chat
-    const { messages: chatHistory, addMessage: saveChatMessage, loading: chatsLoading } = useChats(activeSessionId);
+    const { messages: chatHistory, addMessage: saveChatMessage } = useChats(activeSessionId);
 
     const [input, setInput] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
@@ -143,8 +146,8 @@ export function AIAssistant() {
 
     const handleSend = async () => {
         if (!input.trim() && !imagePreview) return;
-        if (catsLoading || txLoading || !activeSessionId) {
-            toast.error(activeSessionId ? 'Aguarde o carregamento das suas transacoes e categorias...' : 'Crie uma nova conversa primeiro.');
+        if (!activeSessionId) {
+            toast.error('Crie uma nova conversa primeiro.');
             return;
         }
 
@@ -193,44 +196,8 @@ export function AIAssistant() {
             });
 
             const recentHistory = mappedHistory.slice(-10);
-
-            const aiResponse = await chatWithAI(recentHistory, categories, transactions);
-
-            const actionsToApply = aiResponse.parsedActions?.length > 0
-                ? aiResponse.parsedActions
-                : [aiResponse.parsedAction];
-
-            let addedCount = 0;
-            let updatedCount = 0;
-            let deletedCount = 0;
-
-            for (const action of actionsToApply) {
-                if (action.action === 'add_transaction') {
-                    await add({
-                        type: action.type,
-                        amount: action.amount,
-                        description: action.description,
-                        category: action.categoryId,
-                        date: action.date,
-                        paymentMethod: action.paymentMethod
-                    });
-                    addedCount += 1;
-                    continue;
-                }
-                if (action.action === 'update_transaction') {
-                    await update(action.id, action.changes);
-                    updatedCount += 1;
-                    continue;
-                }
-                if (action.action === 'delete_transaction') {
-                    await remove(action.id);
-                    deletedCount += 1;
-                }
-            }
-
-            if (addedCount > 0) toast.success(addedCount === 1 ? 'Transacao adicionada pela IA!' : `${addedCount} transacoes adicionadas pela IA!`);
-            if (updatedCount > 0) toast.success(updatedCount === 1 ? 'Transacao atualizada pela IA!' : `${updatedCount} transacoes atualizadas pela IA!`);
-            if (deletedCount > 0) toast.success(deletedCount === 1 ? 'Transacao excluida pela IA!' : `${deletedCount} transacoes excluidas pela IA!`);
+            const aiResponse = await chatWithAI(recentHistory);
+            triggerDataRefresh();
 
             // ── TYPEWRITER: reveal AI response progressively ──
             setIsProcessing(false);
@@ -390,6 +357,7 @@ export function AIAssistant() {
                         <div className="flex-1 overflow-y-auto px-4 sm:px-6 md:px-12 py-8 custom-scrollbar space-y-8 relative z-10">
                             {displayHistory.map((msg, idx) => {
                                 const isUser = msg.role === 'user';
+                                const formattedAssistantContent = isUser ? '' : formatAssistantMarkdown(msg.content);
                                 return (
                                     <div key={idx} className={`flex gap-4 animate-in slide-in-from-bottom-4 duration-500 fade-in ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
                                         <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 border shadow-sm
@@ -407,12 +375,12 @@ export function AIAssistant() {
                                             <div className={`px-5 py-4 text-[15px] whitespace-pre-wrap leading-relaxed shadow-sm w-full
                                                 ${isUser
                                                     ? 'bg-finance-primary text-white rounded-2xl rounded-br-sm max-w-full'
-                                                    : 'bg-[#151921] border border-surface-700/30 text-gray-200 rounded-2xl rounded-tl-sm prose prose-invert prose-p:leading-relaxed prose-pre:bg-[#0B0E14] prose-pre:border prose-pre:border-surface-700/30 hover:prose-a:text-finance-primary-light'}`}>
+                                                    : 'bg-[#151921] border border-surface-700/30 text-gray-200 rounded-2xl rounded-tl-sm prose prose-invert prose-p:my-0 prose-p:leading-relaxed prose-strong:font-semibold prose-strong:text-white prose-em:text-gray-300 prose-ul:my-3 prose-li:my-1 prose-pre:bg-[#0B0E14] prose-pre:border prose-pre:border-surface-700/30 hover:prose-a:text-finance-primary-light'}`}>
                                                 {isUser ? (
                                                     msg.content
                                                 ) : (
                                                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                                        {msg.content}
+                                                        {formattedAssistantContent}
                                                     </ReactMarkdown>
                                                 )}
                                             </div>
@@ -445,9 +413,9 @@ export function AIAssistant() {
                                         <Bot className="w-5 h-5" />
                                     </div>
                                     <div className="w-full max-w-[95%] items-start flex flex-col">
-                                        <div className="px-5 py-4 text-[15px] whitespace-pre-wrap leading-relaxed shadow-sm w-full bg-[#151921] border border-surface-700/30 text-gray-200 rounded-2xl rounded-tl-sm prose prose-invert prose-p:leading-relaxed">
+                                        <div className="px-5 py-4 text-[15px] whitespace-pre-wrap leading-relaxed shadow-sm w-full bg-[#151921] border border-surface-700/30 text-gray-200 rounded-2xl rounded-tl-sm prose prose-invert prose-p:my-0 prose-p:leading-relaxed prose-strong:font-semibold prose-strong:text-white prose-em:text-gray-300 prose-ul:my-3 prose-li:my-1">
                                             <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                                {streamingText}
+                                                {formatAssistantMarkdown(streamingText)}
                                             </ReactMarkdown>
                                             <span className="inline-block w-0.5 h-4 bg-finance-primary-light animate-pulse ml-0.5 align-text-bottom" />
                                         </div>

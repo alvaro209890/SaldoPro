@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.undoLastAction = undoLastAction;
 exports.handleReminderShortcut = handleReminderShortcut;
 exports.processWhatsAppAIMessage = processWhatsAppAIMessage;
+exports.processWebAIMessage = processWebAIMessage;
 const env_1 = require("../config/env");
 const firestore_1 = require("../lib/firestore");
 const date_utils_1 = require("../lib/date-utils");
@@ -19,6 +20,20 @@ const VALID_PAYMENT_METHODS = [
 const DISPLAY_TIMEZONE = 'America/Sao_Paulo';
 const MAX_ACTIONS_PER_MESSAGE = 10;
 const IMAGE_DOCUMENT_SAVE_FALLBACK = 'Recebi sua imagem! Nao identifiquei dados financeiros para registrar. Se quiser guardar essa imagem, me diga o titulo que deseja usar.';
+const WEB_CHAT_ALLOWED_ACTIONS = [
+    'none',
+    'add_transaction',
+    'update_transaction',
+    'delete_transaction'
+];
+const WEB_CHAT_EXTRA_SYSTEM_PROMPT = `
+Voce esta respondendo no chat web do painel do SaldoPro.
+- Responda como assistente do painel. Nao diga que esta no WhatsApp e nao ofereca recursos exclusivos do WhatsApp por padrao.
+- Neste chat web, voce pode executar APENAS estas acoes: "add_transaction", "update_transaction", "delete_transaction" e "none".
+- Nunca use acoes de recorrencia, lembretes, metas, documentos, midia ou qualquer outra fora dessa lista.
+- Se o pedido sair desse escopo, responda de forma curta que, nesta etapa, o chat do painel cuida apenas de transacoes e consultas financeiras, e use "none".
+- Quando registrar, editar ou excluir uma transacao, mantenha o "reply" curto e objetivo.`;
+const WEB_CHAT_UNSUPPORTED_ACTION_MESSAGE = 'No chat do painel, nesta etapa, eu cuido apenas de transacoes: registrar, editar, excluir e responder consultas financeiras.';
 // ---------------------------------------------------------------------------
 // Financial context cache — avoids repeated Firestore reads for active users.
 // TTL: 2 minutes. Invalidated when a transaction is added/updated/deleted.
@@ -1285,6 +1300,48 @@ function buildMutationFailureMessage(actions, detail) {
     }
     return `${baseMessage}\n\n${normalizedDetail}`;
 }
+function prepareActionsForExecution(actions, options) {
+    const baseActions = Array.isArray(actions) && actions.length > 0
+        ? actions.slice(0, MAX_ACTIONS_PER_MESSAGE)
+        : [{ action: 'none' }];
+    const fallbackActions = baseActions.every((action) => action.action === 'none')
+        ? buildFallbackActionsFromText(options.latestUserMessageText)
+        : null;
+    const rawActions = fallbackActions ?? baseActions;
+    const normalizedActions = normalizeTransactionActionsForRecurring(rawActions, options.latestUserMessageText);
+    if (!options.allowedActions || options.allowedActions.length === 0) {
+        return { actions: normalizedActions, hadDisallowedAction: false };
+    }
+    const allowedActions = new Set(options.allowedActions);
+    let hadDisallowedAction = false;
+    const filteredActions = normalizedActions.map((action) => {
+        if (allowedActions.has(action.action)) {
+            return action;
+        }
+        if (action.action !== 'none') {
+            hadDisallowedAction = true;
+        }
+        return { action: 'none' };
+    });
+    return {
+        actions: filteredActions,
+        hadDisallowedAction
+    };
+}
+function normalizeWebPanelReply(text, latestUserMessageText) {
+    const normalizedUserText = normalizeHumanText(latestUserMessageText);
+    if (normalizedUserText.includes('whatsapp')) {
+        return text.trim();
+    }
+    return text
+        .replace(/\bno chat do whatsapp\b/gi, 'aqui no painel')
+        .replace(/\bno whatsapp\b/gi, 'aqui no painel')
+        .replace(/\bpelo whatsapp\b/gi, 'aqui no painel')
+        .replace(/\bvia whatsapp\b/gi, 'aqui no painel')
+        .replace(/\bdo whatsapp\b/gi, 'do painel')
+        .replace(/\bpro whatsapp\b/gi, 'para o painel')
+        .trim();
+}
 async function processWhatsAppAIMessage(uid, messages, options = {}) {
     if (!uid || uid.trim().length === 0) {
         return { text: 'Nao foi possivel identificar a conta vinculada para processar a mensagem.' };
@@ -1350,9 +1407,20 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
         isConversationRestart: Boolean(options.isConversationRestart),
         shouldSendCapabilitiesSummary: Boolean(options.shouldSendCapabilitiesSummary)
     };
-    const ai = await (0, groq_1.queryGroqAssistant)(sanitizedMessages, context);
-    const requestedMutation = ai.actionObjects.some(isMutatingAiAction);
-    const actionResults = await executeActions(uid, ai.actionObjects, categories, {
+    const ai = await (0, groq_1.queryGroqAssistant)(sanitizedMessages, context, {
+        extraSystemPrompt: options.extraSystemPrompt
+    });
+    const preparedActions = prepareActionsForExecution(ai.actionObjects, {
+        ...options,
+        latestUserMessageText
+    });
+    if (preparedActions.hadDisallowedAction) {
+        return {
+            text: (options.unsupportedActionMessage ?? WEB_CHAT_UNSUPPORTED_ACTION_MESSAGE).slice(0, env_1.env.maxMessageLength)
+        };
+    }
+    const requestedMutation = preparedActions.actions.some(isMutatingAiAction);
+    const actionResults = await executeActions(uid, preparedActions.actions, categories, {
         ...options,
         latestUserMessageText
     });
@@ -1370,7 +1438,7 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
     if (actionableResults.length === 0) {
         if (requestedMutation) {
             return {
-                text: buildMutationFailureMessage(ai.actionObjects).slice(0, env_1.env.maxMessageLength),
+                text: buildMutationFailureMessage(preparedActions.actions).slice(0, env_1.env.maxMessageLength),
                 mediaUrl
             };
         }
@@ -1394,7 +1462,7 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
         if (actionResult.kind === 'error') {
             return {
                 text: (requestedMutation
-                    ? buildMutationFailureMessage(ai.actionObjects, actionResult.message)
+                    ? buildMutationFailureMessage(preparedActions.actions, actionResult.message)
                     : `${(ai.reply.trim() || 'Nao consegui concluir a acao solicitada.')}\n\nAviso: ${actionResult.message}`).slice(0, env_1.env.maxMessageLength),
                 mediaUrl
             };
@@ -1435,15 +1503,23 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
         mediaUrl
     };
 }
+async function processWebAIMessage(uid, messages, options = {}) {
+    const latestUserMessageText = [...messages].reverse().find((message) => message.role === 'user')?.content ?? '';
+    const result = await processWhatsAppAIMessage(uid, messages, {
+        ...options,
+        extraSystemPrompt: WEB_CHAT_EXTRA_SYSTEM_PROMPT,
+        allowedActions: WEB_CHAT_ALLOWED_ACTIONS,
+        unsupportedActionMessage: WEB_CHAT_UNSUPPORTED_ACTION_MESSAGE
+    });
+    return {
+        text: normalizeWebPanelReply(result.text, latestUserMessageText).slice(0, env_1.env.maxMessageLength),
+        ...(result.mediaUrl ? { mediaUrl: result.mediaUrl } : {})
+    };
+}
 async function executeActions(uid, actions, categories, options) {
-    const baseActions = Array.isArray(actions) && actions.length > 0
+    const safeActions = Array.isArray(actions) && actions.length > 0
         ? actions.slice(0, MAX_ACTIONS_PER_MESSAGE)
         : [{ action: 'none' }];
-    const fallbackActions = baseActions.every((action) => action.action === 'none')
-        ? buildFallbackActionsFromText(options.latestUserMessageText)
-        : null;
-    const rawActions = fallbackActions ?? baseActions;
-    const safeActions = normalizeTransactionActionsForRecurring(rawActions, options.latestUserMessageText);
     const results = [];
     for (const action of safeActions) {
         const result = await executeAction(uid, action, categories, options);

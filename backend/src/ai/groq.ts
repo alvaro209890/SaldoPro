@@ -172,6 +172,10 @@ export interface UserFinancialContext {
   shouldSendCapabilitiesSummary?: boolean;
 }
 
+export interface QueryGroqAssistantOptions {
+  extraSystemPrompt?: string;
+}
+
 type PromptMode = 'compact_query' | 'full_financial';
 
 function formatCurrency(value: number, currency: string): string {
@@ -1670,9 +1674,19 @@ async function callGroqModel(
   }
 }
 
+function withExtraSystemPrompt(basePrompt: string, extraPrompt?: string): string {
+  const normalizedExtraPrompt = extraPrompt?.trim();
+  if (!normalizedExtraPrompt) {
+    return basePrompt;
+  }
+
+  return `${basePrompt}\n\nINSTRUCOES ADICIONAIS DA SUPERFICIE:\n${normalizedExtraPrompt}`;
+}
+
 export async function queryGroqAssistant(
   messages: GroqChatMessage[],
-  context: UserFinancialContext
+  context: UserFinancialContext,
+  options: QueryGroqAssistantOptions = {}
 ): Promise<GroqAssistantResult> {
   if (messages.length === 0) {
     throw new Error('At least one message is required');
@@ -1704,7 +1718,7 @@ export async function queryGroqAssistant(
           audioDataUrl: undefined
         };
 
-        return queryGroqAssistant(rewrittenMessages, context);
+        return queryGroqAssistant(rewrittenMessages, context, options);
       }
     } catch (error) {
       logger.warn('Groq audio transcription chain failed, trying Gemini fallback', {
@@ -1716,7 +1730,7 @@ export async function queryGroqAssistant(
       throw new Error('Nao foi possivel transcrever o audio com Whisper. Configure GEMINI_API_KEY para fallback.');
     }
 
-    return queryGeminiAssistant(messages, context);
+    return queryGeminiAssistant(messages, context, undefined, options);
   }
 
   // --- PREPARE GROQ MESSAGES ---
@@ -1737,7 +1751,7 @@ export async function queryGroqAssistant(
   });
 
   const promptMode = detectPromptMode(messages, context);
-  const systemPrompt = buildPromptByMode(promptMode, context);
+  const systemPrompt = withExtraSystemPrompt(buildPromptByMode(promptMode, context), options.extraSystemPrompt);
   logger.info('AI prompt mode selected', { provider: 'groq', promptMode, isVisionRequest });
 
   // Filter models: for vision requests, only use vision-capable models
@@ -1800,7 +1814,7 @@ export async function queryGroqAssistant(
       lastError: lastGroqError instanceof Error ? lastGroqError.message : 'unknown'
     });
     try {
-      return await queryGeminiAssistant(messages, context, promptMode);
+      return await queryGeminiAssistant(messages, context, promptMode, options);
     } catch (geminiError) {
       logger.error('Gemini fallback also failed', {
         error: geminiError instanceof Error ? geminiError.message : 'unknown'
@@ -1820,10 +1834,11 @@ export async function queryGroqAssistant(
 async function queryGeminiAssistant(
   messages: GroqChatMessage[],
   context: UserFinancialContext,
-  promptModeOverride?: PromptMode
+  promptModeOverride?: PromptMode,
+  options: QueryGroqAssistantOptions = {}
 ): Promise<GroqAssistantResult> {
   const promptMode = promptModeOverride ?? detectPromptMode(messages, context);
-  const systemPrompt = buildPromptByMode(promptMode, context);
+  const systemPrompt = withExtraSystemPrompt(buildPromptByMode(promptMode, context), options.extraSystemPrompt);
   const lastMessage = messages[messages.length - 1];
   const isVisionRequest = Boolean(lastMessage?.imageDataUrl);
   logger.info('AI prompt mode selected', { provider: 'gemini', promptMode, isVisionRequest });
