@@ -23,7 +23,7 @@ export async function chatWithAI(
     // Get Firebase ID token for authentication
     const user = auth.currentUser;
     if (!user) {
-        throw new Error('Voce precisa estar logado para usar o assistente de IA.');
+        throw new Error('Você precisa estar logado para usar o assistente de IA.');
     }
 
     const idToken = await user.getIdToken();
@@ -56,6 +56,6 @@ export async function chatWithAI(
     const data = await response.json() as { reply: string };
 
     return {
-        message: normalizeChatText(data.reply || 'Nao entendi direito, pode repetir?')
+        message: normalizeChatText(data.reply || 'Não entendi direito, pode repetir?')
     };
 }

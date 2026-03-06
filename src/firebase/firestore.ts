@@ -37,7 +37,7 @@ export function triggerDataRefresh(): void {
 async function getAuthHeaders(): Promise<Record<string, string>> {
     const user = auth.currentUser;
     if (!user) {
-        throw new Error('Usuario nao autenticado.');
+        throw new Error('Usu\u00e1rio n\u00e3o autenticado.');
     }
 
     const idToken = await user.getIdToken();

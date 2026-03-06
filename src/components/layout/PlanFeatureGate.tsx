@@ -125,7 +125,7 @@ export function PlanFeatureGate({
                                     <ArrowRight className="ml-2 h-4 w-4" />
                                 </Button>
                                 <p className="text-xs leading-6 text-slate-400 sm:text-sm">
-                                    Este recurso fica bloqueado ate voce assinar um plano premium.
+                                    Este recurso fica bloqueado at\u00e9 voc\u00ea assinar um plano premium.
                                 </p>
                             </div>
                         </div>

@@ -158,11 +158,10 @@ export function ReminderForm({
           <button
             type="button"
             onClick={() => setKind('general')}
-            className={`flex items-center justify-start gap-2 rounded-xl px-3 py-2.5 text-xs font-medium transition sm:justify-center ${
-              reminderKind === 'general'
+            className={`flex items-center justify-start gap-2 rounded-xl px-3 py-2.5 text-xs font-medium transition sm:justify-center ${reminderKind === 'general'
                 ? 'bg-blue-500 text-white'
                 : 'text-gray-300 hover:bg-surface-800'
-            }`}
+              }`}
           >
             <Bell className="h-3.5 w-3.5" />
             Comum
@@ -170,11 +169,10 @@ export function ReminderForm({
           <button
             type="button"
             onClick={() => setKind('payable')}
-            className={`flex items-center justify-start gap-2 rounded-xl px-3 py-2.5 text-xs font-medium transition sm:justify-center ${
-              reminderKind === 'payable'
+            className={`flex items-center justify-start gap-2 rounded-xl px-3 py-2.5 text-xs font-medium transition sm:justify-center ${reminderKind === 'payable'
                 ? 'bg-orange-500 text-white'
                 : 'text-gray-300 hover:bg-surface-800'
-            }`}
+              }`}
           >
             <ArrowDown className="h-3.5 w-3.5" />
             A pagar
@@ -182,11 +180,10 @@ export function ReminderForm({
           <button
             type="button"
             onClick={() => setKind('receivable')}
-            className={`flex items-center justify-start gap-2 rounded-xl px-3 py-2.5 text-xs font-medium transition sm:justify-center ${
-              reminderKind === 'receivable'
+            className={`flex items-center justify-start gap-2 rounded-xl px-3 py-2.5 text-xs font-medium transition sm:justify-center ${reminderKind === 'receivable'
                 ? 'bg-emerald-500 text-white'
                 : 'text-gray-300 hover:bg-surface-800'
-            }`}
+              }`}
           >
             <ArrowUp className="h-3.5 w-3.5" />
             A receber
@@ -194,7 +191,7 @@ export function ReminderForm({
         </div>
 
         <Input
-          label={isFinancial ? 'Descricao' : 'Texto do lembrete'}
+          label={isFinancial ? 'Descri\u00e7\u00e3o' : 'Texto do lembrete'}
           icon={FileText}
           placeholder={isFinancial ? 'Ex: Pagar aluguel' : 'Ex: Levar documentos para reuniao'}
           error={errors.title?.message}
@@ -294,22 +291,20 @@ export function ReminderForm({
               <button
                 type="button"
                 onClick={() => setValue('status', 'pending')}
-                className={`rounded-lg px-3 py-2 text-xs font-medium transition ${
-                  status === 'pending'
+                className={`rounded-lg px-3 py-2 text-xs font-medium transition ${status === 'pending'
                     ? 'bg-indigo-500 text-white'
                     : 'bg-surface-800 text-gray-300 hover:bg-surface-700'
-                }`}
+                  }`}
               >
                 Pendente
               </button>
               <button
                 type="button"
                 onClick={() => setValue('status', 'paid')}
-                className={`rounded-lg px-3 py-2 text-xs font-medium transition ${
-                  status === 'paid'
+                className={`rounded-lg px-3 py-2 text-xs font-medium transition ${status === 'paid'
                     ? 'bg-emerald-500 text-white'
                     : 'bg-surface-800 text-gray-300 hover:bg-surface-700'
-                }`}
+                  }`}
               >
                 Concluido
               </button>

@@ -15,7 +15,7 @@ import { normalizePhoneNumber } from '@/utils/whatsapp';
 import { WhatsAppOnboarding } from '@/components/settings/WhatsAppOnboarding';
 
 const settingsSchema = z.object({
-    budget: z.number().min(0, 'O orcamento nao pode ser negativo'),
+    budget: z.number().min(0, 'O or\u00e7amento n\u00e3o pode ser negativo'),
     startDay: z.number().min(1).max(31, 'O dia deve ser entre 1 e 31'),
     currency: z.string().min(1, 'A moeda e obrigatoria'),
 });

@@ -187,11 +187,10 @@ export function Reminders() {
                 key={item.id}
                 type="button"
                 onClick={() => setStatusFilter(item.id)}
-                className={`rounded-xl px-3 py-2 text-xs font-medium transition ${
-                  statusFilter === item.id
+                className={`rounded-xl px-3 py-2 text-xs font-medium transition ${statusFilter === item.id
                     ? 'bg-indigo-500 text-white'
                     : 'bg-surface-800 text-gray-300 hover:bg-surface-700'
-                }`}
+                  }`}
               >
                 {item.label}
               </button>
@@ -207,11 +206,10 @@ export function Reminders() {
                 key={item.id}
                 type="button"
                 onClick={() => setKindFilter(item.id)}
-                className={`rounded-xl px-3 py-2 text-xs font-medium transition ${
-                  kindFilter === item.id
+                className={`rounded-xl px-3 py-2 text-xs font-medium transition ${kindFilter === item.id
                     ? 'bg-surface-100 text-surface-900'
                     : 'bg-surface-800 text-gray-300 hover:bg-surface-700'
-                }`}
+                  }`}
               >
                 {item.label}
               </button>
@@ -232,7 +230,7 @@ export function Reminders() {
             <EmptyState
               icon={Bell}
               title="Nenhum lembrete"
-              description="Voce ainda nao criou lembretes comuns ou financeiros."
+              description="Voc\u00ea ainda n\u00e3o criou lembretes comuns ou financeiros."
               actionLabel="Criar lembrete"
               onAction={handleCreate}
             />

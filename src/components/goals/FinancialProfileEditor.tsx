@@ -253,9 +253,8 @@ export function FinancialProfileEditor({
                         maxLength={FINANCIAL_GOALS_TEXT_LIMIT}
                         value={values.financialGoalsText}
                         onChange={(event) => handleFieldChange('financialGoalsText', event.target.value)}
-                        className={`block w-full rounded-lg border border-surface-700 bg-surface-900/50 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 transition-colors focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
-                            errors.financialGoalsText ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''
-                        }`}
+                        className={`block w-full rounded-lg border border-surface-700 bg-surface-900/50 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 transition-colors focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 ${errors.financialGoalsText ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''
+                            }`}
                         placeholder="Ex: Quero juntar para uma viagem e montar reserva de emergencia."
                     />
                     <div className="mt-1 flex items-center justify-between text-xs">
@@ -289,7 +288,7 @@ export function FinancialProfileEditor({
 
                         <div className="flex flex-wrap items-center gap-2">
                             <Button variant="secondary" onClick={() => setShowRegeneratePrompt(false)} disabled={isGenerating}>
-                                Agora nao
+                                Agora n\u00e3o
                             </Button>
                             <Button onClick={handleRegenerateNow} isLoading={isGenerating}>
                                 <Sparkles className="mr-2 h-4 w-4" />

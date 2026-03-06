@@ -13,7 +13,7 @@ import type { RecurringTransaction, Category, RecurringTransactionFormData } fro
 const recurringTransactionSchema = z.object({
     type: z.enum(['income', 'expense']),
     amount: z.number().min(0.01, 'O valor deve ser maior que zero'),
-    description: z.string().min(1, 'A descricao e obrigatoria'),
+    description: z.string().min(1, 'A descri\u00e7\u00e3o \u00e9 obrigat\u00f3ria'),
     category: z.string().min(1, 'A categoria e obrigatoria'),
     paymentMethod: z.enum(['pix', 'credit', 'debit', 'cash', 'transfer', 'boleto']),
     frequency: z.enum(['weekly', 'monthly', 'yearly']),
@@ -195,7 +195,7 @@ export function RecurringTransactionForm({
                     </div>
 
                     <Input
-                        label="Descricao"
+                        label="Descrição"
                         icon={FileText}
                         placeholder="Ex: Aluguel"
                         error={errors.description?.message}
@@ -241,7 +241,7 @@ export function RecurringTransactionForm({
                         control={control}
                         render={({ field }) => (
                             <Select
-                                label="Frequencia"
+                                label="Frequência"
                                 icon={Repeat}
                                 error={errors.frequency?.message}
                                 options={Object.entries(FREQUENCY_LABELS).map(([value, label]) => ({
@@ -254,7 +254,7 @@ export function RecurringTransactionForm({
                     />
 
                     <Input
-                        label="Data de Inicio"
+                        label="Data de Início"
                         type="date"
                         icon={Calendar}
                         error={errors.startDate?.message}

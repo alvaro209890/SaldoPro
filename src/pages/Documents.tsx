@@ -396,7 +396,7 @@ export function Documents() {
         }
 
         if (file.size > MAX_UPLOAD_SIZE_BYTES) {
-            toast.error('Use um arquivo de ate 10 MB.');
+            toast.error('Use um arquivo de até 10 MB.');
             event.target.value = '';
             return;
         }
@@ -409,7 +409,7 @@ export function Documents() {
             setShowUploadForm(true);
         } catch (error) {
             console.error(error);
-            toast.error('Nao foi possivel ler o arquivo.');
+            toast.error('Não foi possível ler o arquivo.');
         } finally {
             event.target.value = '';
         }
@@ -565,7 +565,7 @@ export function Documents() {
                 <div className="rounded-2xl border border-white/5 bg-gradient-to-br from-surface-800/70 to-surface-900 p-4 sm:p-5">
                     <div className="flex items-center justify-between">
                         <div>
-                            <p className="text-xs text-gray-400 sm:text-sm">Espaco utilizado</p>
+                            <p className="text-xs text-gray-400 sm:text-sm">Espaço utilizado</p>
                             <p className="mt-1.5 text-2xl font-bold text-white sm:mt-2 sm:text-3xl">{formatFileSize(totalBytes)}</p>
                         </div>
                         <div className="rounded-2xl bg-emerald-500/10 p-2.5 text-emerald-400 sm:p-3">
@@ -592,7 +592,7 @@ export function Documents() {
                 <EmptyState
                     icon={Files}
                     title="Nenhum arquivo salvo"
-                    description="As imagens, PDFs e ZIPs enviados por aqui aparecerao nesta biblioteca."
+                    description="As imagens, PDFs e ZIPs enviados por aqui aparecerão nesta biblioteca."
                     actionLabel="Selecionar arquivo"
                     onAction={() => fileInputRef.current?.click()}
                 />
@@ -639,7 +639,7 @@ export function Documents() {
 
                     <div>
                         <label className="mb-1.5 block text-sm font-medium text-gray-300">
-                            Descricao
+                            Descrição
                         </label>
                         <textarea
                             value={uploadDescription}
@@ -713,7 +713,7 @@ export function Documents() {
 
                         <div>
                             <label className="mb-1.5 block text-sm font-medium text-gray-300">
-                                Descricao
+                                Descrição
                             </label>
                             <textarea
                                 value={editDescription}
@@ -723,12 +723,11 @@ export function Documents() {
                                 className="block w-full resize-none rounded-lg border border-surface-700 bg-surface-900/50 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 transition-colors focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                             />
                         </div>
-
                         <Input
                             label="Tags"
                             value={editTags}
                             onChange={(event) => setEditTags(event.target.value)}
-                            placeholder="Separadas por virgula"
+                            placeholder="Separadas por vírgula"
                         />
 
                         {/* Timestamps */}
@@ -739,14 +738,14 @@ export function Documents() {
                             </div>
                             <div className="mt-2 flex items-start gap-2">
                                 <Download className="h-4 w-4 text-emerald-400" />
-                                <span>Ultimo download: {formatDateTime(editingDocument.lastAccessedAt)}</span>
+                                <span>Último download: {formatDateTime(editingDocument.lastAccessedAt)}</span>
                             </div>
                         </div>
 
                         {/* Action buttons */}
                         <div className="flex flex-col gap-3 border-t border-surface-700 pt-4 sm:flex-row">
                             <Button type="submit" isLoading={saving} className="flex-1">
-                                Salvar alteracoes
+                                Salvar alterações
                             </Button>
                             <Button
                                 type="button"
@@ -783,10 +782,10 @@ export function Documents() {
             >
                 <div className="space-y-4">
                     <p className="text-sm text-gray-300">
-                        O arquivo <strong className="text-white">{documentToDelete?.title}</strong> sera removido do Supabase e saira da sua biblioteca.
+                        O arquivo <strong className="text-white">{documentToDelete?.title}</strong> será removido do Supabase e sairá da sua biblioteca.
                     </p>
                     <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-300">
-                        Esta acao exclui o arquivo e nao tem desfazer.
+                        Esta ação exclui o arquivo e não tem desfazer.
                     </div>
                     <div className="flex flex-col gap-3 border-t border-surface-700 pt-4 sm:flex-row">
                         <Button

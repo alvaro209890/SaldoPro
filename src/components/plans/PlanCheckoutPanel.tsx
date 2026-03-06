@@ -113,7 +113,7 @@ export function PlanCheckoutPanel({
               {statusLabel}
             </p>
             <p className="mt-3 text-xs leading-6 text-slate-400">
-              {currentPlan ? `Plano atual: ${currentPlan.name}` : 'Voce ainda nao tem um plano ativo.'}
+              {currentPlan ? `Plano atual: ${currentPlan.name}` : 'Você ainda não tem um plano ativo.'}
             </p>
           </div>
 
@@ -322,7 +322,7 @@ export function PlanCheckoutPanel({
             <ul className="mt-3 space-y-2 text-sm text-slate-300">
               <li>O cartao fica protegido pelo checkout do Mercado Pago.</li>
               <li>O acesso segue a confirmacao oficial do pagamento.</li>
-              <li>Voce pode trocar ou cancelar depois.</li>
+              <li>Você pode trocar ou cancelar depois.</li>
             </ul>
           </div>
 

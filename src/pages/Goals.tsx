@@ -172,10 +172,10 @@ export function Goals() {
                 await generateAI();
                 toast.success('Metas geradas com IA.');
             } catch (error) {
-                toast.error(getErrorMessage(error, 'Perfil salvo, mas nao foi possivel gerar metas agora.'));
+                toast.error(getErrorMessage(error, 'Perfil salvo, mas não foi possível gerar metas agora.'));
             }
         } catch (error) {
-            toast.error(getErrorMessage(error, 'Nao foi possivel salvar o perfil financeiro.'));
+            toast.error(getErrorMessage(error, 'Não foi possível salvar o perfil financeiro.'));
         } finally {
             setSubmittingProfile(false);
         }
@@ -186,7 +186,7 @@ export function Goals() {
             await generateAI();
             toast.success('Novas metas adicionadas com IA.');
         } catch (error) {
-            const message = getErrorMessage(error, 'Nao foi possivel regenerar metas com IA.');
+            const message = getErrorMessage(error, 'Não foi possível regenerar metas com IA.');
             toast.error(message);
             throw error;
         }
@@ -206,7 +206,7 @@ export function Goals() {
             await saveProfile(data);
             toast.success('Perfil financeiro atualizado.');
         } catch (error) {
-            const message = getErrorMessage(error, 'Nao foi possivel salvar o perfil financeiro.');
+            const message = getErrorMessage(error, 'Não foi possível salvar o perfil financeiro.');
             toast.error(message);
             throw error;
         } finally {
@@ -279,7 +279,7 @@ export function Goals() {
                         Vamos definir suas metas
                     </h1>
                     <p className="mx-auto mt-2 max-w-md text-sm text-gray-400">
-                        Responda algumas perguntas e a IA vai montar metas personalizadas para voce acompanhar no painel e no WhatsApp.
+                        Responda algumas perguntas e a IA vai montar metas personalizadas para você acompanhar no painel e no WhatsApp.
                     </p>
                 </div>
                 <FinancialQuestionnaire
@@ -296,11 +296,10 @@ export function Goals() {
                 <button
                     type="button"
                     onClick={() => setActiveTab('goals')}
-                    className={`flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-all ${
-                        activeTab === 'goals'
+                    className={`flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-all ${activeTab === 'goals'
                             ? 'bg-indigo-500/15 text-indigo-200 shadow-sm'
                             : 'text-gray-400 hover:bg-white/[0.04] hover:text-gray-200'
-                    }`}
+                        }`}
                 >
                     <Target className="h-4 w-4" />
                     Metas
@@ -312,11 +311,10 @@ export function Goals() {
                         setIsFormOpen(false);
                         setEditingGoal(null);
                     }}
-                    className={`flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-all ${
-                        activeTab === 'financialProfile'
+                    className={`flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-all ${activeTab === 'financialProfile'
                             ? 'bg-indigo-500/15 text-indigo-200 shadow-sm'
                             : 'text-gray-400 hover:bg-white/[0.04] hover:text-gray-200'
-                    }`}
+                        }`}
                 >
                     <Wallet className="h-4 w-4" />
                     Perfil financeiro
@@ -325,262 +323,261 @@ export function Goals() {
 
             {activeTab === 'goals' ? (
                 <>
-            <div className="grid gap-4 xl:grid-cols-[1.6fr_1fr]">
-                <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(99,102,241,0.22),transparent_45%),radial-gradient(circle_at_85%_30%,rgba(16,185,129,0.14),transparent_35%),linear-gradient(135deg,rgba(15,23,42,0.92),rgba(15,23,42,0.68))] p-6">
-                    <div className="absolute -right-10 -top-10 h-36 w-36 rounded-full bg-indigo-400/10 blur-3xl" />
-                    <div className="relative space-y-5">
-                        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                            <div className="space-y-2">
-                                <div className="inline-flex items-center gap-2 rounded-full border border-indigo-400/20 bg-indigo-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-indigo-200">
-                                    <Sparkles className="h-3.5 w-3.5" />
-                                    Painel de metas
+                    <div className="grid gap-4 xl:grid-cols-[1.6fr_1fr]">
+                        <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(99,102,241,0.22),transparent_45%),radial-gradient(circle_at_85%_30%,rgba(16,185,129,0.14),transparent_35%),linear-gradient(135deg,rgba(15,23,42,0.92),rgba(15,23,42,0.68))] p-6">
+                            <div className="absolute -right-10 -top-10 h-36 w-36 rounded-full bg-indigo-400/10 blur-3xl" />
+                            <div className="relative space-y-5">
+                                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                                    <div className="space-y-2">
+                                        <div className="inline-flex items-center gap-2 rounded-full border border-indigo-400/20 bg-indigo-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-indigo-200">
+                                            <Sparkles className="h-3.5 w-3.5" />
+                                            Painel de metas
+                                        </div>
+                                        <div>
+                                            <h1 className="text-2xl font-bold text-white">Metas</h1>
+                                            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-300">
+                                                Organize objetivos, acompanhe o progresso e use o WhatsApp para pedir detalhes, atualizar valores, concluir metas e ajustar prioridades sem abrir o painel.
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <Button variant="secondary" onClick={handleRegenerateAI} isLoading={generating} size="sm">
+                                            <RefreshCw className="mr-2 h-4 w-4" />
+                                            Regenerar IA
+                                        </Button>
+                                        <Button onClick={handleCreate} size="sm">
+                                            <Plus className="mr-2 h-4 w-4" />
+                                            Nova meta
+                                        </Button>
+                                    </div>
+                                </div>
+
+                                <div className="grid gap-3 sm:grid-cols-3">
+                                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Ativas</p>
+                                        <p className="mt-2 text-2xl font-semibold text-white">{activeGoals.length}</p>
+                                        <p className="mt-1 text-xs text-slate-400">em acompanhamento agora</p>
+                                    </div>
+                                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Acumulado</p>
+                                        <p className="mt-2 text-xl font-semibold text-white">{formatCurrency(portfolioStats.totalCurrent)}</p>
+                                        <p className="mt-1 text-xs text-slate-400">somando metas com alvo</p>
+                                    </div>
+                                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Progresso medio</p>
+                                        <p className="mt-2 text-2xl font-semibold text-white">{portfolioStats.averageProgress.toFixed(0)}%</p>
+                                        <p className="mt-1 text-xs text-slate-400">nas metas ativas com alvo</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="rounded-3xl border border-surface-700 bg-surface-900/60 p-5">
+                            <div className="mb-4 flex items-center gap-2">
+                                <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-300">
+                                    <CircleDollarSign className="h-4.5 w-4.5" />
                                 </div>
                                 <div>
-                                    <h1 className="text-2xl font-bold text-white">Metas</h1>
-                                    <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-300">
-                                        Organize objetivos, acompanhe o progresso e use o WhatsApp para pedir detalhes, atualizar valores, concluir metas e ajustar prioridades sem abrir o painel.
+                                    <p className="text-sm font-semibold text-white">Comandos no WhatsApp</p>
+                                    <p className="text-xs text-gray-400">agora com mais controle de metas</p>
+                                </div>
+                            </div>
+                            <div className="space-y-2 text-sm text-gray-300">
+                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">"como estao minhas metas?"</div>
+                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">"atualize a meta reserva para 2500"</div>
+                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">"conclui minha meta viagem"</div>
+                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">"mude a prioridade da meta cartao para alta"</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {profile && (
+                        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                            <div className="rounded-2xl border border-surface-700 bg-surface-900/50 p-4">
+                                <div className="mb-2 flex items-center gap-2">
+                                    <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-500/10">
+                                        <ArrowUpRight className="h-4 w-4 text-emerald-400" />
+                                    </div>
+                                    <span className="text-xs text-gray-500">Renda</span>
+                                </div>
+                                <p className="text-sm font-semibold text-white">{formatCurrency(profile.monthlyIncome)}</p>
+                            </div>
+                            <div className="rounded-2xl border border-surface-700 bg-surface-900/50 p-4">
+                                <div className="mb-2 flex items-center gap-2">
+                                    <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-red-500/10">
+                                        <ArrowDownRight className="h-4 w-4 text-red-400" />
+                                    </div>
+                                    <span className="text-xs text-gray-500">Fixos</span>
+                                </div>
+                                <p className="text-sm font-semibold text-white">{formatCurrency(profile.fixedExpenses)}</p>
+                            </div>
+                            <div className="rounded-2xl border border-surface-700 bg-surface-900/50 p-4">
+                                <div className="mb-2 flex items-center gap-2">
+                                    <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/10">
+                                        <Wallet className="h-4 w-4 text-amber-400" />
+                                    </div>
+                                    <span className="text-xs text-gray-500">Variaveis</span>
+                                </div>
+                                <p className="text-sm font-semibold text-white">{formatCurrency(profile.variableExpenses)}</p>
+                            </div>
+                            <div className="rounded-2xl border border-surface-700 bg-surface-900/50 p-4">
+                                <div className="mb-2 flex items-center gap-2">
+                                    <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-500/10">
+                                        <PiggyBank className="h-4 w-4 text-indigo-400" />
+                                    </div>
+                                    <span className="text-xs text-gray-500">Meta de economia</span>
+                                </div>
+                                <p className="text-sm font-semibold text-white">{profile.savingsTargetPct}%</p>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+                        <div className="rounded-3xl border border-surface-700 bg-surface-900/55 p-5">
+                            <div className="mb-5 flex items-center gap-3">
+                                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-indigo-500/10 text-indigo-300">
+                                    <TrendingUp className="h-5 w-5" />
+                                </div>
+                                <div>
+                                    <h2 className="text-sm font-semibold text-white">Radar de progresso</h2>
+                                    <p className="text-xs text-gray-400">o panorama rapido das metas que pedem atencao</p>
+                                </div>
+                            </div>
+
+                            <div className="grid gap-3 sm:grid-cols-3">
+                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-4">
+                                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">Falta total</p>
+                                    <p className="mt-2 text-lg font-semibold text-white">{formatCurrency(portfolioStats.totalRemaining)}</p>
+                                    <p className="mt-1 text-xs text-gray-400">para bater as metas ativas com alvo</p>
+                                </div>
+                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-4">
+                                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">Mais proxima</p>
+                                    <p className="mt-2 text-sm font-semibold text-white">
+                                        {portfolioStats.nearestDeadlineGoal?.title ?? 'Sem prazo definido'}
+                                    </p>
+                                    <p className="mt-1 text-xs text-gray-400">
+                                        {portfolioStats.nearestDeadlineGoal?.deadline ?? 'Adicione prazos para ganhar mais contexto'}
+                                    </p>
+                                </div>
+                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-4">
+                                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">Mais perto da linha</p>
+                                    <p className="mt-2 text-sm font-semibold text-white">
+                                        {portfolioStats.closestToCompleteGoal?.title ?? 'Sem meta com alvo'}
+                                    </p>
+                                    <p className="mt-1 text-xs text-gray-400">
+                                        {portfolioStats.closestToCompleteGoal
+                                            ? `${(getGoalProgress(portfolioStats.closestToCompleteGoal) ?? 0).toFixed(0)}% concluido`
+                                            : 'Adicione valores alvo para medir progresso'}
                                     </p>
                                 </div>
                             </div>
-
-                            <div className="flex flex-wrap items-center gap-2">
-                                <Button variant="secondary" onClick={handleRegenerateAI} isLoading={generating} size="sm">
-                                    <RefreshCw className="mr-2 h-4 w-4" />
-                                    Regenerar IA
-                                </Button>
-                                <Button onClick={handleCreate} size="sm">
-                                    <Plus className="mr-2 h-4 w-4" />
-                                    Nova meta
-                                </Button>
-                            </div>
                         </div>
 
-                        <div className="grid gap-3 sm:grid-cols-3">
-                            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                                <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Ativas</p>
-                                <p className="mt-2 text-2xl font-semibold text-white">{activeGoals.length}</p>
-                                <p className="mt-1 text-xs text-slate-400">em acompanhamento agora</p>
+                        <div className="rounded-3xl border border-surface-700 bg-surface-900/55 p-5">
+                            <div className="mb-4 flex items-center gap-3">
+                                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-300">
+                                    <Clock3 className="h-5 w-5" />
+                                </div>
+                                <div>
+                                    <h2 className="text-sm font-semibold text-white">Visao rapida</h2>
+                                    <p className="text-xs text-gray-400">saiba onde agir primeiro</p>
+                                </div>
                             </div>
-                            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                                <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Acumulado</p>
-                                <p className="mt-2 text-xl font-semibold text-white">{formatCurrency(portfolioStats.totalCurrent)}</p>
-                                <p className="mt-1 text-xs text-slate-400">somando metas com alvo</p>
+                            <div className="space-y-3 text-sm">
+                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">
+                                    <p className="text-xs uppercase tracking-[0.18em] text-gray-500">Em foco</p>
+                                    <p className="mt-1 font-medium text-white">{focusGoals.length} meta(s)</p>
+                                    <p className="mt-1 text-xs text-gray-400">alta prioridade, prazo proximo ou progresso acelerado</p>
+                                </div>
+                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">
+                                    <p className="text-xs uppercase tracking-[0.18em] text-gray-500">Concluidas</p>
+                                    <p className="mt-1 font-medium text-white">{completedGoals.length} meta(s)</p>
+                                    <p className="mt-1 text-xs text-gray-400">use o WhatsApp para reativar ou criar a proxima</p>
+                                </div>
+                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">
+                                    <p className="text-xs uppercase tracking-[0.18em] text-gray-500">Pausadas</p>
+                                    <p className="mt-1 font-medium text-white">{cancelledGoals.length} meta(s)</p>
+                                    <p className="mt-1 text-xs text-gray-400">retome quando fizer sentido</p>
+                                </div>
                             </div>
-                            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                                <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Progresso medio</p>
-                                <p className="mt-2 text-2xl font-semibold text-white">{portfolioStats.averageProgress.toFixed(0)}%</p>
-                                <p className="mt-1 text-xs text-slate-400">nas metas ativas com alvo</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="rounded-3xl border border-surface-700 bg-surface-900/60 p-5">
-                    <div className="mb-4 flex items-center gap-2">
-                        <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-300">
-                            <CircleDollarSign className="h-4.5 w-4.5" />
-                        </div>
-                        <div>
-                            <p className="text-sm font-semibold text-white">Comandos no WhatsApp</p>
-                            <p className="text-xs text-gray-400">agora com mais controle de metas</p>
-                        </div>
-                    </div>
-                    <div className="space-y-2 text-sm text-gray-300">
-                        <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">"como estao minhas metas?"</div>
-                        <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">"atualize a meta reserva para 2500"</div>
-                        <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">"conclui minha meta viagem"</div>
-                        <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">"mude a prioridade da meta cartao para alta"</div>
-                    </div>
-                </div>
-            </div>
-
-            {profile && (
-                <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                    <div className="rounded-2xl border border-surface-700 bg-surface-900/50 p-4">
-                        <div className="mb-2 flex items-center gap-2">
-                            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-500/10">
-                                <ArrowUpRight className="h-4 w-4 text-emerald-400" />
-                            </div>
-                            <span className="text-xs text-gray-500">Renda</span>
-                        </div>
-                        <p className="text-sm font-semibold text-white">{formatCurrency(profile.monthlyIncome)}</p>
-                    </div>
-                    <div className="rounded-2xl border border-surface-700 bg-surface-900/50 p-4">
-                        <div className="mb-2 flex items-center gap-2">
-                            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-red-500/10">
-                                <ArrowDownRight className="h-4 w-4 text-red-400" />
-                            </div>
-                            <span className="text-xs text-gray-500">Fixos</span>
-                        </div>
-                        <p className="text-sm font-semibold text-white">{formatCurrency(profile.fixedExpenses)}</p>
-                    </div>
-                    <div className="rounded-2xl border border-surface-700 bg-surface-900/50 p-4">
-                        <div className="mb-2 flex items-center gap-2">
-                            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/10">
-                                <Wallet className="h-4 w-4 text-amber-400" />
-                            </div>
-                            <span className="text-xs text-gray-500">Variaveis</span>
-                        </div>
-                        <p className="text-sm font-semibold text-white">{formatCurrency(profile.variableExpenses)}</p>
-                    </div>
-                    <div className="rounded-2xl border border-surface-700 bg-surface-900/50 p-4">
-                        <div className="mb-2 flex items-center gap-2">
-                            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-500/10">
-                                <PiggyBank className="h-4 w-4 text-indigo-400" />
-                            </div>
-                            <span className="text-xs text-gray-500">Meta de economia</span>
-                        </div>
-                        <p className="text-sm font-semibold text-white">{profile.savingsTargetPct}%</p>
-                    </div>
-                </div>
-            )}
-
-            <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-                <div className="rounded-3xl border border-surface-700 bg-surface-900/55 p-5">
-                    <div className="mb-5 flex items-center gap-3">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-indigo-500/10 text-indigo-300">
-                            <TrendingUp className="h-5 w-5" />
-                        </div>
-                        <div>
-                            <h2 className="text-sm font-semibold text-white">Radar de progresso</h2>
-                            <p className="text-xs text-gray-400">o panorama rapido das metas que pedem atencao</p>
                         </div>
                     </div>
 
-                    <div className="grid gap-3 sm:grid-cols-3">
-                        <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-4">
-                            <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">Falta total</p>
-                            <p className="mt-2 text-lg font-semibold text-white">{formatCurrency(portfolioStats.totalRemaining)}</p>
-                            <p className="mt-1 text-xs text-gray-400">para bater as metas ativas com alvo</p>
-                        </div>
-                        <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-4">
-                            <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">Mais proxima</p>
-                            <p className="mt-2 text-sm font-semibold text-white">
-                                {portfolioStats.nearestDeadlineGoal?.title ?? 'Sem prazo definido'}
-                            </p>
-                            <p className="mt-1 text-xs text-gray-400">
-                                {portfolioStats.nearestDeadlineGoal?.deadline ?? 'Adicione prazos para ganhar mais contexto'}
+                    <div className="rounded-3xl border border-surface-700 bg-surface-900/50 p-4">
+                        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="flex items-center gap-2">
+                                <Filter className="h-4 w-4 text-indigo-300" />
+                                <p className="text-sm font-semibold text-white">Filtrar metas</p>
+                            </div>
+                            <p className="text-xs text-gray-400">
+                                {filteredGoals.length} meta{filteredGoals.length !== 1 ? 's' : ''} em exibicao
                             </p>
                         </div>
-                        <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-4">
-                            <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">Mais perto da linha</p>
-                            <p className="mt-2 text-sm font-semibold text-white">
-                                {portfolioStats.closestToCompleteGoal?.title ?? 'Sem meta com alvo'}
-                            </p>
-                            <p className="mt-1 text-xs text-gray-400">
-                                {portfolioStats.closestToCompleteGoal
-                                    ? `${(getGoalProgress(portfolioStats.closestToCompleteGoal) ?? 0).toFixed(0)}% concluido`
-                                    : 'Adicione valores alvo para medir progresso'}
-                            </p>
+                        <div className="flex flex-wrap gap-2">
+                            {(Object.keys(FILTER_LABELS) as GoalsViewFilter[]).map((filterKey) => (
+                                <button
+                                    key={filterKey}
+                                    type="button"
+                                    onClick={() => setViewFilter(filterKey)}
+                                    className={`rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition-all ${viewFilter === filterKey
+                                            ? 'border-indigo-400/30 bg-indigo-500/10 text-indigo-200'
+                                            : 'border-surface-700 bg-surface-800 text-gray-400 hover:text-gray-200'
+                                        }`}
+                                >
+                                    {FILTER_LABELS[filterKey]}
+                                </button>
+                            ))}
                         </div>
                     </div>
-                </div>
 
-                <div className="rounded-3xl border border-surface-700 bg-surface-900/55 p-5">
-                    <div className="mb-4 flex items-center gap-3">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-300">
-                            <Clock3 className="h-5 w-5" />
-                        </div>
-                        <div>
-                            <h2 className="text-sm font-semibold text-white">Visao rapida</h2>
-                            <p className="text-xs text-gray-400">saiba onde agir primeiro</p>
-                        </div>
-                    </div>
-                    <div className="space-y-3 text-sm">
-                        <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">
-                            <p className="text-xs uppercase tracking-[0.18em] text-gray-500">Em foco</p>
-                            <p className="mt-1 font-medium text-white">{focusGoals.length} meta(s)</p>
-                            <p className="mt-1 text-xs text-gray-400">alta prioridade, prazo proximo ou progresso acelerado</p>
-                        </div>
-                        <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">
-                            <p className="text-xs uppercase tracking-[0.18em] text-gray-500">Concluidas</p>
-                            <p className="mt-1 font-medium text-white">{completedGoals.length} meta(s)</p>
-                            <p className="mt-1 text-xs text-gray-400">use o WhatsApp para reativar ou criar a proxima</p>
-                        </div>
-                        <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">
-                            <p className="text-xs uppercase tracking-[0.18em] text-gray-500">Pausadas</p>
-                            <p className="mt-1 font-medium text-white">{cancelledGoals.length} meta(s)</p>
-                            <p className="mt-1 text-xs text-gray-400">retome quando fizer sentido</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div className="rounded-3xl border border-surface-700 bg-surface-900/50 p-4">
-                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex items-center gap-2">
-                        <Filter className="h-4 w-4 text-indigo-300" />
-                        <p className="text-sm font-semibold text-white">Filtrar metas</p>
-                    </div>
-                    <p className="text-xs text-gray-400">
-                        {filteredGoals.length} meta{filteredGoals.length !== 1 ? 's' : ''} em exibicao
-                    </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                    {(Object.keys(FILTER_LABELS) as GoalsViewFilter[]).map((filterKey) => (
-                        <button
-                            key={filterKey}
-                            type="button"
-                            onClick={() => setViewFilter(filterKey)}
-                            className={`rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition-all ${
-                                viewFilter === filterKey
-                                    ? 'border-indigo-400/30 bg-indigo-500/10 text-indigo-200'
-                                    : 'border-surface-700 bg-surface-800 text-gray-400 hover:text-gray-200'
-                            }`}
-                        >
-                            {FILTER_LABELS[filterKey]}
-                        </button>
-                    ))}
-                </div>
-            </div>
-
-            {goals.length === 0 ? (
-                <EmptyState
-                    icon={Target}
-                    title="Nenhuma meta ainda"
-                    description="Crie metas manualmente ou use a IA para gerar metas baseadas no seu perfil financeiro."
-                    actionLabel="Criar meta"
-                    onAction={handleCreate}
-                />
-            ) : filteredGoals.length === 0 ? (
-                <EmptyState
-                    icon={CheckCircle2}
-                    title="Nada nesse filtro"
-                    description="Mude o filtro acima para ver outras metas ou crie uma nova."
-                    actionLabel="Criar meta"
-                    onAction={handleCreate}
-                />
-            ) : (
-                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                    {filteredGoals.map((goal) => (
-                        <GoalCard
-                            key={goal.id}
-                            goal={goal}
-                            onUpdate={update}
-                            onDelete={remove}
-                            onEdit={handleEdit}
+                    {goals.length === 0 ? (
+                        <EmptyState
+                            icon={Target}
+                            title="Nenhuma meta ainda"
+                            description="Crie metas manualmente ou use a IA para gerar metas baseadas no seu perfil financeiro."
+                            actionLabel="Criar meta"
+                            onAction={handleCreate}
                         />
-                    ))}
-                </div>
-            )}
+                    ) : filteredGoals.length === 0 ? (
+                        <EmptyState
+                            icon={CheckCircle2}
+                            title="Nada nesse filtro"
+                            description="Mude o filtro acima para ver outras metas ou crie uma nova."
+                            actionLabel="Criar meta"
+                            onAction={handleCreate}
+                        />
+                    ) : (
+                        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                            {filteredGoals.map((goal) => (
+                                <GoalCard
+                                    key={goal.id}
+                                    goal={goal}
+                                    onUpdate={update}
+                                    onDelete={remove}
+                                    onEdit={handleEdit}
+                                />
+                            ))}
+                        </div>
+                    )}
 
-            <button
-                onClick={handleCreate}
-                className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 transition-transform active:scale-95 lg:hidden"
-            >
-                <Plus className="h-6 w-6" />
-            </button>
+                    <button
+                        onClick={handleCreate}
+                        className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 transition-transform active:scale-95 lg:hidden"
+                    >
+                        <Plus className="h-6 w-6" />
+                    </button>
 
-            <GoalForm
-                isOpen={isFormOpen}
-                onClose={() => {
-                    setIsFormOpen(false);
-                    setEditingGoal(null);
-                }}
-                onSubmit={handleGoalSubmit}
-                initialData={editingGoal}
-                onDelete={editingGoal ? handleDeleteEditingGoal : undefined}
-            />
+                    <GoalForm
+                        isOpen={isFormOpen}
+                        onClose={() => {
+                            setIsFormOpen(false);
+                            setEditingGoal(null);
+                        }}
+                        onSubmit={handleGoalSubmit}
+                        initialData={editingGoal}
+                        onDelete={editingGoal ? handleDeleteEditingGoal : undefined}
+                    />
                 </>
             ) : profile ? (
                 <FinancialProfileEditor

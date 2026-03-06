@@ -38,7 +38,7 @@ const NAV_ITEMS = [
     { label: 'Lembretes', path: '/app/reminders', icon: Bell },
     { label: 'Recorrentes', path: '/app/recurring', icon: Repeat },
     { label: 'Metas', path: '/app/goals', icon: Target },
-    { label: 'Imagens', path: '/app/documents', icon: Images },
+    { label: 'Arquivos', path: '/app/documents', icon: Images },
     { label: 'Configurações', path: '/app/settings', icon: Settings },
 ];
 

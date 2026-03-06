@@ -116,7 +116,7 @@ export const PREMIUM_UNLOCK_ITEMS = [
 export const BASIC_PLAN_FEATURES = [
   'Dashboard basico',
   'Categorias',
-  'Transacoes',
+  'Transa\u00e7\u00f5es',
   'Lembretes',
   'Recorrencias',
   'Perfil financeiro',

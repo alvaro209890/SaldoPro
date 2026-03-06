@@ -16,7 +16,7 @@ export function PlansComparisonSection({
           O que muda na pratica
         </p>
         <h2 className="mt-2 text-xl font-semibold text-white sm:text-2xl">
-          Voce continua com o basico sem plano, mas o premium libera o que realmente poupa tempo.
+          Voc\u00ea continua com o b\u00e1sico sem plano, mas o premium libera o que realmente poupa tempo.
         </h2>
       </div>
 

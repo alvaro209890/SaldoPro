@@ -152,7 +152,7 @@ export function GoalForm({ isOpen, onClose, onSubmit, initialData = null, onDele
 
                 <div>
                     <label className="mb-1.5 block text-sm font-medium text-gray-300">
-                        Descricao
+                        Descri\u00e7\u00e3o
                     </label>
                     <textarea
                         value={description}
@@ -213,11 +213,10 @@ export function GoalForm({ isOpen, onClose, onSubmit, initialData = null, onDele
                                     key={item}
                                     type="button"
                                     onClick={() => setStatus(item)}
-                                    className={`rounded-lg border px-2 py-2 text-[11px] font-medium transition-all ${
-                                        status === item
+                                    className={`rounded-lg border px-2 py-2 text-[11px] font-medium transition-all ${status === item
                                             ? 'border-indigo-400/40 bg-indigo-500/15 text-indigo-200'
                                             : 'border-surface-700 bg-surface-800 text-gray-400 hover:text-gray-200'
-                                    }`}
+                                        }`}
                                 >
                                     {STATUS_LABELS[item]}
                                 </button>
@@ -244,11 +243,10 @@ export function GoalForm({ isOpen, onClose, onSubmit, initialData = null, onDele
                                     key={item}
                                     type="button"
                                     onClick={() => setPriority(item)}
-                                    className={`rounded-xl border px-3 py-2 text-xs font-semibold transition-all ${
-                                        priority === item
+                                    className={`rounded-xl border px-3 py-2 text-xs font-semibold transition-all ${priority === item
                                             ? activeClass
                                             : 'border-surface-700 bg-surface-800 text-gray-400 hover:text-gray-200'
-                                    }`}
+                                        }`}
                                 >
                                     {PRIORITY_LABELS[item]}
                                 </button>

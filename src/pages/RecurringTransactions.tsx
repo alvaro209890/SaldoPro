@@ -78,7 +78,7 @@ export function RecurringTransactions() {
                 <div>
                     <h1 className="text-2xl font-bold text-white">Recorrentes</h1>
                     <p className="text-sm text-gray-400 mt-1">
-                        Gerencie suas transacoes recorrentes automaticas.
+                        Gerencie suas transa\u00e7\u00f5es recorrentes autom\u00e1ticas.
                     </p>
                 </div>
 

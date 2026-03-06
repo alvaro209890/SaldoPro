@@ -45,10 +45,10 @@ export function useRecurringTransactions() {
                 nextDueDate: data.startDate,
                 active: true,
             });
-            toast.success('Transacao recorrente criada!');
+            toast.success('Transação recorrente criada!');
         } catch (error) {
             console.error(error);
-            toast.error('Erro ao criar transacao recorrente.');
+            toast.error('Erro ao criar transação recorrente.');
             throw error;
         }
     };
@@ -57,10 +57,10 @@ export function useRecurringTransactions() {
         if (!user) return;
         try {
             await updateRecurringTransaction(user.uid, id, data);
-            toast.success('Transacao recorrente atualizada!');
+            toast.success('Transação recorrente atualizada!');
         } catch (error) {
             console.error(error);
-            toast.error('Erro ao atualizar transacao recorrente.');
+            toast.error('Erro ao atualizar transação recorrente.');
             throw error;
         }
     };
@@ -69,10 +69,10 @@ export function useRecurringTransactions() {
         if (!user) return;
         try {
             await deleteRecurringTransaction(user.uid, id);
-            toast.success('Transacao recorrente removida!');
+            toast.success('Transação recorrente removida!');
         } catch (error) {
             console.error(error);
-            toast.error('Erro ao remover transacao recorrente.');
+            toast.error('Erro ao remover transação recorrente.');
             throw error;
         }
     };
@@ -115,7 +115,7 @@ export function useRecurringTransactions() {
             }
 
             if (generated > 0) {
-                toast.success(`${generated} transacao(oes) recorrente(s) gerada(s)!`);
+                toast.success(`${generated} transação(ões) recorrente(s) gerada(s)!`);
             }
         } finally {
             generatingRef.current = false;
