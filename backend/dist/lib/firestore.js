@@ -1651,13 +1651,14 @@ async function getUserChatMessages(uid, sessionId) {
 }
 async function addUserChatMessage(uid, sessionId, input) {
     const now = new Date().toISOString();
+    const normalizedContent = input.content.normalize('NFC');
     const { data, error } = await supabase_1.supabaseAdmin
         .from('app_chat_messages')
         .insert({
         uid,
         session_id: sessionId,
         role: input.role,
-        content: input.content,
+        content: normalizedContent,
         image_url: input.imageUrl ?? null,
         created_at: now
     })

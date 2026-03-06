@@ -2148,13 +2148,14 @@ export async function addUserChatMessage(
   input: { role: 'user' | 'assistant' | 'system'; content: string; imageUrl?: string }
 ): Promise<string> {
   const now = new Date().toISOString();
+  const normalizedContent = input.content.normalize('NFC');
   const { data, error } = await db
     .from('app_chat_messages')
     .insert({
       uid,
       session_id: sessionId,
       role: input.role,
-      content: input.content,
+      content: normalizedContent,
       image_url: input.imageUrl ?? null,
       created_at: now
     })

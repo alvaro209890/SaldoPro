@@ -15,6 +15,10 @@ interface WebChatRequestBody {
     messages: WebChatMessage[];
 }
 
+function normalizeUtf8Text(value: string): string {
+    return value.normalize('NFC');
+}
+
 export function createAiChatRouter(): Router {
     const router = Router();
 
@@ -39,7 +43,7 @@ export function createAiChatRouter(): Router {
             try {
                 const groqMessages: GroqChatMessage[] = body.messages.map(msg => ({
                     role: msg.role,
-                    content: msg.content,
+                    content: normalizeUtf8Text(msg.content),
                     ...(msg.imageBase64 ? { imageDataUrl: msg.imageBase64 } : {})
                 }));
 
@@ -71,7 +75,7 @@ export function createAiChatRouter(): Router {
                 });
 
                 res.json({
-                    reply: result.text
+                    reply: normalizeUtf8Text(result.text)
                 });
             } catch (error) {
                 logger.error('Web AI chat error', {

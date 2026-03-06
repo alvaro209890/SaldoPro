@@ -13,6 +13,10 @@ export interface AIChatResponse {
     message: string;
 }
 
+function normalizeChatText(value: string): string {
+    return value.normalize('NFC');
+}
+
 export async function chatWithAI(
     messages: ChatMessage[]
 ): Promise<AIChatResponse> {
@@ -28,7 +32,7 @@ export async function chatWithAI(
     const payload = {
         messages: messages.map(m => ({
             role: m.role,
-            content: m.content,
+            content: normalizeChatText(m.content),
             ...(m.imageBase64 ? { imageBase64: m.imageBase64 } : {})
         }))
     };
@@ -37,7 +41,8 @@ export async function chatWithAI(
         method: 'POST',
         headers: {
             'Authorization': `Bearer ${idToken}`,
-            'Content-Type': 'application/json',
+            'Content-Type': 'application/json; charset=utf-8',
+            'Accept': 'application/json',
         },
         body: JSON.stringify(payload)
     });
@@ -51,6 +56,6 @@ export async function chatWithAI(
     const data = await response.json() as { reply: string };
 
     return {
-        message: data.reply || 'Nao entendi direito, pode repetir?'
+        message: normalizeChatText(data.reply || 'Nao entendi direito, pode repetir?')
     };
 }

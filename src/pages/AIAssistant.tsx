@@ -11,6 +11,7 @@ import remarkGfm from 'remark-gfm';
 
 function formatAssistantMarkdown(content: string): string {
     return content
+        .normalize('NFC')
         .replace(/\r\n/g, '\n')
         .trim()
         .replace(/\*([^\n*]+)\*/g, '**$1**')
@@ -151,7 +152,7 @@ export function AIAssistant() {
             return;
         }
 
-        const userText = input.trim();
+        const userText = input.normalize('NFC').trim();
         const base64Image = imagePreview;
         const persistedUserContent = userText || (base64Image ? '[Imagem enviada para analise]' : '');
 
@@ -435,6 +436,9 @@ export function AIAssistant() {
                                             onChange={(e) => setInput(e.target.value)}
                                             onKeyDown={handleKeyDown}
                                             disabled={isProcessing}
+                                            lang="pt-BR"
+                                            spellCheck
+                                            autoCorrect="on"
                                             placeholder="Descreva seu lançamento..."
                                             className="w-full h-6 max-h-[120px] resize-none bg-transparent text-[15px] text-gray-100 placeholder-gray-500 focus:outline-none custom-scrollbar disabled:opacity-50 !p-0 leading-[24px]"
                                             rows={1}

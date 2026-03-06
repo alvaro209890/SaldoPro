@@ -1983,6 +1983,59 @@ export interface GeneratedGoal {
   priority: 'low' | 'medium' | 'high';
 }
 
+function parseYmdToUtcDate(value: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+}
+
+function formatUtcDateToYmd(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+}
+
+function addDaysToYmd(baseYmd: string, days: number): string {
+  const baseDate = parseYmdToUtcDate(baseYmd) ?? new Date(Date.UTC(2026, 0, 1, 12, 0, 0));
+  baseDate.setUTCDate(baseDate.getUTCDate() + days);
+  return formatUtcDateToYmd(baseDate);
+}
+
+function fallbackGeneratedGoalDeadline(
+  today: string,
+  priority: GeneratedGoal['priority'],
+  index: number
+): string {
+  const baseDays =
+    priority === 'high'
+      ? 90
+      : priority === 'low'
+        ? 365
+        : 180;
+  const spreadDays =
+    priority === 'high'
+      ? 30
+      : priority === 'low'
+        ? 60
+        : 45;
+  return addDaysToYmd(today, baseDays + (index * spreadDays));
+}
+
+function normalizeGeneratedGoalDeadline(
+  rawDeadline: string | null,
+  today: string,
+  priority: GeneratedGoal['priority'],
+  index: number
+): string {
+  if (!rawDeadline) {
+    return fallbackGeneratedGoalDeadline(today, priority, index);
+  }
+
+  if (rawDeadline <= today) {
+    return fallbackGeneratedGoalDeadline(today, priority, index);
+  }
+
+  return rawDeadline;
+}
+
 export async function generateFinancialGoals(profile: {
   monthlyIncome: number;
   fixedExpenses: number;
@@ -1992,6 +2045,8 @@ export async function generateFinancialGoals(profile: {
 }, currency: string): Promise<GeneratedGoal[]> {
   const disposableIncome = profile.monthlyIncome - profile.fixedExpenses - profile.variableExpenses;
   const savingsTarget = (profile.monthlyIncome * profile.savingsTargetPct) / 100;
+  const { today, currentDateTime } = getCurrentBrasiliaPromptContext();
+  const exampleDeadline = addDaysToYmd(today, 120);
 
   const systemPrompt = `Voce e um consultor financeiro pessoal. Com base no perfil financeiro do usuario, gere de 3 a 5 metas SMART e praticas de economia.
 
@@ -2003,17 +2058,22 @@ PERFIL FINANCEIRO DO USUARIO:
 - Meta de economia: ${profile.savingsTargetPct}% (${formatCurrency(savingsTarget, currency)}/mes)
 ${profile.financialGoalsText ? `- Objetivos pessoais do usuario: "${profile.financialGoalsText}"` : ''}
 
+CONTEXTO TEMPORAL DO SERVIDOR:
+- Hoje em Brasilia: ${today}
+- Data e hora atuais do servidor: ${currentDateTime}
+
 REGRAS:
 1. Gere de 3 a 5 metas realistas e acionaveis.
 2. Cada meta deve ser especifica, mensuravel e com prazo definido.
 3. As metas devem ajudar o usuario a economizar dinheiro e atingir seu percentual de economia.
 4. Considere o contexto brasileiro (BRL, praticas locais como PIX, boletos, cartoes).
-5. Use deadlines no formato YYYY-MM-DD, sempre datas futuras.
+5. Use deadlines no formato YYYY-MM-DD, sempre datas futuras em relacao a HOJE (${today}).
 6. Se o usuario mencionou objetivos pessoais, incorpore-os nas metas.
 7. Prioridades: "high" para metas urgentes/fundamentais, "medium" para importantes, "low" para opcionais.
+8. Nunca use anos passados nem datas anteriores a ${today}. Se estiver em duvida, prefira prazos nos proximos 3 a 12 meses.
 
 FORMATO DE RESPOSTA (JSON valido, sem texto extra):
-{"goals":[{"title":"...","description":"...","targetAmount":1000,"deadline":"2026-06-01","priority":"high"}]}
+{"goals":[{"title":"...","description":"...","targetAmount":1000,"deadline":"${exampleDeadline}","priority":"high"}]}
 
 Se targetAmount nao aplicar (meta comportamental), use null.`;
 
@@ -2077,19 +2137,34 @@ Se targetAmount nao aplicar (meta comportamental), use null.`;
 
       if (!Array.isArray(parsed.goals)) continue;
 
+      let repairedDeadlineCount = 0;
       const goals: GeneratedGoal[] = parsed.goals
         .filter((g): g is Record<string, unknown> => typeof g === 'object' && g !== null)
         .slice(0, 5)
-        .map(g => ({
-          title: typeof g.title === 'string' ? g.title.slice(0, 120) : 'Meta financeira',
-          description: typeof g.description === 'string' ? g.description.slice(0, 500) : '',
-          targetAmount: typeof g.targetAmount === 'number' && Number.isFinite(g.targetAmount) && g.targetAmount > 0 ? g.targetAmount : null,
-          deadline: typeof g.deadline === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(g.deadline) ? g.deadline : null,
-          priority: g.priority === 'high' ? 'high' : g.priority === 'low' ? 'low' : 'medium' as const,
-        }));
+        .map((g, index) => {
+          const priority = g.priority === 'high' ? 'high' : g.priority === 'low' ? 'low' : 'medium' as const;
+          const rawDeadline = typeof g.deadline === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(g.deadline) ? g.deadline : null;
+          const normalizedDeadline = normalizeGeneratedGoalDeadline(rawDeadline, today, priority, index);
+          if (normalizedDeadline !== rawDeadline) {
+            repairedDeadlineCount += 1;
+          }
+
+          return {
+            title: typeof g.title === 'string' ? g.title.slice(0, 120) : 'Meta financeira',
+            description: typeof g.description === 'string' ? g.description.slice(0, 500) : '',
+            targetAmount: typeof g.targetAmount === 'number' && Number.isFinite(g.targetAmount) && g.targetAmount > 0 ? g.targetAmount : null,
+            deadline: normalizedDeadline,
+            priority,
+          };
+        });
 
       if (goals.length > 0) {
-        logger.info('generateFinancialGoals: success', { model: model.id, goalCount: goals.length });
+        logger.info('generateFinancialGoals: success', {
+          model: model.id,
+          goalCount: goals.length,
+          today,
+          repairedDeadlineCount
+        });
         return goals;
       }
     } catch (error) {
@@ -2108,21 +2183,21 @@ Se targetAmount nao aplicar (meta comportamental), use null.`;
       title: 'Criar reserva de emergência',
       description: `Acumular o equivalente a 3 meses de gastos fixos (${formatCurrency(profile.fixedExpenses * 3, currency)}) em uma conta de alta liquidez.`,
       targetAmount: profile.fixedExpenses * 3,
-      deadline: null,
+      deadline: addDaysToYmd(today, 120),
       priority: 'high',
     },
     {
       title: `Economizar ${profile.savingsTargetPct}% da renda`,
       description: `Guardar ${formatCurrency(savingsTarget, currency)} por mês através de cortes em gastos variáveis e escolhas mais conscientes.`,
       targetAmount: savingsTarget * 6,
-      deadline: null,
+      deadline: addDaysToYmd(today, 210),
       priority: 'medium',
     },
     {
       title: 'Reduzir gastos variáveis em 15%',
       description: `Diminuir os gastos variáveis de ${formatCurrency(profile.variableExpenses, currency)} para ${formatCurrency(profile.variableExpenses * 0.85, currency)} por mês.`,
       targetAmount: null,
-      deadline: null,
+      deadline: addDaysToYmd(today, 180),
       priority: 'medium',
     },
   ];

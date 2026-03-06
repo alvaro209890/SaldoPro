@@ -6,6 +6,9 @@ const firebase_auth_1 = require("../middleware/firebase-auth");
 const plan_access_1 = require("../middleware/plan-access");
 const assistant_1 = require("../ai/assistant");
 const logger_1 = require("../lib/logger");
+function normalizeUtf8Text(value) {
+    return value.normalize('NFC');
+}
 function createAiChatRouter() {
     const router = (0, express_1.Router)();
     // All routes require Firebase Auth
@@ -23,7 +26,7 @@ function createAiChatRouter() {
         try {
             const groqMessages = body.messages.map(msg => ({
                 role: msg.role,
-                content: msg.content,
+                content: normalizeUtf8Text(msg.content),
                 ...(msg.imageBase64 ? { imageDataUrl: msg.imageBase64 } : {})
             }));
             // Detect conversation context flags for the web chat
@@ -50,7 +53,7 @@ function createAiChatRouter() {
                 isCapabilitiesQuestion
             });
             res.json({
-                reply: result.text
+                reply: normalizeUtf8Text(result.text)
             });
         }
         catch (error) {

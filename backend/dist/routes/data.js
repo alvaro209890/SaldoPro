@@ -22,6 +22,9 @@ function getUid(req) {
 function asString(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
+function normalizeUtf8Text(value) {
+    return value.normalize('NFC');
+}
 function collapseWhitespace(value) {
     return value.replace(/\s+/g, ' ').trim();
 }
@@ -325,7 +328,7 @@ function createDataRouter(signupWelcomeDispatcher) {
         const uid = getUid(req);
         const body = (req.body ?? {});
         const role = body.role === 'user' || body.role === 'assistant' || body.role === 'system' ? body.role : null;
-        const content = asString(body.content);
+        const content = normalizeUtf8Text(asString(body.content));
         const imageUrl = asString(body.imageUrl);
         if (!role || !content) {
             res.status(400).json({ error: 'Campos invalidos para mensagem.' });
