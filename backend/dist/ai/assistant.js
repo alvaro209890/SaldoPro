@@ -61,7 +61,7 @@ async function undoLastAction(uid) {
     }
     if (Date.now() - entry.timestamp > UNDO_TTL_MS) {
         lastActionByUid.delete(uid);
-        return 'A ultima acao foi ha mais de 5 minutos e nao pode mais ser desfeita.';
+        return 'Consigo desfazer apenas a acao mais recente em curto prazo. Para excluir uma transacao especifica, envie "excluir TX-XXXXXX" ou "cancelar transacao TX-XXXXXX".';
     }
     try {
         if (entry.actionKind === 'added') {
@@ -828,6 +828,32 @@ function toFriendlyTransactionCode(transactionId) {
     const hash = hashBase36(transactionId).padStart(6, '0').slice(0, 6);
     return `TX-${hash}`;
 }
+const FRIENDLY_TRANSACTION_CODE_PATTERN = /^tx[\s-]*([a-z0-9]{6})$/i;
+const FRIENDLY_CODE_LOOKUP_LIMIT = Math.max(env_1.env.whatsappAiRecentTransactions * 10, 500);
+function normalizeFriendlyTransactionCode(value) {
+    const normalized = value.trim();
+    if (!normalized)
+        return null;
+    const match = normalized.match(FRIENDLY_TRANSACTION_CODE_PATTERN);
+    if (!match)
+        return null;
+    return `TX-${match[1].toUpperCase()}`;
+}
+async function resolveTransactionIdReference(uid, value) {
+    const trimmed = value.trim();
+    if (!trimmed)
+        return null;
+    const friendlyCode = normalizeFriendlyTransactionCode(trimmed);
+    if (!friendlyCode)
+        return trimmed;
+    const candidates = await (0, firestore_1.getRecentTransactions)(uid, FRIENDLY_CODE_LOOKUP_LIMIT);
+    const matched = candidates.find((transaction) => toFriendlyTransactionCode(transaction.id) === friendlyCode);
+    if (!matched) {
+        logger_1.logger.warn('Transaction code not found in recent list', { uid, friendlyCode });
+        return null;
+    }
+    return matched.id;
+}
 function buildEditDeleteHint(transactionCodes) {
     const uniqueCodes = [...new Set(transactionCodes.filter((code) => code.trim().length > 0))];
     if (uniqueCodes.length === 1) {
@@ -1469,6 +1495,10 @@ async function executeAction(uid, action, categories, options) {
             if (!action.id || typeof action.id !== 'string') {
                 return { kind: 'none' };
             }
+            const transactionId = await resolveTransactionIdReference(uid, action.id);
+            if (!transactionId) {
+                return { kind: 'none' };
+            }
             const changes = { ...(action.changes ?? {}) };
             if ('categoryId' in changes && !('category' in changes)) {
                 changes.category = changes.categoryId;
@@ -1490,13 +1520,13 @@ async function executeAction(uid, action, categories, options) {
             if (Object.keys(changes).length === 0) {
                 return { kind: 'none' };
             }
-            await (0, firestore_1.updateUserTransaction)(uid, action.id, changes);
+            await (0, firestore_1.updateUserTransaction)(uid, transactionId, changes);
             invalidateContextCache(uid);
-            trackUndoableAction(uid, { actionKind: 'updated', resourceId: action.id });
+            trackUndoableAction(uid, { actionKind: 'updated', resourceId: transactionId });
             return {
                 kind: 'updated',
                 receipt: {
-                    transactionCode: toFriendlyTransactionCode(action.id),
+                    transactionCode: toFriendlyTransactionCode(transactionId),
                     changedFields: Object.keys(changes),
                     updatedAt: new Date().toISOString()
                 }
@@ -1506,12 +1536,16 @@ async function executeAction(uid, action, categories, options) {
             if (!action.id || typeof action.id !== 'string') {
                 return { kind: 'none' };
             }
-            const existing = await (0, firestore_1.getUserTransactionById)(uid, action.id);
+            const transactionId = await resolveTransactionIdReference(uid, action.id);
+            if (!transactionId) {
+                return { kind: 'none' };
+            }
+            const existing = await (0, firestore_1.getUserTransactionById)(uid, transactionId);
             if (!existing) {
                 return { kind: 'none' };
             }
             const { id: existingId, ...deletedTransaction } = existing;
-            await (0, firestore_1.deleteUserTransaction)(uid, action.id);
+            await (0, firestore_1.deleteUserTransaction)(uid, transactionId);
             invalidateContextCache(uid);
             trackUndoableAction(uid, {
                 actionKind: 'deleted',
@@ -1521,7 +1555,7 @@ async function executeAction(uid, action, categories, options) {
             return {
                 kind: 'deleted',
                 receipt: {
-                    transactionCode: toFriendlyTransactionCode(action.id),
+                    transactionCode: toFriendlyTransactionCode(transactionId),
                     deletedAt: new Date().toISOString()
                 }
             };

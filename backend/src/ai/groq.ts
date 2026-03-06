@@ -179,6 +179,25 @@ function formatCurrency(value: number, currency: string): string {
   return `${currency} ${value.toFixed(2)}`;
 }
 
+function hashBase36(input: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36).toUpperCase();
+}
+
+function toFriendlyTransactionCode(transactionId: string): string {
+  const normalized = transactionId.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  if (normalized.length >= 6) {
+    return `TX-${normalized.slice(0, 6)}`;
+  }
+
+  const hash = hashBase36(transactionId).padStart(6, '0').slice(0, 6);
+  return `TX-${hash}`;
+}
+
 function buildFinancialSummary(
   transactions: UserTransaction[],
   settings: UserSettingsBackend,
@@ -752,7 +771,7 @@ ${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.bu
     const txList = recentTransactions
       .slice(0, PROMPT_TX_LIMIT)
       .map(
-        (t) => `- ID: "${t.id}", Data: ${t.date}, Desc: "${t.description}", Valor: ${t.amount}, Tipo: ${t.type}, CatID: ${t.category}`
+        (t) => `- ID: "${t.id}", Codigo: ${toFriendlyTransactionCode(t.id)}, Data: ${t.date}, Desc: "${t.description}", Valor: ${t.amount}, Tipo: ${t.type}, CatID: ${t.category}`
       )
       .join('\n');
 
@@ -860,6 +879,9 @@ COMPREENSAO DE LINGUAGEM NATURAL
   - "meu salario e 2100 e recebo todo dia 05, coloque nas recorrentes" = add_recurring_transaction, frequency "monthly"
   - Quando o usuario disser "todo dia 05" (ou outro dia do mes), interprete como recorrencia mensal. O campo "date" deve ser a PROXIMA ocorrencia futura desse dia.
   - Se o usuario pedir explicitamente para "colocar nas recorrentes" ou "deixar recorrente" e houver frequencia/cadencia na frase, use "add_recurring_transaction".
+- EDICAO/EXCLUSAO DE TRANSACAO POR CODIGO:
+  - Quando o usuario citar um codigo como "TX-ABC123", localize esse codigo na lista de transacoes recentes e use o ID correspondente no actionObject.
+  - Em pedidos com verbos como "excluir", "apagar", "deletar", "remover" ou "cancelar transacao", use "delete_transaction".
 - LEMBRETES: quando o usuario pedir para lembrar de algo no futuro, use "add_reminder":
   - Lembrete comum: use reminderKind "general" (sem amount e sem reminderType).
   - Lembrete financeiro: use reminderKind "payable" ou "receivable" com amount > 0.

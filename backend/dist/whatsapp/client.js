@@ -132,12 +132,16 @@ function buildRegistrationRequiredReply() {
         'Assim que terminar, pode me mandar mensagem novamente que eu continuo com voce.'
     ].join('\n');
 }
-const UNDO_KEYWORDS = ['desfaz', 'desfazer', 'desfaca', 'cancela', 'cancelar', 'errou', 'errei', 'anula', 'anular', 'desfizer'];
+const UNDO_PATTERNS = [
+    /^(?:desfaz|desfazer|desfaca|desfizer|cancela|cancelar|anula|anular|errei|errou)$/,
+    /^(?:desfaz|desfazer|desfaca|desfizer|cancela|cancelar|anula|anular)\s+(?:isso|isto|aqui|agora)$/,
+    /^(?:desfaz|desfazer|desfaca|desfizer|cancela|cancelar|anula|anular)\s+(?:a\s+ultima\s+acao|o\s+ultimo\s+lancamento|a\s+ultima\s+transacao)$/
+];
 function isUndoMessage(text) {
     const normalized = normalizeForGreeting(text);
-    if (!normalized || normalized.length > 120)
+    if (!normalized || normalized.length > 80)
         return false;
-    return UNDO_KEYWORDS.some((kw) => normalized.includes(kw));
+    return UNDO_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 function buildDocumentSavedReply(title) {
     return [
