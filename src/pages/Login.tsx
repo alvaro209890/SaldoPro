@@ -3,11 +3,12 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Wallet, Mail, Lock } from 'lucide-react';
+import { Mail, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { loginUser } from '@/firebase/auth';
 import { toast } from 'sonner';
+import { BrandLogo } from '@/components/branding/BrandLogo';
 
 const schema = z.object({
     email: z.string().email('Email inválido'),
@@ -52,9 +53,7 @@ export function Login() {
 
                 <div className="max-w-md relative z-10">
                     <div className="flex items-center gap-3 mb-8">
-                        <div className="bg-indigo-500 p-3 rounded-xl shadow-lg shadow-indigo-500/20">
-                            <Wallet className="w-8 h-8 text-white" />
-                        </div>
+                        <BrandLogo className="h-14 w-14" />
                         <h1 className="text-4xl font-bold tracking-tight text-white">SaldoPro</h1>
                     </div>
                     <h2 className="text-3xl font-semibold mb-6">Assuma o controle do seu dinheiro.</h2>
@@ -79,7 +78,7 @@ export function Login() {
             <div className="w-full lg:w-1/2 flex items-center justify-center p-8">
                 <div className="w-full max-w-sm">
                     <div className="lg:hidden flex items-center gap-2 mb-8 justify-center">
-                        <Wallet className="w-6 h-6 text-indigo-500" />
+                        <BrandLogo className="h-8 w-8" />
                         <h1 className="text-2xl font-bold text-white">SaldoPro</h1>
                     </div>
 

@@ -3,11 +3,12 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Wallet, Mail, Lock, User, Phone } from 'lucide-react';
+import { Mail, Lock, User, Phone } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { registerUser } from '@/firebase/auth';
 import { toast } from 'sonner';
+import { BrandLogo } from '@/components/branding/BrandLogo';
 
 function normalizeSignupPhone(value: string): string {
     const digits = value.replace(/\D/g, '');
@@ -98,7 +99,7 @@ export function Register() {
             <div className="w-full lg:w-1/2 flex items-center justify-center p-8 z-10">
                 <div className="w-full max-w-sm">
                     <div className="lg:hidden flex items-center gap-2 mb-8 justify-center">
-                        <Wallet className="w-6 h-6 text-emerald-500" />
+                        <BrandLogo className="h-8 w-8" />
                         <h1 className="text-2xl font-bold text-white">SaldoPro</h1>
                     </div>
 
@@ -196,9 +197,7 @@ export function Register() {
 
                 <div className="max-w-md relative z-10 text-center">
                     <div className="flex items-center justify-center gap-3 mb-8">
-                        <div className="bg-emerald-500 p-3 rounded-xl shadow-lg shadow-emerald-500/20">
-                            <Wallet className="w-8 h-8 text-white" />
-                        </div>
+                        <BrandLogo className="h-16 w-16" />
                     </div>
                     <h2 className="text-4xl font-bold tracking-tight text-white mb-6">
                         O primeiro passo para sua liberdade financeira

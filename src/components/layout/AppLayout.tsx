@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { Menu } from 'lucide-react';
 import { Sidebar } from './Sidebar';
+import { BrandLogo } from '@/components/branding/BrandLogo';
 
 export function AppLayout() {
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -21,9 +22,9 @@ export function AppLayout() {
             <main className="flex-1 relative flex flex-col min-w-0 overflow-hidden">
                 {/* Mobile Header */}
                 <header className="lg:hidden flex h-16 items-center justify-between border-b border-surface-700/40 bg-[#0B0E14]/80 backdrop-blur-md px-4">
-                    <div className="font-bold text-finance-primary-light flex items-center gap-2">
-                        <div className="w-1.5 h-1.5 rounded-full bg-finance-primary animate-pulse" />
-                        SaldoPro
+                    <div className="font-bold text-finance-primary-light flex items-center gap-2.5">
+                        <BrandLogo className="h-8 w-8" />
+                        <span>SaldoPro</span>
                     </div>
                     <button
                         onClick={() => setIsSidebarOpen(true)}

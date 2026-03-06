@@ -1,177 +1,93 @@
-# Supabase CLI
+# SaldoPro
 
-[![Coverage Status](https://coveralls.io/repos/github/supabase/cli/badge.svg?branch=main)](https://coveralls.io/github/supabase/cli?branch=main) [![Bitbucket Pipelines](https://img.shields.io/bitbucket/pipelines/supabase-cli/setup-cli/master?style=flat-square&label=Bitbucket%20Canary)](https://bitbucket.org/supabase-cli/setup-cli/pipelines) [![Gitlab Pipeline Status](https://img.shields.io/gitlab/pipeline-status/sweatybridge%2Fsetup-cli?label=Gitlab%20Canary)
-](https://gitlab.com/sweatybridge/setup-cli/-/pipelines)
+SaldoPro e uma plataforma de controle financeiro pessoal com:
+- painel web para gestao diaria;
+- automacao por WhatsApp com IA;
+- painel administrativo separado.
 
-[Supabase](https://supabase.io) is an open source Firebase alternative. We're building the features of Firebase using enterprise-grade open source tools.
+## Modulos principais
 
-This repository contains all the functionality for Supabase CLI.
+- **App do usuario (`src/`)**: dashboard, transacoes, categorias, relatorios, lembretes, recorrencias, metas, documentos e assistente de IA.
+- **Painel admin (`admin/`)**: monitoramento operacional, usuarios, assinaturas e suporte.
+- **Backend WhatsApp/IA (`backend/`)**: integracao com WhatsApp (Baileys), IA, cobranca e APIs de dados.
 
-- [x] Running Supabase locally
-- [x] Managing database migrations
-- [x] Creating and deploying Supabase Functions
-- [x] Generating types directly from your database schema
-- [x] Making authenticated HTTP requests to [Management API](https://supabase.com/docs/reference/api/introduction)
+## Stack
 
-## Getting started
+- Frontend: React 19 + Vite + TypeScript + Tailwind.
+- Admin: React + Vite + TypeScript.
+- Auth: Firebase Authentication.
+- Banco e storage: Supabase.
+- Pagamentos: Mercado Pago.
+- Backend: Node.js + Express + TypeScript.
 
-### Install the CLI
+## Estrutura do repositorio
 
-Available via [NPM](https://www.npmjs.com) as dev dependency. To install:
+- `src/`: app principal.
+- `admin/`: app do painel administrativo.
+- `backend/`: API/backend.
+- `supabase/`: migracoes e configuracao local.
+- `documentacao/`: visao funcional e produto.
+- `public/`: assets publicos (logo e favicon).
 
+## Requisitos
+
+- Node.js 20+
+- npm 10+
+
+## Setup rapido (raiz)
+
+1. Instale dependencias:
 ```bash
-npm i supabase --save-dev
+npm install
 ```
-
-When installing with yarn 4, you need to disable experimental fetch with the following nodejs config.
-
-```
-NODE_OPTIONS=--no-experimental-fetch yarn add supabase
-```
-
-> **Note**
-For Bun versions below v1.0.17, you must add `supabase` as a [trusted dependency](https://bun.sh/guides/install/trusted) before running `bun add -D supabase`.
-
-<details>
-  <summary><b>macOS</b></summary>
-
-  Available via [Homebrew](https://brew.sh). To install:
-
-  ```sh
-  brew install supabase/tap/supabase
-  ```
-
-  To install the beta release channel:
-  
-  ```sh
-  brew install supabase/tap/supabase-beta
-  brew link --overwrite supabase-beta
-  ```
-  
-  To upgrade:
-
-  ```sh
-  brew upgrade supabase
-  ```
-</details>
-
-<details>
-  <summary><b>Windows</b></summary>
-
-  Available via [Scoop](https://scoop.sh). To install:
-
-  ```powershell
-  scoop bucket add supabase https://github.com/supabase/scoop-bucket.git
-  scoop install supabase
-  ```
-
-  To upgrade:
-
-  ```powershell
-  scoop update supabase
-  ```
-</details>
-
-<details>
-  <summary><b>Linux</b></summary>
-
-  Available via [Homebrew](https://brew.sh) and Linux packages.
-
-  #### via Homebrew
-
-  To install:
-
-  ```sh
-  brew install supabase/tap/supabase
-  ```
-
-  To upgrade:
-
-  ```sh
-  brew upgrade supabase
-  ```
-
-  #### via Linux packages
-
-  Linux packages are provided in [Releases](https://github.com/supabase/cli/releases). To install, download the `.apk`/`.deb`/`.rpm`/`.pkg.tar.zst` file depending on your package manager and run the respective commands.
-
-  ```sh
-  sudo apk add --allow-untrusted <...>.apk
-  ```
-
-  ```sh
-  sudo dpkg -i <...>.deb
-  ```
-
-  ```sh
-  sudo rpm -i <...>.rpm
-  ```
-
-  ```sh
-  sudo pacman -U <...>.pkg.tar.zst
-  ```
-</details>
-
-<details>
-  <summary><b>Other Platforms</b></summary>
-
-  You can also install the CLI via [go modules](https://go.dev/ref/mod#go-install) without the help of package managers.
-
-  ```sh
-  go install github.com/supabase/cli@latest
-  ```
-
-  Add a symlink to the binary in `$PATH` for easier access:
-
-  ```sh
-  ln -s "$(go env GOPATH)/bin/cli" /usr/bin/supabase
-  ```
-
-  This works on other non-standard Linux distros.
-</details>
-
-<details>
-  <summary><b>Community Maintained Packages</b></summary>
-
-  Available via [pkgx](https://pkgx.sh/). Package script [here](https://github.com/pkgxdev/pantry/blob/main/projects/supabase.com/cli/package.yml).
-  To install in your working directory:
-
-  ```bash
-  pkgx install supabase
-  ```
-
-  Available via [Nixpkgs](https://nixos.org/). Package script [here](https://github.com/NixOS/nixpkgs/blob/master/pkgs/development/tools/supabase-cli/default.nix).
-</details>
-
-### Run the CLI
-
+2. Configure variaveis do frontend:
 ```bash
-supabase bootstrap
+cp .env.example .env
 ```
-
-Or using npx:
-
+3. Preencha as variaveis `VITE_*` no arquivo `.env`.
+4. Rode o app principal:
 ```bash
-npx supabase bootstrap
+npm run dev
 ```
 
-The bootstrap command will guide you through the process of setting up a Supabase project using one of the [starter](https://github.com/supabase-community/supabase-samples/blob/main/samples.json) templates.
+## Setup do backend
 
-## Docs
-
-Command & config reference can be found [here](https://supabase.com/docs/reference/cli/about).
-
-## Breaking changes
-
-We follow semantic versioning for changes that directly impact CLI commands, flags, and configurations.
-
-However, due to dependencies on other service images, we cannot guarantee that schema migrations, seed.sql, and generated types will always work for the same CLI major version. If you need such guarantees, we encourage you to pin a specific version of CLI in package.json.
-
-## Developing
-
-To run from source:
-
-```sh
-# Go >= 1.22
-go run . help
+1. Entre na pasta:
+```bash
+cd backend
 ```
+2. Instale dependencias:
+```bash
+npm install
+```
+3. Configure as variaveis de ambiente do backend.
+4. Rode em desenvolvimento:
+```bash
+npm run dev
+```
+
+> Detalhes do backend: `backend/README.md`
+
+## Scripts uteis (raiz)
+
+- `npm run dev`: app principal em dev.
+- `npm run build`: build do app principal.
+- `npm run build:admin`: build do painel admin.
+- `npm run build:all`: build app + admin.
+- `npm run deploy`: build app + admin e deploy Firebase Hosting (`app` e `admin`).
+
+## Deploy
+
+- Frontend e admin: Firebase Hosting (config em `firebase.json`).
+- Backend: Render (config base em `render.yaml`).
+
+## Branding
+
+- Logo principal escuro: `public/logo-dark.png`
+- Favicons: `public/favicon.png` e `public/icon-*.png`
+
+## Documentacao complementar
+
+- `documentacao/visao-geral-do-produto.md`
+- `documentacao/funcionalidades-resumidas.md`
+- `documentacao/painel-admin.md`

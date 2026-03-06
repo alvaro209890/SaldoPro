@@ -2,6 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { logoutUser } from '@/firebase/auth';
 import { useSettings } from '@/hooks/useSettings';
+import { BrandLogo } from '@/components/branding/BrandLogo';
 import {
     LayoutDashboard,
     ArrowRightLeft,
@@ -10,7 +11,6 @@ import {
     Settings,
     LogOut,
     X,
-    Wallet,
     Sparkles,
     Bell,
     Repeat,
@@ -76,16 +76,14 @@ export function Sidebar({ isOpen, onClose, collapsed, onToggleCollapse }: Sideba
                 <div className={`flex h-16 items-center border-b border-surface-700/40 ${collapsed ? 'justify-center px-3' : 'justify-between px-6'}`}>
                     {!collapsed && (
                         <div className="flex items-center gap-2.5">
-                            <div className="relative">
-                                <Wallet className="h-6 w-6 text-finance-primary-light" />
-                            </div>
+                            <BrandLogo className="h-8 w-8" />
                             <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-finance-primary-light to-finance-primary">
                                 SaldoPro
                             </span>
                         </div>
                     )}
                     {collapsed && (
-                        <Wallet className="h-6 w-6 text-finance-primary-light" />
+                        <BrandLogo className="h-8 w-8" />
                     )}
                     <button
                         onClick={onClose}
