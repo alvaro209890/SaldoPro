@@ -2378,7 +2378,12 @@ export class WhatsAppClient {
 
     this.recordAiCall(ownerUid);
 
-    logger.info('MSG_PIPELINE_AI_CALL: calling processWhatsAppAIMessage', { uid: ownerUid });
+    // When processing audio, add extra system prompt to reinforce transaction registration
+    const audioExtraPrompt = audioDataUrl
+      ? 'INSTRUCAO CRITICA DE AUDIO: A mensagem do usuario foi transcrita de um audio. Se houver QUALQUER valor monetario mencionado com verbo de acao (gastei, paguei, comprei, abasteci, recebi, ganhei), voce DEVE usar add_transaction para CADA gasto/receita identificado. NUNCA responda apenas descrevendo os gastos sem registra-los. Se identificou 2 gastos, crie 2 add_transaction no actionObjects.'
+      : undefined;
+
+    logger.info('MSG_PIPELINE_AI_CALL: calling processWhatsAppAIMessage', { uid: ownerUid, hasAudioHint: Boolean(audioExtraPrompt) });
     const aiReply = await processWhatsAppAIMessage(ownerUid, aiMessages, {
       isFirstMessage,
       isGreeting,
@@ -2387,7 +2392,8 @@ export class WhatsAppClient {
       shouldSendCapabilitiesSummary,
       sourcePhone: remotePhone,
       latestUserMessageText: inboundText,
-      imageOnlyWithoutDocumentIntent: Boolean(imageDataUrl) && !inboundText.trim()
+      imageOnlyWithoutDocumentIntent: Boolean(imageDataUrl) && !inboundText.trim(),
+      extraSystemPrompt: audioExtraPrompt
     });
     logger.info('MSG_PIPELINE_AI_DONE: AI response received', {
       uid: ownerUid,
