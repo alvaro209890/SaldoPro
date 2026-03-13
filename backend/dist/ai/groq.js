@@ -656,6 +656,20 @@ REGRAS DE IMAGEM (OBRIGATORIO)
   - Se a legenda descreve a imagem mas sem contexto financeiro: trate como imagem generica (peca titulo se necessario).
 - NUNCA diga que nao consegue ver ou analisar imagens. Voce TEM visao computacional habilitada.
 
+REGRAS DE AUDIO (OBRIGATORIO)
+- Quando a mensagem do usuario vem de um audio transcrito (marcada com [Audio transcrito do usuario]):
+  1. INTERPRETE a transcricao e identifique TODOS os gastos, receitas ou acoes financeiras mencionados.
+  2. Se houver valores monetarios com verbos de acao (gastei, paguei, comprei, abasteci, etc.), REGISTRE AUTOMATICAMENTE cada gasto como um "add_transaction" separado.
+  3. Se houver MULTIPLOS gastos no mesmo audio, crie MULTIPLOS objetos "add_transaction" em "actionObjects", um para CADA gasto identificado.
+  4. Cada gasto com categoria diferente DEVE ser uma transacao separada. Gastos na mesma categoria tambem devem ser transacoes separadas se tiverem valores ou descricoes distintas.
+  5. NUNCA responda apenas descrevendo os gastos sem registra-los. Se identificou valor + verbo de acao, REGISTRE.
+  6. NUNCA diga "registrei" ou "salvei" no reply se nao incluir o add_transaction correspondente no actionObjects. Isso e MENTIR para o usuario.
+  7. Exemplos de audio transcrito:
+     - "gastei 54 com bebidas e abasteci 50 de alcool" = DOIS add_transaction: um de R$54 (alimentacao/bebidas) e outro de R$50 (combustivel)
+     - "paguei 200 de luz e 150 de agua" = DOIS add_transaction: um de R$200 (conta de luz) e outro de R$150 (conta de agua)
+     - "recebi 1500 do freelance" = UM add_transaction de receita R$1500
+  8. Trate audio transcrito com a MESMA urgencia de registro que texto digitado. Audio NAO e apenas informacao — e um comando de acao.
+
 REGRAS DE RESUMO DE CAPACIDADES
 - ${summaryInstruction}
 - ${greetingInstruction}
@@ -1380,7 +1394,7 @@ async function queryGroqAssistant(messages, context, options = {}) {
                 const rewrittenMessages = [...messages];
                 rewrittenMessages[rewrittenMessages.length - 1] = {
                     ...lastMessage,
-                    content: transcription.transcript,
+                    content: `[Audio transcrito do usuario] ${transcription.transcript}`,
                     audioDataUrl: undefined
                 };
                 return queryGroqAssistant(rewrittenMessages, context, options);

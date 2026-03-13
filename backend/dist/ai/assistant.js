@@ -35,7 +35,7 @@ Voce esta respondendo no chat web do painel do SaldoPro.
 - Quando registrar, editar ou excluir uma transacao, mantenha o "reply" curto e objetivo.`;
 const WEB_CHAT_UNSUPPORTED_ACTION_MESSAGE = 'No chat do painel, nesta etapa, eu cuido apenas de transacoes: registrar, editar, excluir e responder consultas financeiras.';
 // ---------------------------------------------------------------------------
-// Financial context cache — avoids repeated Firestore reads for active users.
+// Financial context cache  avoids repeated Firestore reads for active users.
 // TTL: 2 minutes. Invalidated when a transaction is added/updated/deleted.
 // ---------------------------------------------------------------------------
 const CONTEXT_CACHE_TTL_MS = 2 * 60 * 1000;
@@ -83,13 +83,13 @@ async function undoLastAction(uid) {
             await (0, firestore_1.deleteUserTransaction)(uid, entry.resourceId);
             invalidateContextCache(uid);
             lastActionByUid.delete(uid);
-            return '↩️ *Acao desfeita!*\n\nA ultima transacao registrada foi excluida com sucesso.';
+            return '?? *Acao desfeita!*\n\nA ultima transacao registrada foi excluida com sucesso.';
         }
         if (entry.actionKind === 'added_recurring') {
             await (0, firestore_1.deleteRecurringTransaction)(uid, entry.resourceId);
             invalidateContextCache(uid);
             lastActionByUid.delete(uid);
-            return '↩️ *Acao desfeita!*\n\nA transacao recorrente criada foi excluida com sucesso.';
+            return '?? *Acao desfeita!*\n\nA transacao recorrente criada foi excluida com sucesso.';
         }
         if (entry.actionKind === 'deleted') {
             if (!entry.deletedTransaction) {
@@ -99,13 +99,13 @@ async function undoLastAction(uid) {
             await (0, firestore_1.restoreUserTransaction)(uid, entry.resourceId, entry.deletedTransaction);
             invalidateContextCache(uid);
             lastActionByUid.delete(uid);
-            return '↩️ *Acao desfeita!*\n\nA transacao excluida foi restaurada com sucesso.';
+            return '?? *Acao desfeita!*\n\nA transacao excluida foi restaurada com sucesso.';
         }
         if (entry.actionKind === 'added_reminder') {
             await (0, firestore_1.deleteUserReminder)(uid, entry.resourceId);
             invalidateContextCache(uid);
             lastActionByUid.delete(uid);
-            return '↩️ *Acao desfeita!*\n\nO ultimo lembrete criado foi excluido com sucesso.';
+            return '?? *Acao desfeita!*\n\nO ultimo lembrete criado foi excluido com sucesso.';
         }
         if (entry.actionKind === 'updated_reminder' || entry.actionKind === 'completed_reminder') {
             if (!entry.previousReminder) {
@@ -123,7 +123,7 @@ async function undoLastAction(uid) {
             });
             invalidateContextCache(uid);
             lastActionByUid.delete(uid);
-            return '↩️ *Acao desfeita!*\n\nO ultimo lembrete voltou ao estado anterior.';
+            return '?? *Acao desfeita!*\n\nO ultimo lembrete voltou ao estado anterior.';
         }
         if (entry.actionKind === 'deleted_reminder') {
             if (!entry.previousReminder) {
@@ -142,7 +142,7 @@ async function undoLastAction(uid) {
             });
             invalidateContextCache(uid);
             lastActionByUid.delete(uid);
-            return '↩️ *Acao desfeita!*\n\nO lembrete excluido foi restaurado com sucesso.';
+            return '?? *Acao desfeita!*\n\nO lembrete excluido foi restaurado com sucesso.';
         }
         lastActionByUid.delete(uid);
         return 'Desculpe, essa acao ainda nao pode ser desfeita automaticamente.';
@@ -398,13 +398,13 @@ function inferReminderScheduleFromText(text) {
 function extractFallbackReminderTitle(text) {
     const cleaned = text
         .replace(/\b(?:da\s*qui(?:\s+a)?|daqui(?:\s+a)?|em)\s+\d+\s*(?:min|mins|minuto|minutos|h|hr|hrs|hora|horas)\b/gi, ' ')
-        .replace(/\bdepois\s+de\s+amanh[ãa]\b/gi, ' ')
-        .replace(/\b(?:amanh[ãa]|hoje)\b(?:\s+(?:(?:às|as|a)\s+)?\d{1,2}(?::\d{2})?\s*h?)?(?:\s+(?:de|a)\s+(?:manh[ãa]|tarde|noite))?/gi, ' ')
-        .replace(/\bdia\s*(0?[1-9]|[12]\d|3[01])\b(?:\s+(?:(?:às|as|a)\s+)?\d{1,2}(?::\d{2})?\s*h?)?(?:\s+(?:de|a)\s+(?:manh[ãa]|tarde|noite))?/gi, ' ')
-        .replace(/\b(?:segunda(?:-feira)?|ter[cç]a(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|s[áa]bado|domingo)\b(?:\s+(?:(?:às|as|a)\s+)?\d{1,2}(?::\d{2})?\s*h?)?(?:\s+(?:de|a)\s+(?:manh[ãa]|tarde|noite))?/gi, ' ')
-        .replace(/\b(?:fim|final)\s+do\s+m[eê]s\b/gi, ' ')
-        .replace(/\btodo\s+dia\b(?:\s+(?:(?:às|as|a)\s+)?\d{1,2}(?::\d{2})?\s*h?)?/gi, ' ')
-        .replace(/\b(?:no|ao)\s+alm[oó]co\b/gi, ' ')
+        .replace(/\bdepois\s+de\s+amanh(?:a|\u00e3)\b/gi, ' ')
+        .replace(/\b(?:amanh(?:a|\u00e3)|hoje)\b(?:\s+(?:(?:as|a|\u00e0s)\s+)?\d{1,2}(?::\d{2})?\s*h?)?(?:\s+(?:de|a)\s+(?:manh(?:a|\u00e3)|tarde|noite))?/gi, ' ')
+        .replace(/\bdia\s*(0?[1-9]|[12]\d|3[01])\b(?:\s+(?:(?:as|a|\u00e0s)\s+)?\d{1,2}(?::\d{2})?\s*h?)?(?:\s+(?:de|a)\s+(?:manh(?:a|\u00e3)|tarde|noite))?/gi, ' ')
+        .replace(/\b(?:segunda(?:-feira)?|ter(?:c|\u00e7)a(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|s(?:a|\u00e1)bado|domingo)\b(?:\s+(?:(?:as|a|\u00e0s)\s+)?\d{1,2}(?::\d{2})?\s*h?)?(?:\s+(?:de|a)\s+(?:manh(?:a|\u00e3)|tarde|noite))?/gi, ' ')
+        .replace(/\b(?:fim|final)\s+do\s+m(?:e|\u00ea)s\b/gi, ' ')
+        .replace(/\btodo\s+dia\b(?:\s+(?:(?:s|as|a)\s+)?\d{1,2}(?::\d{2})?\s*h?)?/gi, ' ')
+        .replace(/\b(?:no|ao)\s+alm(?:o|\u00e7)o\b/gi, ' ')
         .replace(/\bfim\s+da\s+tarde\b/gi, ' ')
         .replace(/\b(?:me\s+)?(?:lembra(?:r)?|lembre|lembrete)(?:\s+de)?\b/gi, ' ')
         .replace(/[.,;!?]+/g, ' ')
@@ -523,11 +523,11 @@ function parseFallbackTransactionDate(text) {
 }
 function extractFallbackTransactionDescription(text, type) {
     const cleaned = text
-        .replace(/\b(?:gastei|paguei|comprei|recebi|ganhei|vendi|lucrei|depositei|depositaram|caiu|registra(?:r)?|lanca(?:r)?|lança(?:r)?|adiciona(?:r)?|coloca(?:r)?)\b/gi, ' ')
+        .replace(/\b(?:gastei|paguei|comprei|recebi|ganhei|vendi|lucrei|depositei|depositaram|caiu|registra(?:r)?|lan(?:c|\u00e7)a(?:r)?|adiciona(?:r)?|coloca(?:r)?)\b/gi, ' ')
         .replace(/\b(?:gasto|despesa|receita|ganho|entrada|lancamento)\b/gi, ' ')
         .replace(/r\$\s*[\d.,]+/gi, ' ')
         .replace(/\b\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?\b/g, ' ')
-        .replace(/\b(?:pix|credito|crédito|debito|débito|dinheiro|boleto|transferencia|transferência|ted|doc)\b/gi, ' ')
+        .replace(/\b(?:pix|credito|cr(?:e|\u00e9)dito|debito|d(?:e|\u00e9)bito|dinheiro|boleto|transferencia|transfer(?:e|\u00ea)ncia|ted|doc)\b/gi, ' ')
         .replace(/\b(?:de|do|da|dos|das|no|na|nos|nas|em|por|pra|pro|para|com|via|um|uma)\b/gi, ' ')
         .replace(/[.,;!?]+/g, ' ')
         .replace(/\s+/g, ' ')
@@ -537,37 +537,66 @@ function extractFallbackTransactionDescription(text, type) {
     }
     return type === 'income' ? 'Receita via WhatsApp' : 'Despesa via WhatsApp';
 }
-function buildFallbackTransactionAction(text) {
+function buildFallbackTransactionActions(text) {
     if (!text)
-        return null;
+        return [];
     const normalized = normalizeHumanText(text);
     const hasPastTenseIntent = /\b(gastei|paguei|comprei|recebi|ganhei|vendi|lucrei|depositei|depositaram|caiu)\b/.test(normalized);
     const hasExplicitRegisterIntent = /\b(registra(?:r)?|lanca(?:r)?|adiciona(?:r)?|coloca(?:r)?)\b/.test(normalized) &&
         /\b(gasto|despesa|receita|ganho|entrada|lancamento)\b/.test(normalized);
     if (!hasPastTenseIntent && !hasExplicitRegisterIntent) {
-        return null;
+        return [];
     }
-    const amount = extractAmountFromTransactionText(text);
-    if (amount == null) {
-        return null;
+    const actions = [];
+    const segments = text.split(/\b(?:e|mas|ou|mais|al(?:e|\u00e9)m|alem|tamb(?:e|\u00e9)m|tambem|,)\b/i);
+    let lastVerbSegment = '';
+    for (const segment of segments) {
+        let contextSegment = segment;
+        const hasVerb = /\b(gastei|paguei|comprei|recebi|ganhei|vendi|lucrei|depositei|depositaram|caiu|gasto|despesa|receita|ganho|entrada|lancamento)\b/i.test(normalizeHumanText(segment));
+        if (hasVerb) {
+            lastVerbSegment = segment;
+        }
+        else if (extractAmountFromTransactionText(segment) !== null) {
+            contextSegment = lastVerbSegment + ' ' + segment;
+        }
+        const amount = extractAmountFromTransactionText(contextSegment);
+        if (amount != null) {
+            const type = detectFallbackTransactionType(contextSegment);
+            let description = extractFallbackTransactionDescription(segment, type);
+            actions.push({
+                action: 'add_transaction',
+                type,
+                amount,
+                description,
+                categoryId: '',
+                date: parseFallbackTransactionDate(contextSegment),
+                paymentMethod: detectFallbackTransactionPaymentMethod(contextSegment)
+            });
+        }
     }
-    const type = detectFallbackTransactionType(text);
-    return {
-        action: 'add_transaction',
-        type,
-        amount,
-        description: extractFallbackTransactionDescription(text, type),
-        categoryId: '',
-        date: parseFallbackTransactionDate(text),
-        paymentMethod: detectFallbackTransactionPaymentMethod(text)
-    };
+    if (actions.length === 0) {
+        const amount = extractAmountFromTransactionText(text);
+        if (amount != null) {
+            const type = detectFallbackTransactionType(text);
+            actions.push({
+                action: 'add_transaction',
+                type,
+                amount,
+                description: extractFallbackTransactionDescription(text, type),
+                categoryId: '',
+                date: parseFallbackTransactionDate(text),
+                paymentMethod: detectFallbackTransactionPaymentMethod(text)
+            });
+        }
+    }
+    return actions;
 }
 function buildFallbackActionsFromText(text) {
     if (!text)
         return null;
     const normalized = normalizeHumanText(text);
     const reminderAction = buildFallbackScheduledReminderAction(text);
-    const transactionAction = buildFallbackTransactionAction(text);
+    const transactionActions = buildFallbackTransactionActions(text);
     const candidates = [];
     if (reminderAction) {
         const match = normalized.match(/\b(?:me\s+)?(?:lembra(?:r)?|lembre|lembrete)\b/);
@@ -576,12 +605,14 @@ function buildFallbackActionsFromText(text) {
             action: reminderAction
         });
     }
-    if (transactionAction) {
+    if (transactionActions.length > 0) {
         const match = normalized.match(/\b(?:gastei|paguei|comprei|recebi|ganhei|vendi|lucrei|depositei|depositaram|caiu|registra(?:r)?|lanca(?:r)?|adiciona(?:r)?|coloca(?:r)?)\b/);
-        candidates.push({
-            index: match?.index ?? Number.MAX_SAFE_INTEGER,
-            action: transactionAction
-        });
+        for (const action of transactionActions) {
+            candidates.push({
+                index: match?.index ?? Number.MAX_SAFE_INTEGER,
+                action
+            });
+        }
     }
     if (candidates.length === 0) {
         return null;
@@ -749,7 +780,7 @@ async function handleReminderShortcut(uid, text) {
     const scheduledLabel = formatReminderScheduleLabel(current.dueDate, current.dueTime ?? null);
     const settings = await (0, firestore_1.getUserSettings)(uid);
     return [
-        '⏰ *Lembrete adiado*',
+        '? *Lembrete adiado*',
         '',
         `*${current.title}*`,
         `Agendado para: ${scheduledLabel}`,
@@ -790,7 +821,7 @@ function formatDateTimeBR(value) {
     });
 }
 function formatReminderScheduleLabel(dueDate, dueTime) {
-    const timeLabel = dueTime ? ` às ${dueTime}` : '';
+    const timeLabel = dueTime ? ` as ${dueTime}` : '';
     const today = todayISO();
     const tomorrowDate = (0, date_utils_1.getBrasiliaDate)();
     tomorrowDate.setDate(tomorrowDate.getDate() + 1);
@@ -798,16 +829,16 @@ function formatReminderScheduleLabel(dueDate, dueTime) {
     if (dueDate === today)
         return `hoje${timeLabel}`;
     if (dueDate === tomorrow)
-        return `amanhã${timeLabel}`;
+        return `amanha${timeLabel}`;
     return `${formatDateBRFromYmd(dueDate)}${timeLabel}`;
 }
 function paymentMethodLabel(value) {
     const labels = {
         pix: 'PIX',
-        credit: 'Cartão de crédito',
-        debit: 'Cartão de débito',
+        credit: 'Cartao de credito',
+        debit: 'Cartao de debito',
         cash: 'Dinheiro',
-        transfer: 'Transferência',
+        transfer: 'Transferencia',
         boleto: 'Boleto'
     };
     return labels[value] ?? value;
@@ -873,18 +904,17 @@ function buildEditDeleteHint(transactionCodes) {
     const uniqueCodes = [...new Set(transactionCodes.filter((code) => code.trim().length > 0))];
     if (uniqueCodes.length === 1) {
         const code = uniqueCodes[0];
-        return `Se quiser excluir, digite "excluir ${code}". Se quiser editar, me diga o que deseja alterar na transação ${code}.`;
+        return `Se quiser excluir, digite "excluir ${code}". Se quiser editar, me diga o que deseja alterar na transacao ${code}.`;
     }
-    return 'Se quiser excluir, digite "excluir" e informe o código da transação. Se quiser editar, me diga o que deseja alterar em cada transação.';
+    return 'Se quiser excluir, digite "excluir" e informe o codigo da transacao. Se quiser editar, me diga o que deseja alterar em cada transacao.';
 }
 function buildAddedTransactionMessage(receipt, aiReply, currency) {
-    const typeEmoji = receipt.type === 'income' ? '📥' : '📤';
     const lines = [
-        `${typeEmoji} *${transactionTypeLabel(receipt.type)} registrada*`,
+        `*${transactionTypeLabel(receipt.type)} registrada*`,
         '',
         `*${formatCurrency(receipt.amount, currency)}* - ${receipt.description}`,
         `${receipt.categoryName} | ${paymentMethodLabel(receipt.paymentMethod)} | ${formatDateBRFromYmd(receipt.transactionDate)}`,
-        `Código: ${receipt.transactionCode}`
+        `Codigo: ${receipt.transactionCode}`
     ];
     const cleanAiReply = aiReply.trim();
     if (cleanAiReply.length > 0) {
@@ -896,7 +926,7 @@ function buildAddedTransactionMessage(receipt, aiReply, currency) {
 function fieldLabel(field) {
     const labels = {
         amount: 'Valor',
-        description: 'Descrição',
+        description: 'Descricao',
         category: 'Categoria',
         date: 'Data',
         type: 'Tipo',
@@ -918,10 +948,10 @@ function goalFieldLabel(field) {
 }
 function buildUpdatedTransactionMessage(receipt, aiReply) {
     const lines = [
-        `✏️ *Transação atualizada*`,
+        '*Transacao atualizada*',
         '',
         `Alterado: ${receipt.changedFields.map(fieldLabel).join(', ')}`,
-        `Código: ${receipt.transactionCode}`
+        `Codigo: ${receipt.transactionCode}`
     ];
     const cleanAiReply = aiReply.trim();
     if (cleanAiReply.length > 0) {
@@ -932,31 +962,31 @@ function buildUpdatedTransactionMessage(receipt, aiReply) {
 }
 function buildDeletedTransactionMessage(receipt, aiReply) {
     const lines = [
-        `🗑️ *Transação excluída*`,
+        '*Transacao excluida*',
         '',
-        `Código: ${receipt.transactionCode}`
+        `Codigo: ${receipt.transactionCode}`
     ];
     const cleanAiReply = aiReply.trim();
     if (cleanAiReply.length > 0) {
         lines.push('', cleanAiReply);
     }
-    lines.push('', 'Se quiser registrar novamente, é só me dizer os dados da transação.');
+    lines.push('', 'Se quiser registrar novamente, e so me dizer os dados da transacao.');
     return lines.join('\n');
 }
 function buildAddedRecurringTransactionMessage(receipt, aiReply, currency) {
-    const typeEmoji = receipt.type === 'income' ? '📥' : '📤';
+    const typeEmoji = receipt.type === 'income' ? '??' : '??';
     const lines = [
         `${typeEmoji} *${transactionTypeLabel(receipt.type)} recorrente criada*`,
         '',
         `*${formatCurrency(receipt.amount, currency)}* - ${receipt.description}`,
         `${receipt.categoryName} | ${paymentMethodLabel(receipt.paymentMethod)}`,
-        `Frequência: ${frequencyLabel(receipt.frequency)} | Início: ${formatDateBRFromYmd(receipt.startDate)}`
+        `Frequencia: ${frequencyLabel(receipt.frequency)} | Inicio: ${formatDateBRFromYmd(receipt.startDate)}`
     ];
     const cleanAiReply = aiReply.trim();
     if (cleanAiReply.length > 0) {
         lines.push('', cleanAiReply);
     }
-    lines.push('', 'Para editar, me diga o que você quer alterar na recorrência. Para excluir, digite "excluir recorrente".');
+    lines.push('', 'Para editar, me diga o que voce quer alterar na recorrencia. Para excluir, digite "excluir recorrente".');
     return lines.join('\n');
 }
 function buildAddedReminderMessage(receipt, aiReply, currency) {
@@ -965,7 +995,7 @@ function buildAddedReminderMessage(receipt, aiReply, currency) {
         : formatDateBRFromYmd(receipt.dueDate);
     const scheduledLabel = formatReminderScheduleLabel(receipt.dueDate, receipt.dueTime);
     const lines = [
-        `⏰ *Lembrete criado*`,
+        `? *Lembrete criado*`,
         '',
         `*${receipt.title}*`,
         `Tipo: ${reminderKindLabel(receipt.reminderKind)}`,
@@ -1000,7 +1030,7 @@ function buildReminderDetailLine(receipt, currency) {
 }
 function buildUpdatedReminderMessage(receipt, aiReply, currency) {
     const lines = [
-        '✏️ *Lembrete atualizado*',
+        '?? *Lembrete atualizado*',
         '',
         `*${receipt.title}*`,
         buildReminderDetailLine(receipt, currency),
@@ -1015,7 +1045,7 @@ function buildUpdatedReminderMessage(receipt, aiReply, currency) {
 }
 function buildCompletedReminderMessage(receipt, aiReply) {
     const lines = [
-        '✅ *Lembrete concluido*',
+        '? *Lembrete concluido*',
         '',
         `*${receipt.title}*`
     ];
@@ -1028,7 +1058,7 @@ function buildCompletedReminderMessage(receipt, aiReply) {
 }
 function buildDeletedReminderMessage(receipt, aiReply) {
     const lines = [
-        '🗑️ *Lembrete excluido*',
+        '??? *Lembrete excluido*',
         '',
         `*${receipt.title}*`
     ];
@@ -1042,39 +1072,39 @@ function buildDeletedReminderMessage(receipt, aiReply) {
 function goalPriorityLabel(priority) {
     switch (priority) {
         case 'high':
-            return '🔴 Alta';
+            return '?? Alta';
         case 'low':
-            return '🟢 Baixa';
+            return '?? Baixa';
         default:
-            return '🟡 Média';
+            return '?? Media';
     }
 }
 function goalStatusLabel(status) {
     switch (status) {
         case 'completed':
-            return '✅ Concluída';
+            return '? Concluida';
         case 'cancelled':
-            return '❌ Cancelada';
+            return '? Cancelada';
         default:
-            return '🔄 Ativa';
+            return '?? Ativa';
     }
 }
 function buildProgressBar(current, target) {
     const pct = target > 0 ? Math.min(100, (current / target) * 100) : 0;
     const filled = Math.round(pct / 10);
     const empty = 10 - filled;
-    return '▓'.repeat(filled) + '░'.repeat(empty) + ` ${pct.toFixed(0)}%`;
+    return '#'.repeat(filled) + '-'.repeat(empty) + ` ${pct.toFixed(0)}%`;
 }
 function buildGoalProgressLine(receipt, currency) {
     if (typeof receipt.targetAmount === 'number' && receipt.targetAmount > 0) {
         const remaining = Math.max(0, receipt.targetAmount - receipt.currentAmount);
         return [
-            `💰 ${formatCurrency(receipt.currentAmount, currency)} de ${formatCurrency(receipt.targetAmount, currency)}`,
-            `📊 ${buildProgressBar(receipt.currentAmount, receipt.targetAmount)}`,
-            `📌 Faltam *${formatCurrency(remaining, currency)}*`
+            `?? ${formatCurrency(receipt.currentAmount, currency)} de ${formatCurrency(receipt.targetAmount, currency)}`,
+            `?? ${buildProgressBar(receipt.currentAmount, receipt.targetAmount)}`,
+            `?? Faltam *${formatCurrency(remaining, currency)}*`
         ].join('\n');
     }
-    return `💰 Acumulado: *${formatCurrency(receipt.currentAmount, currency)}*`;
+    return `?? Acumulado: *${formatCurrency(receipt.currentAmount, currency)}*`;
 }
 function buildGoalMetaDetails(receipt, currency) {
     const lines = [
@@ -1083,63 +1113,63 @@ function buildGoalMetaDetails(receipt, currency) {
         '',
         buildGoalProgressLine(receipt, currency),
         '',
-        `⚡ Prioridade: ${goalPriorityLabel(receipt.priority)}`,
-        `📋 Status: ${goalStatusLabel(receipt.status)}`
+        `? Prioridade: ${goalPriorityLabel(receipt.priority)}`,
+        `?? Status: ${goalStatusLabel(receipt.status)}`
     ].filter(Boolean);
     if (receipt.deadline) {
-        lines.push(`📅 Prazo: *${formatDateBRFromYmd(receipt.deadline)}*`);
+        lines.push(`?? Prazo: *${formatDateBRFromYmd(receipt.deadline)}*`);
     }
     return lines;
 }
 function buildAddedGoalMessage(receipt, aiReply, currency) {
     const lines = [
-        '🎯 *Nova meta criada!*',
-        '━━━━━━━━━━━━━━━━━',
+        '?? *Nova meta criada!*',
+        '?????????????????',
         '',
         ...buildGoalMetaDetails(receipt, currency)
     ];
     const cleanAiReply = aiReply.trim();
     if (cleanAiReply.length > 0) {
-        lines.push('', '━━━━━━━━━━━━━━━━━', '', cleanAiReply);
+        lines.push('', '?????????????????', '', cleanAiReply);
     }
-    lines.push('', '━━━━━━━━━━━━━━━━━', '💡 _Posso atualizar o progresso, alterar dados, concluir ou excluir essa meta. É só pedir!_');
+    lines.push('', '?????????????????', '?? _Posso atualizar o progresso, alterar dados, concluir ou excluir essa meta. E so pedir!_');
     return lines.join('\n');
 }
 function buildUpdatedGoalMessage(receipt, aiReply, currency) {
     const changedLabels = receipt.changedFields.map(goalFieldLabel).join(', ');
     const lines = [
-        '✏️ *Meta atualizada!*',
-        '━━━━━━━━━━━━━━━━━',
+        '?? *Meta atualizada!*',
+        '?????????????????',
         '',
         ...buildGoalMetaDetails(receipt, currency),
         '',
-        `🔄 Alterado: _${changedLabels}_`
+        `?? Alterado: _${changedLabels}_`
     ];
     const cleanAiReply = aiReply.trim();
     if (cleanAiReply.length > 0) {
-        lines.push('', '━━━━━━━━━━━━━━━━━', '', cleanAiReply);
+        lines.push('', '?????????????????', '', cleanAiReply);
     }
-    lines.push('', '━━━━━━━━━━━━━━━━━', '💡 _Posso concluir, reativar, cancelar ou ajustar essa meta novamente._');
+    lines.push('', '?????????????????', '?? _Posso concluir, reativar, cancelar ou ajustar essa meta novamente._');
     return lines.join('\n');
 }
 function buildCompletedGoalMessage(receipt, aiReply, currency) {
     const lines = [
-        '🏆 *Meta concluída! Parabéns!*',
-        '━━━━━━━━━━━━━━━━━',
+        '?? *Meta concluida! Parabens!*',
+        '?????????????????',
         '',
         ...buildGoalMetaDetails(receipt, currency)
     ];
     const cleanAiReply = aiReply.trim();
     if (cleanAiReply.length > 0) {
-        lines.push('', '━━━━━━━━━━━━━━━━━', '', cleanAiReply);
+        lines.push('', '?????????????????', '', cleanAiReply);
     }
-    lines.push('', '━━━━━━━━━━━━━━━━━', '🚀 _Que tal criar a próxima meta? Posso reativar essa ou montar uma nova etapa!_');
+    lines.push('', '?????????????????', '?? _Que tal criar a proxima meta? Posso reativar essa ou montar uma nova etapa!_');
     return lines.join('\n');
 }
 function buildDeletedGoalMessage(receipt, aiReply) {
     const lines = [
-        '🗑️ *Meta excluída*',
-        '━━━━━━━━━━━━━━━━━',
+        '??? *Meta excluida*',
+        '?????????????????',
         '',
         `*${receipt.title}*`
     ];
@@ -1147,18 +1177,18 @@ function buildDeletedGoalMessage(receipt, aiReply) {
     if (cleanAiReply.length > 0) {
         lines.push('', cleanAiReply);
     }
-    lines.push('', '━━━━━━━━━━━━━━━━━', '💡 _Posso criar outra meta no lugar ou montar um novo plano financeiro para você!_');
+    lines.push('', '?????????????????', '?? _Posso criar outra meta no lugar ou montar um novo plano financeiro para voc!_');
     return lines.join('\n');
 }
 function buildMultiActionMessage(results, aiReply, currency) {
-    const lines = ['✅ *Ações processadas:*', ''];
+    const lines = ['? *Acoes processadas:*', ''];
     const transactionCodes = [];
     let hasReminderActions = false;
     let hasGoalActions = false;
     for (const result of results) {
         if (result.kind === 'added') {
             transactionCodes.push(result.receipt.transactionCode);
-            lines.push(`- ${transactionTypeLabel(result.receipt.type)}: ${formatCurrency(result.receipt.amount, currency)} - ${result.receipt.description} (Código: ${result.receipt.transactionCode})`);
+            lines.push(`- ${transactionTypeLabel(result.receipt.type)}: ${formatCurrency(result.receipt.amount, currency)} - ${result.receipt.description} (Codigo: ${result.receipt.transactionCode})`);
             continue;
         }
         if (result.kind === 'added_recurring') {
@@ -1197,7 +1227,7 @@ function buildMultiActionMessage(results, aiReply, currency) {
             const progress = typeof r.targetAmount === 'number' && r.targetAmount > 0
                 ? ` (${formatCurrency(r.currentAmount, currency)} de ${formatCurrency(r.targetAmount, currency)})`
                 : '';
-            lines.push(`- 🎯 Meta criada: *${r.title}*${progress}`);
+            lines.push(`- ?? Meta criada: *${r.title}*${progress}`);
             continue;
         }
         if (result.kind === 'updated_goal') {
@@ -1206,27 +1236,27 @@ function buildMultiActionMessage(results, aiReply, currency) {
             const progress = typeof r.targetAmount === 'number' && r.targetAmount > 0
                 ? ` (${Math.min(100, (r.currentAmount / r.targetAmount) * 100).toFixed(0)}%)`
                 : '';
-            lines.push(`- ✏️ Meta atualizada: *${r.title}*${progress}`);
+            lines.push(`- ?? Meta atualizada: *${r.title}*${progress}`);
             continue;
         }
         if (result.kind === 'completed_goal') {
             hasGoalActions = true;
-            lines.push(`- 🏆 Meta concluída: *${result.receipt.title}*`);
+            lines.push(`- ?? Meta concluda: *${result.receipt.title}*`);
             continue;
         }
         if (result.kind === 'deleted_goal') {
             hasGoalActions = true;
-            lines.push(`- 🗑️ Meta excluída: *${result.receipt.title}*`);
+            lines.push(`- ??? Meta excluida: *${result.receipt.title}*`);
             continue;
         }
         if (result.kind === 'updated') {
             transactionCodes.push(result.receipt.transactionCode);
-            lines.push(`- Transação atualizada (Código: ${result.receipt.transactionCode}) - Campos: ${result.receipt.changedFields.map(fieldLabel).join(', ')}`);
+            lines.push(`- Transacao atualizada (Codigo: ${result.receipt.transactionCode}) - Campos: ${result.receipt.changedFields.map(fieldLabel).join(', ')}`);
             continue;
         }
         if (result.kind === 'deleted') {
             transactionCodes.push(result.receipt.transactionCode);
-            lines.push(`- Transação excluída (Código: ${result.receipt.transactionCode})`);
+            lines.push(`- Transacao excluida (Codigo: ${result.receipt.transactionCode})`);
             continue;
         }
         if (result.kind === 'error') {
@@ -1244,7 +1274,7 @@ function buildMultiActionMessage(results, aiReply, currency) {
         lines.push('', 'Se quiser, posso concluir, reabrir, editar ou excluir outros lembretes.');
     }
     else if (hasGoalActions) {
-        lines.push('', '💡 _Posso atualizar progresso, concluir, reativar ou gerenciar outras metas._');
+        lines.push('', '?? _Posso atualizar progresso, concluir, reativar ou gerenciar outras metas._');
     }
     return lines.join('\n');
 }
@@ -1699,7 +1729,7 @@ async function executeAction(uid, action, categories, options) {
             if (payload.dueDate < currentYmd || (payload.dueDate === currentYmd && payload.dueTime && payload.dueTime < currentHm)) {
                 return {
                     kind: 'error',
-                    message: 'Não é possível agendar um lembrete para uma data ou horário no passado. Por favor, informe um horário futuro.'
+                    message: 'Nao e possivel agendar um lembrete para uma data ou horario no passado. Por favor, informe um horario futuro.'
                 };
             }
             const reminderId = await (0, firestore_1.addUserReminder)(uid, payload);

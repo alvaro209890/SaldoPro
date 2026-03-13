@@ -1070,6 +1070,37 @@ class WhatsAppClient {
             uid: binding?.uid ?? null
         });
         if (binding) {
+            if (isWhatsAppGuestUid(binding.uid)) {
+                try {
+                    const guestUid = binding.uid;
+                    const resolvedUid = await (0, firestore_1.resolveUidFromPhone)(remotePhone);
+                    if (resolvedUid && resolvedUid !== guestUid && !isWhatsAppGuestUid(resolvedUid)) {
+                        const resolvedIsAllowed = await (0, firestore_1.isPhoneAllowedForUid)(resolvedUid, remotePhone);
+                        if (resolvedIsAllowed) {
+                            await (0, firestore_1.savePhoneBinding)(remotePhone, resolvedUid);
+                            binding = {
+                                phone: (0, events_1.normalizePhoneNumber)(remotePhone),
+                                uid: resolvedUid,
+                                linkedAt: binding.linkedAt,
+                                updatedAt: new Date().toISOString()
+                            };
+                            bindingJustVerified = true;
+                            logger_1.logger.info('MSG_BIND_GUEST_MIGRATED: guest binding moved to real account', {
+                                phone: remotePhone,
+                                guestUid,
+                                uid: resolvedUid
+                            });
+                        }
+                    }
+                }
+                catch (guestBindingError) {
+                    logger_1.logger.warn('MSG_BIND_GUEST_MIGRATION_FAILED: keeping current binding after migration check failed', {
+                        phone: remotePhone,
+                        uid: binding.uid,
+                        error: guestBindingError instanceof Error ? guestBindingError.message : 'unknown'
+                    });
+                }
+            }
             let stillAllowed;
             try {
                 stillAllowed = await (0, firestore_1.isPhoneAllowedForUid)(binding.uid, remotePhone);
@@ -1919,7 +1950,11 @@ class WhatsAppClient {
             shouldSendCapabilitiesSummary
         });
         this.recordAiCall(ownerUid);
-        logger_1.logger.info('MSG_PIPELINE_AI_CALL: calling processWhatsAppAIMessage', { uid: ownerUid });
+        // When processing audio, add extra system prompt to reinforce transaction registration
+        const audioExtraPrompt = audioDataUrl
+            ? 'INSTRUCAO CRITICA DE AUDIO: A mensagem do usuario foi transcrita de um audio. Se houver QUALQUER valor monetario mencionado com verbo de acao (gastei, paguei, comprei, abasteci, recebi, ganhei), voce DEVE usar add_transaction para CADA gasto/receita identificado. NUNCA responda apenas descrevendo os gastos sem registra-los. Se identificou 2 gastos, crie 2 add_transaction no actionObjects.'
+            : undefined;
+        logger_1.logger.info('MSG_PIPELINE_AI_CALL: calling processWhatsAppAIMessage', { uid: ownerUid, hasAudioHint: Boolean(audioExtraPrompt) });
         const aiReply = await (0, assistant_1.processWhatsAppAIMessage)(ownerUid, aiMessages, {
             isFirstMessage,
             isGreeting,
@@ -1928,7 +1963,8 @@ class WhatsAppClient {
             shouldSendCapabilitiesSummary,
             sourcePhone: remotePhone,
             latestUserMessageText: inboundText,
-            imageOnlyWithoutDocumentIntent: Boolean(imageDataUrl) && !inboundText.trim()
+            imageOnlyWithoutDocumentIntent: Boolean(imageDataUrl) && !inboundText.trim(),
+            extraSystemPrompt: audioExtraPrompt
         });
         logger_1.logger.info('MSG_PIPELINE_AI_DONE: AI response received', {
             uid: ownerUid,

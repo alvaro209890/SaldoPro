@@ -85,6 +85,7 @@ const PROFILE_SCAN_CACHE_TTL_MS = 15_000;
 const BINDING_CACHE_TTL_MS = 5 * 60 * 1000;
 const LAST_ACTIVITY_CACHE_TTL_MS = 3 * 60 * 1000;
 const ALLOWED_NUMBERS_CACHE_TTL_MS = 2 * 60 * 1000;
+const WHATSAPP_GUEST_UID_PREFIX = 'wa_guest_';
 function assertNoError(error, context) {
     if (!error)
         return;
@@ -1103,6 +1104,9 @@ function invalidateAllowedNumbersCacheForUid(uid) {
     invalidateAllowedNumbersCache(uid);
 }
 let profileScanCache = null;
+function isWhatsAppGuestUid(uid) {
+    return uid.startsWith(WHATSAPP_GUEST_UID_PREFIX);
+}
 function normalizeAllowedNumbers(value) {
     if (!Array.isArray(value))
         return [];
@@ -1142,33 +1146,45 @@ async function fallbackIsPhoneAllowedForAnyAccount(variants) {
     });
 }
 async function fallbackResolveUidFromPhone(variants) {
-    let profiles = await scanAllProfileSettings();
-    for (const entry of profiles) {
-        const allowed = normalizeAllowedNumbers(entry.data.whatsappAllowedNumbers);
-        if (variants.some((variant) => allowed.includes(variant)))
-            return entry.uid;
-    }
-    profiles = await scanAllProfileSettings(true);
-    for (const entry of profiles) {
-        const rawValue = entry.data.whatsappAllowedNumbers;
-        const allowed = normalizeAllowedNumbers(rawValue);
-        logger_1.logger.info('RESOLVE_SCAN_DEBUG: checking profile', {
-            uid: entry.uid,
-            rawType: typeof rawValue,
-            isArray: Array.isArray(rawValue),
-            rawPreview: JSON.stringify(rawValue).slice(0, 200),
-            allowedVariants: allowed.slice(0, 10),
-            searchingFor: variants
-        });
-        if (variants.some((variant) => allowed.includes(variant))) {
-            logger_1.logger.info('RESOLVE_SCAN_MATCH: phone matched to account', {
-                uid: entry.uid,
-                matchedVariant: variants.find((v) => allowed.includes(v))
-            });
-            return entry.uid;
+    const pickBestMatch = (profiles, logMatches) => {
+        const matches = [];
+        for (const entry of profiles) {
+            const rawValue = entry.data.whatsappAllowedNumbers;
+            const allowed = normalizeAllowedNumbers(rawValue);
+            if (logMatches) {
+                logger_1.logger.info('RESOLVE_SCAN_DEBUG: checking profile', {
+                    uid: entry.uid,
+                    rawType: typeof rawValue,
+                    isArray: Array.isArray(rawValue),
+                    rawPreview: JSON.stringify(rawValue).slice(0, 200),
+                    allowedVariants: allowed.slice(0, 10),
+                    searchingFor: variants
+                });
+            }
+            const matchedVariant = variants.find((variant) => allowed.includes(variant));
+            if (matchedVariant) {
+                matches.push({ uid: entry.uid, matchedVariant });
+            }
         }
-    }
-    return null;
+        if (matches.length === 0)
+            return null;
+        const preferred = matches.find((match) => !isWhatsAppGuestUid(match.uid)) ?? matches[0];
+        if (logMatches) {
+            logger_1.logger.info('RESOLVE_SCAN_MATCH: phone matched to account', {
+                uid: preferred.uid,
+                matchedVariant: preferred.matchedVariant,
+                candidateUids: matches.map((match) => match.uid)
+            });
+        }
+        return preferred.uid;
+    };
+    let profiles = await scanAllProfileSettings();
+    let resolvedUid = pickBestMatch(profiles, false);
+    if (resolvedUid)
+        return resolvedUid;
+    profiles = await scanAllProfileSettings(true);
+    resolvedUid = pickBestMatch(profiles, true);
+    return resolvedUid;
 }
 async function isPhoneAllowedForUid(uid, phone) {
     const normalizedPhone = (0, events_1.normalizePhoneNumber)(phone);

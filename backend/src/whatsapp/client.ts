@@ -1238,6 +1238,37 @@ export class WhatsAppClient {
     });
 
     if (binding) {
+      if (isWhatsAppGuestUid(binding.uid)) {
+        try {
+          const guestUid = binding.uid;
+          const resolvedUid = await resolveUidFromPhone(remotePhone);
+          if (resolvedUid && resolvedUid !== guestUid && !isWhatsAppGuestUid(resolvedUid)) {
+            const resolvedIsAllowed = await isPhoneAllowedForUid(resolvedUid, remotePhone);
+            if (resolvedIsAllowed) {
+              await savePhoneBinding(remotePhone, resolvedUid);
+              binding = {
+                phone: normalizePhoneNumber(remotePhone),
+                uid: resolvedUid,
+                linkedAt: binding.linkedAt,
+                updatedAt: new Date().toISOString()
+              };
+              bindingJustVerified = true;
+              logger.info('MSG_BIND_GUEST_MIGRATED: guest binding moved to real account', {
+                phone: remotePhone,
+                guestUid,
+                uid: resolvedUid
+              });
+            }
+          }
+        } catch (guestBindingError) {
+          logger.warn('MSG_BIND_GUEST_MIGRATION_FAILED: keeping current binding after migration check failed', {
+            phone: remotePhone,
+            uid: binding.uid,
+            error: guestBindingError instanceof Error ? guestBindingError.message : 'unknown'
+          });
+        }
+      }
+
       let stillAllowed: boolean;
       try {
         stillAllowed = await isPhoneAllowedForUid(binding.uid, remotePhone);
