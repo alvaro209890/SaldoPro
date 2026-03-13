@@ -167,14 +167,19 @@ function buildPanelLinkReply(): string {
 
 function buildRegistrationRequiredReply(): string {
   return [
-    'Oi! Eu sou a IA do SaldoPro.',
+    '*Cadastro necessario*',
     '',
-    'Eu posso te ajudar a registrar gastos e receitas, criar lembretes e acompanhar seu controle financeiro pelo WhatsApp.',
+    'Para usar o SaldoPro aqui no WhatsApp, primeiro voce precisa criar sua conta.',
     '',
-    'Para eu te atender por aqui, primeiro voce precisa fazer seu cadastro no site.',
-    `Faca seu cadastro aqui: ${env.appRegisterUrl}`,
+    `Cadastre-se aqui: ${env.appRegisterUrl}`,
     '',
-    'Assim que terminar, pode me mandar mensagem novamente que eu continuo com voce.'
+    '*Depois do cadastro, eu posso te ajudar com:*',
+    '- registrar receitas',
+    '- registrar despesas',
+    '- criar lembretes',
+    '- acompanhar seu financeiro',
+    '',
+    'Assim que concluir o cadastro, me mande uma mensagem por aqui e eu continuo com voce.'
   ].join('\n');
 }
 

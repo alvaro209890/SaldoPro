@@ -1212,10 +1212,13 @@ function buildAddedTransactionMessage(
   currency: string
 ): string {
   const lines = [
-    `*${transactionTypeLabel(receipt.type)} registrada*`,
+    `*${transactionTypeLabel(receipt.type)} registrada com sucesso*`,
     '',
-    `*${formatCurrency(receipt.amount, currency)}* - ${receipt.description}`,
-    `${receipt.categoryName} | ${paymentMethodLabel(receipt.paymentMethod)} | ${formatDateBRFromYmd(receipt.transactionDate)}`,
+    `Valor: *${formatCurrency(receipt.amount, currency)}*`,
+    `Descricao: ${receipt.description}`,
+    `Categoria: ${receipt.categoryName}`,
+    `Pagamento: ${paymentMethodLabel(receipt.paymentMethod)}`,
+    `Data: ${formatDateBRFromYmd(receipt.transactionDate)}`,
     `Codigo: ${receipt.transactionCode}`
   ];
 
@@ -1258,7 +1261,7 @@ function buildUpdatedTransactionMessage(
   aiReply: string
 ): string {
   const lines = [
-    '*Transacao atualizada*',
+    '*Transacao atualizada com sucesso*',
     '',
     `Alterado: ${receipt.changedFields.map(fieldLabel).join(', ')}`,
     `Codigo: ${receipt.transactionCode}`
@@ -1278,7 +1281,7 @@ function buildDeletedTransactionMessage(
   aiReply: string
 ): string {
   const lines = [
-    '*Transacao excluida*',
+    '*Transacao excluida com sucesso*',
     '',
     `Codigo: ${receipt.transactionCode}`
   ];
@@ -1297,13 +1300,15 @@ function buildAddedRecurringTransactionMessage(
   aiReply: string,
   currency: string
 ): string {
-  const typeEmoji = receipt.type === 'income' ? '??' : '??';
   const lines = [
-    `${typeEmoji} *${transactionTypeLabel(receipt.type)} recorrente criada*`,
+    `*${transactionTypeLabel(receipt.type)} recorrente criada com sucesso*`,
     '',
-    `*${formatCurrency(receipt.amount, currency)}* - ${receipt.description}`,
-    `${receipt.categoryName} | ${paymentMethodLabel(receipt.paymentMethod)}`,
-    `Frequencia: ${frequencyLabel(receipt.frequency)} | Inicio: ${formatDateBRFromYmd(receipt.startDate)}`
+    `Valor: *${formatCurrency(receipt.amount, currency)}*`,
+    `Descricao: ${receipt.description}`,
+    `Categoria: ${receipt.categoryName}`,
+    `Pagamento: ${paymentMethodLabel(receipt.paymentMethod)}`,
+    `Frequencia: ${frequencyLabel(receipt.frequency)}`,
+    `Inicio: ${formatDateBRFromYmd(receipt.startDate)}`
   ];
 
   const cleanAiReply = aiReply.trim();
@@ -1325,11 +1330,11 @@ function buildAddedReminderMessage(
     : formatDateBRFromYmd(receipt.dueDate);
   const scheduledLabel = formatReminderScheduleLabel(receipt.dueDate, receipt.dueTime);
   const lines = [
-    `? *Lembrete criado*`,
+    '*Lembrete criado com sucesso*',
     '',
-    `*${receipt.title}*`,
+    `Titulo: *${receipt.title}*`,
     `Tipo: ${reminderKindLabel(receipt.reminderKind)}`,
-    `Agendado para: ${scheduledLabel}`,
+    `Quando: ${scheduledLabel}`,
     `Vencimento: ${dueLabel}`
   ];
 
@@ -1376,9 +1381,9 @@ function buildUpdatedReminderMessage(
   currency: string
 ): string {
   const lines = [
-    '?? *Lembrete atualizado*',
+    '*Lembrete atualizado com sucesso*',
     '',
-    `*${receipt.title}*`,
+    `Titulo: *${receipt.title}*`,
     buildReminderDetailLine(receipt, currency),
     `Status: ${receipt.status === 'paid' ? 'Concluido' : 'Pendente'}`
   ];
@@ -1397,9 +1402,9 @@ function buildCompletedReminderMessage(
   aiReply: string
 ): string {
   const lines = [
-    '? *Lembrete concluido*',
+    '*Lembrete concluido*',
     '',
-    `*${receipt.title}*`
+    `Titulo: *${receipt.title}*`
   ];
 
   const cleanAiReply = aiReply.trim();
@@ -1416,9 +1421,9 @@ function buildDeletedReminderMessage(
   aiReply: string
 ): string {
   const lines = [
-    '??? *Lembrete excluido*',
+    '*Lembrete excluido com sucesso*',
     '',
-    `*${receipt.title}*`
+    `Titulo: *${receipt.title}*`
   ];
 
   const cleanAiReply = aiReply.trim();
@@ -2644,6 +2649,5 @@ async function executeAction(
 
   return { kind: 'none' };
 }
-
 
 
