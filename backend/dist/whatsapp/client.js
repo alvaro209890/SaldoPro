@@ -240,10 +240,6 @@ function shouldSuppressConsoleNoise(args, filters) {
     const [firstArg] = args;
     return typeof firstArg === 'string' && filters.has(firstArg);
 }
-function buildWhatsAppGuestUid(phone) {
-    const normalizedPhone = (0, events_1.normalizePhoneNumber)(phone).replace(/\D/g, '');
-    return `${WHATSAPP_GUEST_UID_PREFIX}${normalizedPhone}`;
-}
 function isWhatsAppGuestUid(uid) {
     return uid.startsWith(WHATSAPP_GUEST_UID_PREFIX);
 }
@@ -1071,8 +1067,8 @@ class WhatsAppClient {
         });
         if (binding) {
             if (isWhatsAppGuestUid(binding.uid)) {
+                const guestUid = binding.uid;
                 try {
-                    const guestUid = binding.uid;
                     const resolvedUid = await (0, firestore_1.resolveUidFromPhone)(remotePhone);
                     if (resolvedUid && resolvedUid !== guestUid && !isWhatsAppGuestUid(resolvedUid)) {
                         const resolvedIsAllowed = await (0, firestore_1.isPhoneAllowedForUid)(resolvedUid, remotePhone);
@@ -1091,42 +1087,74 @@ class WhatsAppClient {
                                 uid: resolvedUid
                             });
                         }
+                        else {
+                            await (0, firestore_1.deletePhoneBinding)(remotePhone);
+                            binding = null;
+                            bindingJustVerified = false;
+                            logger_1.logger.info('MSG_BIND_GUEST_REMOVED: guest binding removed because phone has no real account', {
+                                phone: remotePhone,
+                                guestUid
+                            });
+                        }
+                    }
+                    else {
+                        await (0, firestore_1.deletePhoneBinding)(remotePhone);
+                        binding = null;
+                        bindingJustVerified = false;
+                        logger_1.logger.info('MSG_BIND_GUEST_REMOVED: guest binding removed because no real account was resolved', {
+                            phone: remotePhone,
+                            guestUid
+                        });
                     }
                 }
                 catch (guestBindingError) {
-                    logger_1.logger.warn('MSG_BIND_GUEST_MIGRATION_FAILED: keeping current binding after migration check failed', {
+                    logger_1.logger.warn('MSG_BIND_GUEST_MIGRATION_FAILED: dropping guest binding after migration check failed', {
                         phone: remotePhone,
-                        uid: binding.uid,
+                        uid: guestUid,
                         error: guestBindingError instanceof Error ? guestBindingError.message : 'unknown'
                     });
+                    try {
+                        await (0, firestore_1.deletePhoneBinding)(remotePhone);
+                    }
+                    catch (deleteGuestBindingError) {
+                        logger_1.logger.warn('MSG_BIND_GUEST_DELETE_FAILED: unable to delete guest binding after migration failure', {
+                            phone: remotePhone,
+                            uid: guestUid,
+                            error: deleteGuestBindingError instanceof Error ? deleteGuestBindingError.message : 'unknown'
+                        });
+                    }
+                    binding = null;
+                    bindingJustVerified = false;
                 }
             }
-            let stillAllowed;
-            try {
-                stillAllowed = await (0, firestore_1.isPhoneAllowedForUid)(binding.uid, remotePhone);
-            }
-            catch (allowedError) {
-                logger_1.logger.error('MSG_ALLOWED_CHECK_ERROR: isPhoneAllowedForUid threw, treating as allowed to avoid silent drop', {
+            if (binding) {
+                let stillAllowed;
+                try {
+                    stillAllowed = await (0, firestore_1.isPhoneAllowedForUid)(binding.uid, remotePhone);
+                }
+                catch (allowedError) {
+                    logger_1.logger.error('MSG_ALLOWED_CHECK_ERROR: isPhoneAllowedForUid threw, treating as allowed to avoid silent drop', {
+                        phone: remotePhone,
+                        uid: binding.uid,
+                        error: allowedError instanceof Error ? allowedError.message : 'unknown'
+                    });
+                    stillAllowed = true;
+                }
+                logger_1.logger.info('MSG_ALLOWED: phone permission check result', {
                     phone: remotePhone,
                     uid: binding.uid,
-                    error: allowedError instanceof Error ? allowedError.message : 'unknown'
+                    stillAllowed
                 });
-                stillAllowed = true;
-            }
-            logger_1.logger.info('MSG_ALLOWED: phone permission check result', {
-                phone: remotePhone,
-                uid: binding.uid,
-                stillAllowed
-            });
-            if (!stillAllowed) {
-                logger_1.logger.info('MSG_STALE_BINDING: old binding no longer allowed, dropping to re-resolve', {
-                    phone: remotePhone,
-                    oldUid: binding.uid
-                });
-                binding = null; // force re-resolve below
-            }
-            else {
-                bindingJustVerified = true;
+                if (!stillAllowed) {
+                    logger_1.logger.info('MSG_STALE_BINDING: old binding no longer allowed, dropping to re-resolve', {
+                        phone: remotePhone,
+                        oldUid: binding.uid
+                    });
+                    binding = null; // force re-resolve below
+                }
+                else {
+                    bindingJustVerified = true;
+                }
             }
         }
         // Se não há binding (ou era stale), tenta auto-vincular pelo número cadastrado na conta
@@ -1162,44 +1190,12 @@ class WhatsAppClient {
             }
         }
         if (!binding) {
-            const guestUid = buildWhatsAppGuestUid(remotePhone);
-            try {
-                await (0, firestore_1.bootstrapUserData)(guestUid, {
-                    email: `${guestUid}@whatsapp.local`,
-                    displayName: `WhatsApp ${(0, events_1.normalizePhoneNumber)(remotePhone).slice(-4)}`,
-                    phone: remotePhone
-                });
-                binding = await (0, firestore_1.getPhoneBinding)(remotePhone);
-                if (binding?.uid !== guestUid) {
-                    await (0, firestore_1.savePhoneBinding)(remotePhone, guestUid);
-                    binding = {
-                        phone: (0, events_1.normalizePhoneNumber)(remotePhone),
-                        uid: guestUid,
-                        linkedAt: new Date().toISOString(),
-                        updatedAt: new Date().toISOString()
-                    };
-                }
-                bindingJustVerified = true;
-                logger_1.logger.info('MSG_GUEST_PROVISION: provisioned temporary WhatsApp account', {
-                    phone: remotePhone,
-                    uid: guestUid
-                });
-            }
-            catch (guestProvisionError) {
-                logger_1.logger.error('MSG_GUEST_PROVISION_FAIL: unable to provision temporary WhatsApp account', {
-                    phone: remotePhone,
-                    uid: guestUid,
-                    error: guestProvisionError instanceof Error ? guestProvisionError.message : 'unknown'
-                });
-            }
-        }
-        if (!binding) {
             logger_1.logger.info('MSG_UNLINKED: no binding found or allowed, asking user to register', { from: remotePhone });
             await this.handleUnlinkedMessage(replyJid, remotePhone);
             this.rememberInbound(messageId);
             return;
         }
-        const ownerActive = isWhatsAppGuestUid(binding.uid) ? true : await (0, firebase_user_access_1.isFirebaseUserActive)(binding.uid);
+        const ownerActive = await (0, firebase_user_access_1.isFirebaseUserActive)(binding.uid);
         if (!ownerActive) {
             logger_1.logger.warn('MSG_BLOCKED_USER: ignoring inbound WhatsApp message for blocked/unavailable account', {
                 uid: binding.uid,

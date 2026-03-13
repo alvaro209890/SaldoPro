@@ -1601,7 +1601,18 @@ async function fallbackResolveUidFromPhone(variants: string[]): Promise<string |
 
     if (matches.length === 0) return null;
 
-    const preferred = matches.find((match) => !isWhatsAppGuestUid(match.uid)) ?? matches[0];
+    const realMatches = matches.filter((match) => !isWhatsAppGuestUid(match.uid));
+    if (realMatches.length === 0) {
+      if (logMatches) {
+        logger.info('RESOLVE_SCAN_MATCH_GUEST_ONLY: ignoring guest-only WhatsApp match', {
+          candidateUids: matches.map((match) => match.uid),
+          searchedVariants: variants
+        });
+      }
+      return null;
+    }
+
+    const preferred = realMatches[0];
     if (logMatches) {
       logger.info('RESOLVE_SCAN_MATCH: phone matched to account', {
         uid: preferred.uid,
@@ -1768,6 +1779,18 @@ export async function savePhoneBinding(phone: string, uid: string): Promise<void
 
   const { error } = await db.from(BINDINGS_COLLECTION_NAME).upsert(rows, { onConflict: 'variant_phone' });
   assertNoError(error, 'savePhoneBinding.upsert');
+
+  for (const variant of variants) bindingCache.delete(variant);
+  bindingCache.delete(normalizedPhone);
+}
+
+export async function deletePhoneBinding(phone: string): Promise<void> {
+  const normalizedPhone = normalizePhoneNumber(phone);
+  if (normalizedPhone.length < 10) return;
+
+  const variants = brazilianPhoneVariants(normalizedPhone);
+  const { error } = await db.from(BINDINGS_COLLECTION_NAME).delete().in('variant_phone', variants);
+  assertNoError(error, 'deletePhoneBinding.delete');
 
   for (const variant of variants) bindingCache.delete(variant);
   bindingCache.delete(normalizedPhone);

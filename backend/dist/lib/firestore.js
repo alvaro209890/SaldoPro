@@ -41,6 +41,7 @@ exports.isPhoneAllowedForAnyAccount = isPhoneAllowedForAnyAccount;
 exports.resolveUidFromPhone = resolveUidFromPhone;
 exports.getPhoneBinding = getPhoneBinding;
 exports.savePhoneBinding = savePhoneBinding;
+exports.deletePhoneBinding = deletePhoneBinding;
 exports.loadWhatsAppAuthSnapshot = loadWhatsAppAuthSnapshot;
 exports.saveWhatsAppAuthSnapshot = saveWhatsAppAuthSnapshot;
 exports.clearWhatsAppAuthSnapshot = clearWhatsAppAuthSnapshot;
@@ -1168,7 +1169,17 @@ async function fallbackResolveUidFromPhone(variants) {
         }
         if (matches.length === 0)
             return null;
-        const preferred = matches.find((match) => !isWhatsAppGuestUid(match.uid)) ?? matches[0];
+        const realMatches = matches.filter((match) => !isWhatsAppGuestUid(match.uid));
+        if (realMatches.length === 0) {
+            if (logMatches) {
+                logger_1.logger.info('RESOLVE_SCAN_MATCH_GUEST_ONLY: ignoring guest-only WhatsApp match', {
+                    candidateUids: matches.map((match) => match.uid),
+                    searchedVariants: variants
+                });
+            }
+            return null;
+        }
+        const preferred = realMatches[0];
         if (logMatches) {
             logger_1.logger.info('RESOLVE_SCAN_MATCH: phone matched to account', {
                 uid: preferred.uid,
@@ -1318,6 +1329,17 @@ async function savePhoneBinding(phone, uid) {
     }));
     const { error } = await supabase_1.supabaseAdmin.from(BINDINGS_COLLECTION_NAME).upsert(rows, { onConflict: 'variant_phone' });
     assertNoError(error, 'savePhoneBinding.upsert');
+    for (const variant of variants)
+        bindingCache.delete(variant);
+    bindingCache.delete(normalizedPhone);
+}
+async function deletePhoneBinding(phone) {
+    const normalizedPhone = (0, events_1.normalizePhoneNumber)(phone);
+    if (normalizedPhone.length < 10)
+        return;
+    const variants = (0, events_1.brazilianPhoneVariants)(normalizedPhone);
+    const { error } = await supabase_1.supabaseAdmin.from(BINDINGS_COLLECTION_NAME).delete().in('variant_phone', variants);
+    assertNoError(error, 'deletePhoneBinding.delete');
     for (const variant of variants)
         bindingCache.delete(variant);
     bindingCache.delete(normalizedPhone);

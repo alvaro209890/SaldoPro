@@ -27,10 +27,10 @@ import { getUserPlanAccess } from '../lib/subscription-access';
 import type { GroqChatMessage } from '../ai/groq';
 import { env } from '../config/env';
 import {
-  bootstrapUserData,
   clearWhatsAppAuthSnapshot,
   createPendingWhatsAppDocumentDraft,
   createUserDocument,
+  deletePhoneBinding,
   deletePendingWhatsAppDocumentDraft,
   getLastConversationActivityByPhone,
   getActivePendingWhatsAppDocumentDraft,
@@ -310,11 +310,6 @@ function shouldSuppressConsoleNoise(
 ): boolean {
   const [firstArg] = args;
   return typeof firstArg === 'string' && filters.has(firstArg);
-}
-
-function buildWhatsAppGuestUid(phone: string): string {
-  const normalizedPhone = normalizePhoneNumber(phone).replace(/\D/g, '');
-  return `${WHATSAPP_GUEST_UID_PREFIX}${normalizedPhone}`;
 }
 
 function isWhatsAppGuestUid(uid: string): boolean {
@@ -1239,8 +1234,8 @@ export class WhatsAppClient {
 
     if (binding) {
       if (isWhatsAppGuestUid(binding.uid)) {
+        const guestUid = binding.uid;
         try {
-          const guestUid = binding.uid;
           const resolvedUid = await resolveUidFromPhone(remotePhone);
           if (resolvedUid && resolvedUid !== guestUid && !isWhatsAppGuestUid(resolvedUid)) {
             const resolvedIsAllowed = await isPhoneAllowedForUid(resolvedUid, remotePhone);
@@ -1258,41 +1253,70 @@ export class WhatsAppClient {
                 guestUid,
                 uid: resolvedUid
               });
+            } else {
+              await deletePhoneBinding(remotePhone);
+              binding = null;
+              bindingJustVerified = false;
+              logger.info('MSG_BIND_GUEST_REMOVED: guest binding removed because phone has no real account', {
+                phone: remotePhone,
+                guestUid
+              });
             }
+          } else {
+            await deletePhoneBinding(remotePhone);
+            binding = null;
+            bindingJustVerified = false;
+            logger.info('MSG_BIND_GUEST_REMOVED: guest binding removed because no real account was resolved', {
+              phone: remotePhone,
+              guestUid
+            });
           }
         } catch (guestBindingError) {
-          logger.warn('MSG_BIND_GUEST_MIGRATION_FAILED: keeping current binding after migration check failed', {
+          logger.warn('MSG_BIND_GUEST_MIGRATION_FAILED: dropping guest binding after migration check failed', {
             phone: remotePhone,
-            uid: binding.uid,
+            uid: guestUid,
             error: guestBindingError instanceof Error ? guestBindingError.message : 'unknown'
           });
+          try {
+            await deletePhoneBinding(remotePhone);
+          } catch (deleteGuestBindingError) {
+            logger.warn('MSG_BIND_GUEST_DELETE_FAILED: unable to delete guest binding after migration failure', {
+              phone: remotePhone,
+              uid: guestUid,
+              error: deleteGuestBindingError instanceof Error ? deleteGuestBindingError.message : 'unknown'
+            });
+          }
+          binding = null;
+          bindingJustVerified = false;
         }
       }
 
-      let stillAllowed: boolean;
-      try {
-        stillAllowed = await isPhoneAllowedForUid(binding.uid, remotePhone);
-      } catch (allowedError) {
-        logger.error('MSG_ALLOWED_CHECK_ERROR: isPhoneAllowedForUid threw, treating as allowed to avoid silent drop', {
+      if (binding) {
+        let stillAllowed: boolean;
+        try {
+          stillAllowed = await isPhoneAllowedForUid(binding.uid, remotePhone);
+        } catch (allowedError) {
+          logger.error('MSG_ALLOWED_CHECK_ERROR: isPhoneAllowedForUid threw, treating as allowed to avoid silent drop', {
+            phone: remotePhone,
+            uid: binding.uid,
+            error: allowedError instanceof Error ? allowedError.message : 'unknown'
+          });
+          stillAllowed = true;
+        }
+        logger.info('MSG_ALLOWED: phone permission check result', {
           phone: remotePhone,
           uid: binding.uid,
-          error: allowedError instanceof Error ? allowedError.message : 'unknown'
+          stillAllowed
         });
-        stillAllowed = true;
-      }
-      logger.info('MSG_ALLOWED: phone permission check result', {
-        phone: remotePhone,
-        uid: binding.uid,
-        stillAllowed
-      });
-      if (!stillAllowed) {
-        logger.info('MSG_STALE_BINDING: old binding no longer allowed, dropping to re-resolve', {
-          phone: remotePhone,
-          oldUid: binding.uid
-        });
-        binding = null; // force re-resolve below
-      } else {
-        bindingJustVerified = true;
+        if (!stillAllowed) {
+          logger.info('MSG_STALE_BINDING: old binding no longer allowed, dropping to re-resolve', {
+            phone: remotePhone,
+            oldUid: binding.uid
+          });
+          binding = null; // force re-resolve below
+        } else {
+          bindingJustVerified = true;
+        }
       }
     }
 
@@ -1328,47 +1352,13 @@ export class WhatsAppClient {
     }
 
     if (!binding) {
-      const guestUid = buildWhatsAppGuestUid(remotePhone);
-      try {
-        await bootstrapUserData(guestUid, {
-          email: `${guestUid}@whatsapp.local`,
-          displayName: `WhatsApp ${normalizePhoneNumber(remotePhone).slice(-4)}`,
-          phone: remotePhone
-        });
-
-        binding = await getPhoneBinding(remotePhone);
-        if (binding?.uid !== guestUid) {
-          await savePhoneBinding(remotePhone, guestUid);
-          binding = {
-            phone: normalizePhoneNumber(remotePhone),
-            uid: guestUid,
-            linkedAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          };
-        }
-
-        bindingJustVerified = true;
-        logger.info('MSG_GUEST_PROVISION: provisioned temporary WhatsApp account', {
-          phone: remotePhone,
-          uid: guestUid
-        });
-      } catch (guestProvisionError) {
-        logger.error('MSG_GUEST_PROVISION_FAIL: unable to provision temporary WhatsApp account', {
-          phone: remotePhone,
-          uid: guestUid,
-          error: guestProvisionError instanceof Error ? guestProvisionError.message : 'unknown'
-        });
-      }
-    }
-
-    if (!binding) {
       logger.info('MSG_UNLINKED: no binding found or allowed, asking user to register', { from: remotePhone });
       await this.handleUnlinkedMessage(replyJid, remotePhone);
       this.rememberInbound(messageId);
       return;
     }
 
-    const ownerActive = isWhatsAppGuestUid(binding.uid) ? true : await isFirebaseUserActive(binding.uid);
+    const ownerActive = await isFirebaseUserActive(binding.uid);
     if (!ownerActive) {
       logger.warn('MSG_BLOCKED_USER: ignoring inbound WhatsApp message for blocked/unavailable account', {
         uid: binding.uid,
