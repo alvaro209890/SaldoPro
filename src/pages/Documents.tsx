@@ -238,11 +238,19 @@ function GalleryCard({
     return (
         <article className="gallery-card-hover group relative overflow-hidden rounded-2xl border border-surface-700 bg-surface-900/70">
             {/* Thumbnail */}
-            <div className="relative">
+            <div 
+                className="relative cursor-pointer" 
+                onClick={() => {
+                    if (item.previewUrl) window.open(item.previewUrl, '_blank');
+                }}
+            >
                 {renderDocumentVisual(item.previewUrl, item.mimeType, item.title, 'h-40 sm:h-44')}
 
                 {/* Hover overlay with actions (desktop) */}
-                <div className="gallery-card-overlay absolute inset-0 hidden items-end justify-center bg-gradient-to-t from-black/70 via-black/30 to-transparent p-3 md:flex">
+                <div 
+                    className="gallery-card-overlay absolute inset-0 hidden items-end justify-center bg-gradient-to-t from-black/70 via-black/30 to-transparent p-3 md:flex"
+                    onClick={(e) => e.stopPropagation()}
+                >
                     <div className="flex gap-2">
                         <button
                             type="button"
