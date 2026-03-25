@@ -6,7 +6,7 @@ import {
     updateRecurringTransaction,
     deleteRecurringTransaction,
     addTransaction,
-} from '@/firebase/firestore';
+} from '@/supabase/data';
 import type { RecurringTransaction, RecurringTransactionFormData } from '@/types';
 import { toast } from 'sonner';
 import { todayISO, advanceDate } from '@/utils/date';
@@ -22,7 +22,7 @@ export function useRecurringTransactions() {
 
         setLoading(true);
         const unsubscribe = onRecurringTransactionsSnapshot(
-            user.uid,
+            user.id,
             (data) => {
                 setRecurringTransactions(data);
                 setLoading(false);
@@ -39,7 +39,7 @@ export function useRecurringTransactions() {
     const add = async (data: RecurringTransactionFormData) => {
         if (!user) return;
         try {
-            await addRecurringTransaction(user.uid, {
+            await addRecurringTransaction(user.id, {
                 ...data,
                 endDate: data.endDate || null,
                 nextDueDate: data.startDate,
@@ -56,7 +56,7 @@ export function useRecurringTransactions() {
     const update = async (id: string, data: Partial<Omit<RecurringTransaction, 'id' | 'createdAt'>>) => {
         if (!user) return;
         try {
-            await updateRecurringTransaction(user.uid, id, data);
+            await updateRecurringTransaction(user.id, id, data);
             toast.success('Transação recorrente atualizada!');
         } catch (error) {
             console.error(error);
@@ -68,7 +68,7 @@ export function useRecurringTransactions() {
     const remove = async (id: string) => {
         if (!user) return;
         try {
-            await deleteRecurringTransaction(user.uid, id);
+            await deleteRecurringTransaction(user.id, id);
             toast.success('Transação recorrente removida!');
         } catch (error) {
             console.error(error);
@@ -95,7 +95,7 @@ export function useRecurringTransactions() {
             for (const rt of overdue) {
                 let nextDate = rt.nextDueDate;
                 while (nextDate <= today) {
-                    await addTransaction(user.uid, {
+                    await addTransaction(user.id, {
                         type: rt.type,
                         amount: rt.amount,
                         date: nextDate,
@@ -111,7 +111,7 @@ export function useRecurringTransactions() {
                 if (rt.endDate && nextDate > rt.endDate) {
                     updates.active = false;
                 }
-                await updateRecurringTransaction(user.uid, rt.id, updates);
+                await updateRecurringTransaction(user.id, rt.id, updates);
             }
 
             if (generated > 0) {

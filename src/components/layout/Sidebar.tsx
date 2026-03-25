@@ -1,6 +1,6 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
-import { logoutUser } from '@/firebase/auth';
+import { logoutUser } from '@/supabase/auth';
 import { useSettings } from '@/hooks/useSettings';
 import { BrandLogo } from '@/components/branding/BrandLogo';
 import {

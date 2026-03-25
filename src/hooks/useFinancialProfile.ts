@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { getFinancialProfile, upsertFinancialProfile } from '@/firebase/firestore';
+import { getFinancialProfile, upsertFinancialProfile } from '@/supabase/data';
 import type { FinancialProfile, FinancialProfileFormData } from '@/types';
 
 export function useFinancialProfile() {

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from './useAuth';
-import { onChatMessagesSnapshot, addChatMessage } from '@/firebase/firestore';
+import { onChatMessagesSnapshot, addChatMessage } from '@/supabase/data';
 import type { StoredChatMessage } from '@/types';
 import { toast } from 'sonner';
 
@@ -18,7 +18,7 @@ export function useChats(sessionId: string | null) {
 
         setLoading(true);
         const unsubscribe = onChatMessagesSnapshot(
-            user.uid,
+            user.id,
             sessionId,
             (data) => {
                 setMessages(data);
@@ -36,7 +36,7 @@ export function useChats(sessionId: string | null) {
     const addMessage = async (data: Omit<StoredChatMessage, 'id' | 'createdAt'>) => {
         if (!user) return;
         try {
-            await addChatMessage(user.uid, data);
+            await addChatMessage(user.id, data);
         } catch (error) {
             console.error('Error saving chat message:', error);
             toast.error('Erro ao salvar o histórico no banco de dados.');

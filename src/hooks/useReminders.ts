@@ -5,7 +5,7 @@ import {
     addReminder,
     updateReminder,
     deleteReminder,
-} from '@/firebase/firestore';
+} from '@/supabase/data';
 import type { Reminder } from '@/types';
 import { toast } from 'sonner';
 
@@ -19,7 +19,7 @@ export function useReminders() {
 
         setLoading(true);
         const unsubscribe = onRemindersSnapshot(
-            user.uid,
+            user.id,
             (data) => {
                 setReminders(data);
                 setLoading(false);
@@ -36,7 +36,7 @@ export function useReminders() {
     const add = async (data: Omit<Reminder, 'id' | 'createdAt' | 'updatedAt'>) => {
         if (!user) return;
         try {
-            await addReminder(user.uid, data);
+            await addReminder(user.id, data);
             toast.success('Lembrete adicionado com sucesso!');
         } catch (error) {
             console.error(error);
@@ -48,7 +48,7 @@ export function useReminders() {
     const update = async (id: string, data: Partial<Omit<Reminder, 'id' | 'createdAt'>>) => {
         if (!user) return;
         try {
-            await updateReminder(user.uid, id, data);
+            await updateReminder(user.id, id, data);
             toast.success('Lembrete atualizado!');
         } catch (error) {
             console.error(error);
@@ -60,7 +60,7 @@ export function useReminders() {
     const remove = async (id: string) => {
         if (!user) return;
         try {
-            await deleteReminder(user.uid, id);
+            await deleteReminder(user.id, id);
             toast.success('Lembrete removido!');
         } catch (error) {
             console.error(error);

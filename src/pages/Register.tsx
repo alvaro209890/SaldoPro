@@ -6,7 +6,7 @@ import * as z from 'zod';
 import { Mail, Lock, User, Phone, CheckCircle2, Shield, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { registerUser } from '@/firebase/auth';
+import { registerUser } from '@/supabase/auth';
 import { toast } from 'sonner';
 import { BrandLogo } from '@/components/branding/BrandLogo';
 

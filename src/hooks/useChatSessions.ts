@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from './useAuth';
-import { onChatSessionsSnapshot, createChatSession, updateChatSession, deleteChatSession } from '@/firebase/firestore';
+import { onChatSessionsSnapshot, createChatSession, updateChatSession, deleteChatSession } from '@/supabase/data';
 import type { ChatSession } from '@/types';
 import { toast } from 'sonner';
 
@@ -18,7 +18,7 @@ export function useChatSessions() {
 
         setLoading(true);
         const unsubscribe = onChatSessionsSnapshot(
-            user.uid,
+            user.id,
             (data) => {
                 setSessions(data);
                 setLoading(false);
@@ -35,7 +35,7 @@ export function useChatSessions() {
     const addSession = async (title: string): Promise<string> => {
         if (!user) throw new Error("Usuário não autenticado");
         try {
-            const docRef = await createChatSession(user.uid, title);
+            const docRef = await createChatSession(user.id, title);
             return docRef.id;
         } catch (error) {
             console.error('Error creating chat session:', error);
@@ -47,7 +47,7 @@ export function useChatSessions() {
     const editSession = async (sessionId: string, title: string) => {
         if (!user) return;
         try {
-            await updateChatSession(user.uid, sessionId, title);
+            await updateChatSession(user.id, sessionId, title);
         } catch (error) {
             console.error('Error updating chat session:', error);
             toast.error('Erro ao renomear conversa.');
@@ -58,7 +58,7 @@ export function useChatSessions() {
     const removeSession = async (sessionId: string) => {
         if (!user) return;
         try {
-            await deleteChatSession(user.uid, sessionId);
+            await deleteChatSession(user.id, sessionId);
             // Note: Cloud function should ideally delete all sub-messages when parent is deleted,
             // or we just leave them orphaned if it's fine for simple use cases.
         } catch (error) {

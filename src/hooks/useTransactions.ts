@@ -5,7 +5,7 @@ import {
     addTransaction,
     updateTransaction,
     deleteTransaction,
-} from '@/firebase/firestore';
+} from '@/supabase/data';
 import type { Transaction } from '@/types';
 import { toast } from 'sonner';
 
@@ -19,7 +19,7 @@ export function useTransactions(monthKey: string) {
 
         setLoading(true);
         const unsubscribe = onTransactionsSnapshot(
-            user.uid,
+            user.id,
             monthKey,
             (data) => {
                 setTransactions(data);
@@ -37,7 +37,7 @@ export function useTransactions(monthKey: string) {
     const add = async (data: Omit<Transaction, 'id' | 'monthKey' | 'createdAt' | 'updatedAt'>) => {
         if (!user) return;
         try {
-            await addTransaction(user.uid, data);
+            await addTransaction(user.id, data);
             toast.success('Transação adicionada com sucesso!');
         } catch (error) {
             console.error(error);
@@ -49,7 +49,7 @@ export function useTransactions(monthKey: string) {
     const update = async (id: string, data: Partial<Omit<Transaction, 'id' | 'createdAt'>>) => {
         if (!user) return;
         try {
-            await updateTransaction(user.uid, id, data);
+            await updateTransaction(user.id, id, data);
             toast.success('Transação atualizada!');
         } catch (error) {
             console.error(error);
@@ -61,7 +61,7 @@ export function useTransactions(monthKey: string) {
     const remove = async (id: string) => {
         if (!user) return;
         try {
-            await deleteTransaction(user.uid, id);
+            await deleteTransaction(user.id, id);
             toast.success('Transação removida!');
         } catch (error) {
             console.error(error);

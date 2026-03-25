@@ -7,7 +7,7 @@ import {
     getUserDocumentDownloadUrl,
     getUserDocuments,
     updateUserDocumentAsset,
-} from '@/firebase/firestore';
+} from '@/supabase/data';
 import type {
     UserDocumentAsset,
     UserDocumentInput,
@@ -41,7 +41,7 @@ export function useUserDocuments() {
         }
 
         try {
-            const items = await getUserDocuments(user.uid);
+            const items = await getUserDocuments(user.id);
             setDocuments(items);
         } catch (error) {
             console.error(error);
@@ -71,7 +71,7 @@ export function useUserDocuments() {
         if (!user) return;
 
         try {
-            await createUserDocumentAsset(user.uid, data);
+            await createUserDocumentAsset(user.id, data);
             await loadDocuments({ silent: true, suppressToast: true });
             toast.success('Arquivo enviado com sucesso.');
         } catch (error) {
@@ -85,7 +85,7 @@ export function useUserDocuments() {
         if (!user) return;
 
         try {
-            await updateUserDocumentAsset(user.uid, documentId, data);
+            await updateUserDocumentAsset(user.id, documentId, data);
             await loadDocuments({ silent: true, suppressToast: true });
             toast.success('Arquivo atualizado.');
         } catch (error) {
@@ -99,7 +99,7 @@ export function useUserDocuments() {
         if (!user) return;
 
         try {
-            await deleteUserDocumentAsset(user.uid, documentId);
+            await deleteUserDocumentAsset(user.id, documentId);
             await loadDocuments({ silent: true, suppressToast: true });
             toast.success('Arquivo removido.');
         } catch (error) {
@@ -113,7 +113,7 @@ export function useUserDocuments() {
         if (!user) return;
 
         try {
-            const { url, fileName } = await getUserDocumentDownloadUrl(user.uid, documentId);
+            const { url, fileName } = await getUserDocumentDownloadUrl(user.id, documentId);
             const response = await fetch(url);
             if (!response.ok) {
                 throw new Error('Falha ao baixar o arquivo.');

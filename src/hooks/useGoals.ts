@@ -6,12 +6,12 @@ import {
     updateGoal,
     deleteGoal,
     generateAIGoals,
-} from '@/firebase/firestore';
+} from '@/supabase/data';
 import type { Goal, GoalFormData } from '@/types';
 
 export function useGoals() {
     const { user } = useAuth();
-    const uid = user?.uid ?? null;
+    const uid = user?.id ?? null;
     const [goals, setGoals] = useState<Goal[]>([]);
     const [loading, setLoading] = useState(true);
     const [generating, setGenerating] = useState(false);

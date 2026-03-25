@@ -1,4 +1,4 @@
-import { auth } from '@/firebase/config';
+import { supabase } from '@/supabase/client';
 import { BACKEND_URL } from '@/config/backend';
 
 export type Role = 'user' | 'assistant' | 'system';
@@ -20,13 +20,12 @@ function normalizeChatText(value: string): string {
 export async function chatWithAI(
     messages: ChatMessage[]
 ): Promise<AIChatResponse> {
-    // Get Firebase ID token for authentication
-    const user = auth.currentUser;
-    if (!user) {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const idToken = sessionData.session?.access_token;
+
+    if (!idToken) {
         throw new Error('Você precisa estar logado para usar o assistente de IA.');
     }
-
-    const idToken = await user.getIdToken();
 
     // Build the request payload
     const payload = {

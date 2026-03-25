@@ -5,7 +5,7 @@ import {
     addCategory,
     updateCategory,
     deleteCategory,
-} from '@/firebase/firestore';
+} from '@/supabase/data';
 import type { Category } from '@/types';
 import { toast } from 'sonner';
 
@@ -24,7 +24,7 @@ export function useCategories() {
 
         setLoading(true);
         const unsubscribe = onCategoriesSnapshot(
-            user.uid,
+            user.id,
             (data) => {
                 setCategories(data);
                 setLoading(false);
@@ -44,7 +44,7 @@ export function useCategories() {
     const add = async (data: Omit<Category, 'id' | 'createdAt'>) => {
         if (!user) return;
         try {
-            await addCategory(user.uid, data);
+            await addCategory(user.id, data);
             toast.success('Categoria adicionada!');
         } catch (error) {
             console.error(error);
@@ -56,7 +56,7 @@ export function useCategories() {
     const update = async (id: string, data: Partial<Omit<Category, 'id' | 'createdAt'>>) => {
         if (!user) return;
         try {
-            await updateCategory(user.uid, id, data);
+            await updateCategory(user.id, id, data);
             toast.success('Categoria atualizada!');
         } catch (error) {
             console.error(error);
@@ -68,7 +68,7 @@ export function useCategories() {
     const remove = async (id: string) => {
         if (!user) return;
         try {
-            await deleteCategory(user.uid, id);
+            await deleteCategory(user.id, id);
             toast.success('Categoria removida!');
         } catch (error) {
             console.error(error);

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from './useAuth';
-import { onSettingsSnapshot, updateSettings } from '@/firebase/firestore';
+import { onSettingsSnapshot, updateSettings } from '@/supabase/data';
 import type { UserSettings } from '@/types';
 import { toast } from 'sonner';
 
@@ -14,7 +14,7 @@ export function useSettings() {
 
         setLoading(true);
         const unsubscribe = onSettingsSnapshot(
-            user.uid,
+            user.id,
             (data) => {
                 setSettings(data);
                 setLoading(false);
@@ -31,7 +31,7 @@ export function useSettings() {
     const update = async (data: Partial<UserSettings>, options?: { silent?: boolean }) => {
         if (!user) return;
         try {
-            await updateSettings(user.uid, data);
+            await updateSettings(user.id, data);
             if (!options?.silent) {
                 toast.success('Configurações atualizadas!');
             }

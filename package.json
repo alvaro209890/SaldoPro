@@ -13,10 +13,9 @@
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",
-    "@supabase/supabase-js": "^2.98.0",
+    "@supabase/supabase-js": "^2.100.0",
     "@tailwindcss/typography": "^0.5.19",
     "date-fns": "^4.1.0",
-    "firebase": "^11.0.0",
     "lucide-react": "^0.460.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

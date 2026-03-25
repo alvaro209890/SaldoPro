@@ -5,7 +5,7 @@ import { chatWithAI, type ChatMessage } from '@/services/ai';
 import { Button } from '@/components/ui/Button';
 import { Sparkles, Send, Bot, X, User, MessageSquarePlus, MessageSquare, Trash2, Menu } from 'lucide-react';
 import { toast } from 'sonner';
-import { triggerDataRefresh } from '@/firebase/firestore';
+import { triggerDataRefresh } from '@/supabase/data';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { StoredChatMessage } from '@/types';

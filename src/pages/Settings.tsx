@@ -13,7 +13,7 @@ import { ManualTab } from '@/components/settings/ManualTab';
 import { toast } from 'sonner';
 import { normalizePhoneNumber } from '@/utils/whatsapp';
 import { WhatsAppOnboarding } from '@/components/settings/WhatsAppOnboarding';
-import { updateDisplayName } from '@/firebase/firestore';
+import { updateDisplayName } from '@/supabase/data';
 
 const settingsSchema = z.object({
     budget: z.number().min(0, 'O or\u00e7amento n\u00e3o pode ser negativo'),
@@ -110,7 +110,7 @@ export function Settings() {
         if (!user || !nameInput.trim()) return;
         setIsSavingName(true);
         try {
-            await updateDisplayName(user.uid, nameInput.trim());
+            await updateDisplayName(user.id, nameInput.trim());
             toast.success('Nome atualizado!');
             setEditingName(false);
         } catch {
@@ -263,7 +263,7 @@ export function Settings() {
                                     <User className="w-4 h-4 text-finance-primary-light" />
                                     <span className="font-medium text-gray-300">Detalhes da Conta</span>
                                 </div>
-                                <p className="mb-1">Conta criada em: <span className="text-gray-200">{user?.metadata.creationTime ? new Date(user.metadata.creationTime).toLocaleDateString('pt-BR') : 'Desconhecido'}</span></p>
+                                <p className="mb-1">Conta criada em: <span className="text-gray-200">{user?.created_at ? new Date(user.created_at).toLocaleDateString('pt-BR') : 'Desconhecido'}</span></p>
                                 <p>Clique no ícone de lápis ao lado do nome para alterá-lo.</p>
                             </div>
                         </div>

@@ -10,7 +10,7 @@ import {
     confirmUserPasswordReset,
     resetPassword,
     validatePasswordResetCode,
-} from '@/firebase/auth';
+} from '@/supabase/auth';
 import { toast } from 'sonner';
 
 const requestSchema = z.object({
