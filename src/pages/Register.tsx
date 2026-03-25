@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Mail, Lock, User, Phone } from 'lucide-react';
+import { Mail, Lock, User, Phone, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { registerUser } from '@/firebase/auth';
@@ -94,132 +94,151 @@ export function Register() {
     };
 
     return (
-        <div className="min-h-screen flex text-gray-100 bg-gray-950">
-            {/* Form Section - First on mobile, left on wide screens */}
-            <div className="w-full lg:w-1/2 flex items-center justify-center p-8 z-10">
-                <div className="w-full max-w-sm">
-                    <div className="lg:hidden flex items-center gap-2 mb-8 justify-center">
-                        <BrandLogo className="h-8 w-8" />
-                        <h1 className="text-2xl font-bold text-white">SaldoPro</h1>
+        <div className="min-h-screen flex text-gray-100 bg-gray-950 relative overflow-hidden">
+            {/* Background glowing orbs */}
+            <div className="absolute top-1/4 left-[-10%] w-[500px] h-[500px] bg-emerald-500/20 rounded-full blur-[120px] pointer-events-none opacity-50 lg:opacity-100" />
+            <div className="absolute bottom-[-10%] right-[-10%] w-[500px] h-[500px] bg-teal-600/10 rounded-full blur-[120px] pointer-events-none opacity-50 lg:opacity-100" />
+
+            {/* Form Section - Left on desktop, centered on mobile */}
+            <div className="w-full lg:w-1/2 flex flex-col items-center justify-center p-6 sm:p-12 z-10">
+                <div className="w-full max-w-[420px]">
+                    
+                    {/* Mobile Logo */}
+                    <div className="lg:hidden flex flex-col items-center justify-center gap-3 mb-8">
+                        <div className="p-3 bg-white/[0.03] rounded-2xl border border-white/10 shadow-xl">
+                            <BrandLogo className="h-10 w-10" />
+                        </div>
+                        <h1 className="text-2xl font-bold tracking-tight text-white">SaldoPro</h1>
                     </div>
 
-                    <div className="mb-8">
-                        <h2 className="text-2xl font-semibold text-white mb-2">Criar conta</h2>
-                        <p className="text-gray-400">Junte-se a nós e comece a controlar seu dinheiro.</p>
-                    </div>
-
-                    <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-                        <Input
-                            label="Nome completo"
-                            icon={User}
-                            placeholder="Seu nome"
-                            autoComplete="name"
-                            error={errors.displayName?.message}
-                            {...register('displayName')}
-                        />
-
-                        <div>
-                            <Controller
-                                name="whatsappPhone"
-                                control={control}
-                                render={({ field }) => (
-                                    <Input
-                                        label="Número do WhatsApp"
-                                        icon={Phone}
-                                        placeholder="(11) 99999-9999"
-                                        autoComplete="tel"
-                                        inputMode="numeric"
-                                        maxLength={15}
-                                        error={errors.whatsappPhone?.message}
-                                        {...field}
-                                        value={field.value ?? ''}
-                                        onChange={(event) => {
-                                            field.onChange(formatSignupPhone(event.target.value));
-                                        }}
-                                    />
-                                )}
-                            />
-                            <p className="mt-1 text-xs text-gray-500">
-                                Digite apenas DDD + número. O 55 é adicionado automaticamente.
-                            </p>
+                    <div className="rounded-3xl sm:border border-white/10 sm:bg-white/[0.02] sm:backdrop-blur-2xl sm:p-8 sm:shadow-2xl shadow-black/50">
+                        <div className="mb-8 text-center sm:text-left">
+                            <h2 className="text-2xl font-bold text-white mb-2 tracking-tight">Criar conta grátis</h2>
+                            <p className="text-slate-400 text-sm">Junte-se a nós e comece a controlar seu dinheiro.</p>
                         </div>
 
-                        <Input
-                            label="Email"
-                            icon={Mail}
-                            placeholder="seu@email.com"
-                            autoComplete="email"
-                            error={errors.email?.message}
-                            {...register('email')}
-                        />
+                        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+                            <Input
+                                label="Nome completo"
+                                icon={User}
+                                placeholder="Seu nome"
+                                autoComplete="name"
+                                error={errors.displayName?.message}
+                                {...register('displayName')}
+                            />
 
-                        <Input
-                            label="Senha"
-                            type="password"
-                            icon={Lock}
-                            placeholder="••••••••"
-                            autoComplete="new-password"
-                            error={errors.password?.message}
-                            {...register('password')}
-                        />
+                            <div>
+                                <Controller
+                                    name="whatsappPhone"
+                                    control={control}
+                                    render={({ field }) => (
+                                        <Input
+                                            label="Número do WhatsApp"
+                                            icon={Phone}
+                                            placeholder="(11) 99999-9999"
+                                            autoComplete="tel"
+                                            inputMode="numeric"
+                                            maxLength={15}
+                                            error={errors.whatsappPhone?.message}
+                                            {...field}
+                                            value={field.value ?? ''}
+                                            onChange={(event) => {
+                                                field.onChange(formatSignupPhone(event.target.value));
+                                            }}
+                                        />
+                                    )}
+                                />
+                            </div>
 
-                        <Input
-                            label="Confirmar Senha"
-                            type="password"
-                            icon={Lock}
-                            placeholder="••••••••"
-                            autoComplete="new-password"
-                            error={errors.confirmPassword?.message}
-                            {...register('confirmPassword')}
-                        />
+                            <Input
+                                label="Email"
+                                icon={Mail}
+                                placeholder="seu@email.com"
+                                autoComplete="email"
+                                error={errors.email?.message}
+                                {...register('email')}
+                            />
 
-                        <Button type="submit" className="w-full mt-6" size="lg" isLoading={isLoading}>
-                            Criar conta
-                        </Button>
-                    </form>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <Input
+                                    label="Senha"
+                                    type="password"
+                                    icon={Lock}
+                                    placeholder="••••••••"
+                                    autoComplete="new-password"
+                                    error={errors.password?.message}
+                                    {...register('password')}
+                                />
 
-                    <p className="mt-8 text-center text-sm text-gray-400">
-                        Já tem uma conta?{' '}
-                        <Link
-                            to="/login"
-                            className="font-medium text-emerald-400 hover:text-emerald-300 transition-colors inline-block pb-1 border-b border-transparent hover:border-emerald-400"
-                        >
-                            Fazer login
-                        </Link>
-                    </p>
+                                <Input
+                                    label="Confirmar"
+                                    type="password"
+                                    icon={Lock}
+                                    placeholder="••••••••"
+                                    autoComplete="new-password"
+                                    error={errors.confirmPassword?.message}
+                                    {...register('confirmPassword')}
+                                />
+                            </div>
+
+                            <Button 
+                                type="submit" 
+                                className="w-full mt-4 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold h-12 rounded-xl shadow-lg shadow-emerald-500/20 border-0" 
+                                size="lg" 
+                                isLoading={isLoading}
+                            >
+                                Criar minha conta
+                            </Button>
+                        </form>
+
+                        <div className="mt-8 pt-6 border-t border-white/5 text-center">
+                            <p className="text-sm text-slate-400">
+                                Já tem uma conta?{' '}
+                                <Link
+                                    to="/login"
+                                    className="font-bold text-emerald-400 hover:text-emerald-300 transition-colors"
+                                >
+                                    Fazer login
+                                </Link>
+                            </p>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            {/* Visual Identity Section */}
-            <div className="hidden lg:flex w-1/2 bg-surface-900 flex-col items-center justify-center relative overflow-hidden border-l border-surface-800">
-                <div className="absolute top-1/4 left-[-20%] w-[500px] h-[500px] bg-emerald-500/20 rounded-full blur-[120px]" />
-                <div className="absolute bottom-[-10%] right-[-10%] w-96 h-96 bg-indigo-500/20 rounded-full blur-[100px]" />
-
-                <div className="max-w-md relative z-10 text-center">
-                    <div className="flex items-center justify-center gap-3 mb-8">
-                        <BrandLogo className="h-16 w-16" />
+            {/* Visual Identity Section - Right (Desktop only) */}
+            <div className="hidden lg:flex w-1/2 flex-col justify-center relative p-16 z-10 border-l border-white/5 bg-gradient-to-bl from-emerald-950/30 to-slate-950/80 backdrop-blur-sm">
+                <div className="max-w-xl ml-auto">
+                    <div className="flex items-center gap-3 mb-10 justify-end">
+                        <h1 className="text-3xl font-bold tracking-tight text-white">SaldoPro</h1>
+                        <BrandLogo className="h-12 w-12" />
                     </div>
-                    <h2 className="text-4xl font-bold tracking-tight text-white mb-6">
-                        O primeiro passo para sua liberdade financeira
+                    
+                    <h2 className="text-5xl font-extrabold mb-6 leading-[1.1] text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-200 text-right">
+                        O primeiro passo para sua liberdade.
                     </h2>
-                    <p className="text-gray-400 text-lg leading-relaxed mb-12">
-                        Configure seu perfil em menos de um minuto. Suas categorias essenciais já vêm configuradas e prontas para o uso.
+                    <p className="text-slate-400 text-lg leading-relaxed mb-10 text-right">
+                        Configure seu perfil em menos de um minuto. Categorias e dados automáticos prontos para uso logo no primeiro clique.
                     </p>
 
-                    <div className="grid grid-cols-2 gap-4 text-left">
-                        <div className="bg-surface-800/50 backdrop-blur border border-surface-700 p-4 rounded-xl">
-                            <div className="w-8 h-8 rounded-full bg-emerald-500/10 flex items-center justify-center mb-3">
-                                <div className="w-3 h-3 rounded-full bg-emerald-500" />
+                    <div className="grid grid-cols-1 gap-4 text-left ml-auto max-w-sm">
+                        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 backdrop-blur-md hover:bg-white/[0.05] transition flex items-center gap-4">
+                            <div className="flex bg-emerald-500/10 p-2.5 rounded-xl border border-emerald-500/20 text-emerald-400">
+                                <CheckCircle2 className="w-5 h-5" />
                             </div>
-                            <h3 className="font-medium text-white mb-1">Configuração Expressa</h3>
-                            <p className="text-xs text-gray-400">Pronto para usar desde o primeiro clique</p>
+                            <div>
+                                <h3 className="font-bold text-white text-[15px]">Configuração Expressa</h3>
+                                <p className="text-xs text-slate-400 mt-1">Sua conta configurada instantaneamente.</p>
+                            </div>
                         </div>
-                        <div className="bg-surface-800/50 backdrop-blur border border-surface-700 p-4 rounded-xl">
-                            <div className="w-8 h-8 rounded-full bg-indigo-500/10 flex items-center justify-center mb-3">
-                                <div className="w-3 h-3 rounded-full bg-indigo-500" />
+                        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 backdrop-blur-md hover:bg-white/[0.05] transition flex items-center gap-4">
+                            <div className="flex bg-teal-500/10 p-2.5 rounded-xl border border-teal-500/20 text-teal-400">
+                                <CheckCircle2 className="w-5 h-5" />
                             </div>
-                            <h3 className="font-medium text-white mb-1">Dados Seguros</h3>
-                            <p className="text-xs text-gray-400">Criptografia de ponta a ponta garantida</p>
+                            <div>
+                                <h3 className="font-bold text-white text-[15px]">Dados Protegidos</h3>
+                                <p className="text-xs text-slate-400 mt-1">Criptografia de ponta a ponta nativa da nuvem.</p>
+                            </div>
                         </div>
                     </div>
                 </div>
