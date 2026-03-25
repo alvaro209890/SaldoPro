@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.undoLastAction = undoLastAction;
 exports.handleReminderShortcut = handleReminderShortcut;
@@ -1465,6 +1498,16 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
     const ai = await (0, groq_1.queryGroqAssistant)(sanitizedMessages, context, {
         extraSystemPrompt: options.extraSystemPrompt
     });
+    // Attach imageDataUrl to the action if we have one and the action supports it
+    let imageDataUrlStr = [...sanitizedMessages].reverse().find((message) => message.role === 'user' && message.imageDataUrl)?.imageDataUrl;
+    if (ai.actionObjects.length > 0) {
+        ai.actionObjects = ai.actionObjects.map((action) => {
+            if ((action.action === 'add_transaction' || action.action === 'add_recurring_transaction') && imageDataUrlStr) {
+                return { ...action, imageDataUrl: imageDataUrlStr };
+            }
+            return action;
+        });
+    }
     const preparedActions = prepareActionsForExecution(ai.actionObjects, {
         ...options,
         latestUserMessageText
@@ -1613,6 +1656,29 @@ async function executeAction(uid, action, categories, options) {
             invalidateContextCache(uid);
             trackUndoableAction(uid, { actionKind: 'added', resourceId: transactionId });
             const categoryName = categories.find((c) => c.id === category)?.name ?? category;
+            // Handle automatic document creation from WhatsApp image
+            if (action.imageDataUrl) {
+                try {
+                    const docHelpers = await Promise.resolve().then(() => __importStar(require('../lib/document-storage.js')));
+                    const firestoreHelpers = await Promise.resolve().then(() => __importStar(require('../lib/firestore.js')));
+                    const pendingDoc = await docHelpers.uploadPendingDocument(uid, action.imageDataUrl);
+                    const documentId = await firestoreHelpers.createUserDocument(uid, {
+                        source: 'whatsapp_receipt',
+                        title: `Comprovante - ${categoryName} - ${payload.date}`,
+                        normalizedTitle: `comprovante ${categoryName.toLowerCase()} ${payload.date}`,
+                        storagePath: 'pending', // Will be updated
+                        mimeType: pendingDoc.mimeType,
+                        sizeBytes: pendingDoc.sizeBytes,
+                        status: 'ready'
+                    });
+                    const finalPath = await docHelpers.finalizePendingDocumentMove(uid, pendingDoc.storagePath, documentId, pendingDoc.mimeType);
+                    await firestoreHelpers.updateUserDocument(uid, documentId, { storagePath: finalPath });
+                    logger_1.logger.info('Auto-saved receipt document', { uid, transactionId, documentId });
+                }
+                catch (error) {
+                    logger_1.logger.error('Failed to auto-save receipt document', { uid, transactionId, error });
+                }
+            }
             return {
                 kind: 'added',
                 receipt: {
@@ -1719,6 +1785,29 @@ async function executeAction(uid, action, categories, options) {
             invalidateContextCache(uid);
             trackUndoableAction(uid, { actionKind: 'added_recurring', resourceId: recurringId });
             const categoryName = categories.find((c) => c.id === category)?.name ?? category;
+            // Handle automatic document creation from WhatsApp image
+            if (action.imageDataUrl) {
+                try {
+                    const docHelpers = await Promise.resolve().then(() => __importStar(require('../lib/document-storage.js')));
+                    const firestoreHelpers = await Promise.resolve().then(() => __importStar(require('../lib/firestore.js')));
+                    const pendingDoc = await docHelpers.uploadPendingDocument(uid, action.imageDataUrl);
+                    const documentId = await firestoreHelpers.createUserDocument(uid, {
+                        source: 'whatsapp_receipt',
+                        title: `Comprovante Recorrente - ${categoryName} - ${payload.startDate}`,
+                        normalizedTitle: `comprovante recorrente ${categoryName.toLowerCase()} ${payload.startDate}`,
+                        storagePath: 'pending', // Will be updated
+                        mimeType: pendingDoc.mimeType,
+                        sizeBytes: pendingDoc.sizeBytes,
+                        status: 'ready'
+                    });
+                    const finalPath = await docHelpers.finalizePendingDocumentMove(uid, pendingDoc.storagePath, documentId, pendingDoc.mimeType);
+                    await firestoreHelpers.updateUserDocument(uid, documentId, { storagePath: finalPath });
+                    logger_1.logger.info('Auto-saved receipt document for recurring tx', { uid, recurringId, documentId });
+                }
+                catch (error) {
+                    logger_1.logger.error('Failed to auto-save receipt document for recurring tx', { uid, recurringId, error });
+                }
+            }
             return {
                 kind: 'added_recurring',
                 receipt: {

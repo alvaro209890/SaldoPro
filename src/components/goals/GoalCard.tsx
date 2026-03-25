@@ -5,6 +5,7 @@ import {
     ChevronDown,
     ChevronUp,
     Clock,
+    Flame,
     PauseCircle,
     Pencil,
     Sparkles,
@@ -24,15 +25,15 @@ interface GoalCardProps {
 }
 
 const PRIORITY_STYLES = {
-    high: { chip: 'border-red-500/25 bg-red-500/10 text-red-300', label: 'Alta' },
-    medium: { chip: 'border-amber-500/25 bg-amber-500/10 text-amber-300', label: 'Media' },
-    low: { chip: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300', label: 'Baixa' },
+    high: { chip: 'border-red-500/25 bg-red-500/10 text-red-300', label: 'Alta', icon: Flame },
+    medium: { chip: 'border-amber-500/25 bg-amber-500/10 text-amber-300', label: 'Média', icon: Target },
+    low: { chip: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300', label: 'Baixa', icon: Target },
 } as const;
 
 const STATUS_STYLES = {
-    active: { chip: 'bg-indigo-500/10 text-indigo-300', label: 'Ativa' },
-    completed: { chip: 'bg-emerald-500/10 text-emerald-300', label: 'Concluida' },
-    cancelled: { chip: 'bg-slate-500/10 text-slate-300', label: 'Pausada' },
+    active: { chip: 'bg-indigo-500/10 text-indigo-300 border border-indigo-500/20', label: 'Ativa', dot: 'bg-indigo-400' },
+    completed: { chip: 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20', label: 'Concluída', dot: 'bg-emerald-400' },
+    cancelled: { chip: 'bg-slate-500/10 text-slate-300 border border-slate-500/20', label: 'Pausada', dot: 'bg-slate-400' },
 } as const;
 
 function formatCurrency(value: number): string {
@@ -55,7 +56,7 @@ function getDeadlineMeta(deadline: string | null): { label: string; urgent: bool
     const diffInDays = Math.ceil((target.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
 
     if (diffInDays < 0) {
-        return { label: `Atrasada ha ${Math.abs(diffInDays)} dia${Math.abs(diffInDays) === 1 ? '' : 's'}`, urgent: true };
+        return { label: `Atrasada há ${Math.abs(diffInDays)} dia${Math.abs(diffInDays) === 1 ? '' : 's'}`, urgent: true };
     }
 
     if (diffInDays === 0) {
@@ -63,9 +64,47 @@ function getDeadlineMeta(deadline: string | null): { label: string; urgent: bool
     }
 
     return {
-        label: `Faltam ${diffInDays} dia${diffInDays === 1 ? '' : 's'}`,
+        label: `${diffInDays} dia${diffInDays === 1 ? '' : 's'} restante${diffInDays === 1 ? '' : 's'}`,
         urgent: diffInDays <= 7,
     };
+}
+
+/** SVG circular progress ring */
+function ProgressRing({ progress, size = 52, strokeWidth = 4 }: { progress: number; size?: number; strokeWidth?: number }) {
+    const radius = (size - strokeWidth) / 2;
+    const circumference = 2 * Math.PI * radius;
+    const offset = circumference - (progress / 100) * circumference;
+    const color = progress >= 100 ? '#34d399' : progress >= 60 ? '#fbbf24' : '#818cf8';
+
+    return (
+        <div className="relative shrink-0" style={{ width: size, height: size }}>
+            <svg width={size} height={size} className="-rotate-90">
+                <circle
+                    cx={size / 2}
+                    cy={size / 2}
+                    r={radius}
+                    fill="none"
+                    stroke="rgba(255,255,255,0.06)"
+                    strokeWidth={strokeWidth}
+                />
+                <circle
+                    cx={size / 2}
+                    cy={size / 2}
+                    r={radius}
+                    fill="none"
+                    stroke={color}
+                    strokeWidth={strokeWidth}
+                    strokeDasharray={circumference}
+                    strokeDashoffset={offset}
+                    strokeLinecap="round"
+                    className="transition-all duration-1000"
+                />
+            </svg>
+            <span className="absolute inset-0 flex items-center justify-center text-xs font-bold text-white">
+                {progress.toFixed(0)}%
+            </span>
+        </div>
+    );
 }
 
 export function GoalCard({ goal, onUpdate, onDelete, onEdit }: GoalCardProps) {
@@ -133,50 +172,94 @@ export function GoalCard({ goal, onUpdate, onDelete, onEdit }: GoalCardProps) {
         await onDelete(goal.id);
     };
 
+    const PriorityIcon = priority.icon;
+
     return (
-        <div className={`rounded-3xl border bg-surface-900/60 backdrop-blur transition-all duration-300 ${
+        <div className={`group rounded-3xl border backdrop-blur transition-all duration-300 ${
             goal.status === 'active'
-                ? 'border-surface-700 hover:border-indigo-400/30 hover:shadow-[0_20px_50px_-30px_rgba(99,102,241,0.45)]'
-                : 'border-surface-800 opacity-80'
+                ? 'border-surface-700/80 bg-surface-900/60 hover:border-indigo-400/25 hover:shadow-[0_12px_40px_-20px_rgba(99,102,241,0.35)]'
+                : goal.status === 'completed'
+                    ? 'border-emerald-500/15 bg-surface-900/40'
+                    : 'border-surface-800/60 bg-surface-900/30 opacity-75'
         }`}>
             <div className="p-5">
-                <div className="mb-4 flex items-start justify-between gap-3">
+                {/* Header: Title + Chips + Progress ring */}
+                <div className="flex items-start gap-4">
+                    {/* Progress ring or status icon */}
+                    {progress !== null ? (
+                        <ProgressRing progress={progress} />
+                    ) : (
+                        <div className={`flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-2xl ${
+                            goal.status === 'completed'
+                                ? 'bg-emerald-500/10'
+                                : goal.status === 'cancelled'
+                                    ? 'bg-slate-500/10'
+                                    : 'bg-indigo-500/10'
+                        }`}>
+                            {goal.status === 'completed' ? (
+                                <Check className="h-5 w-5 text-emerald-300" />
+                            ) : goal.status === 'cancelled' ? (
+                                <PauseCircle className="h-5 w-5 text-slate-400" />
+                            ) : (
+                                <Target className="h-5 w-5 text-indigo-300" />
+                            )}
+                        </div>
+                    )}
+
                     <div className="min-w-0 flex-1">
-                        <div className="mb-2 flex flex-wrap items-center gap-2">
+                        {/* Chips row */}
+                        <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
                             {goal.source === 'ai' && (
-                                <span className="inline-flex items-center gap-1 rounded-full border border-indigo-400/20 bg-indigo-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-indigo-300">
-                                    <Sparkles className="h-3 w-3" />
+                                <span className="inline-flex items-center gap-1 rounded-full border border-indigo-400/20 bg-indigo-500/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-indigo-300">
+                                    <Sparkles className="h-2.5 w-2.5" />
                                     IA
                                 </span>
                             )}
-                            <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${priority.chip}`}>
+                            <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.15em] ${priority.chip}`}>
+                                <PriorityIcon className="h-2.5 w-2.5" />
                                 {priority.label}
                             </span>
-                            <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${status.chip}`}>
+                            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.15em] ${status.chip}`}>
+                                <span className={`h-1.5 w-1.5 rounded-full ${status.dot}`} />
                                 {status.label}
                             </span>
                         </div>
 
-                        <h3 className={`text-base font-semibold leading-snug text-white ${goal.status !== 'active' ? 'line-through decoration-white/25' : ''}`}>
+                        {/* Title */}
+                        <h3 className={`text-[15px] font-semibold leading-snug text-white ${goal.status !== 'active' ? 'line-through decoration-white/20' : ''}`}>
                             {goal.title}
                         </h3>
 
-                        <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-gray-400">
+                        {/* Deadline + Amount info */}
+                        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-400">
+                            {targetAmount && (
+                                <span className="inline-flex items-center gap-1">
+                                    <Target className="h-3 w-3 text-gray-500" />
+                                    {formatCurrency(goal.currentAmount)} <span className="text-gray-600">/</span> {formatCurrency(targetAmount)}
+                                </span>
+                            )}
+                            {!targetAmount && goal.currentAmount > 0 && (
+                                <span className="inline-flex items-center gap-1">
+                                    <TrendingUp className="h-3 w-3 text-gray-500" />
+                                    {formatCurrency(goal.currentAmount)} acumulado
+                                </span>
+                            )}
                             {goal.deadline && (
-                                <span className="inline-flex items-center gap-1.5">
-                                    <Clock className="h-3.5 w-3.5" />
+                                <span className="inline-flex items-center gap-1">
+                                    <Clock className="h-3 w-3 text-gray-500" />
                                     {formatDate(goal.deadline)}
                                 </span>
                             )}
                             {deadlineMeta && (
-                                <span className={`inline-flex items-center gap-1.5 ${deadlineMeta.urgent ? 'text-amber-300' : 'text-gray-400'}`}>
-                                    <AlertCircle className="h-3.5 w-3.5" />
+                                <span className={`inline-flex items-center gap-1 font-medium ${deadlineMeta.urgent ? 'text-amber-300' : 'text-gray-400'}`}>
+                                    <AlertCircle className="h-3 w-3" />
                                     {deadlineMeta.label}
                                 </span>
                             )}
                         </div>
                     </div>
 
+                    {/* Expand toggle */}
                     <button
                         type="button"
                         onClick={() => setExpanded((current) => !current)}
@@ -186,63 +269,46 @@ export function GoalCard({ goal, onUpdate, onDelete, onEdit }: GoalCardProps) {
                     </button>
                 </div>
 
-                <div className="rounded-2xl border border-white/5 bg-surface-950/35 p-4">
-                    <div className="mb-2 flex items-center justify-between gap-3 text-xs text-gray-400">
-                        <span className="inline-flex items-center gap-1.5">
-                            <Target className="h-3.5 w-3.5" />
-                            {targetAmount ? `${formatCurrency(goal.currentAmount)} de ${formatCurrency(targetAmount)}` : formatCurrency(goal.currentAmount)}
-                        </span>
-                        {progress !== null && (
-                            <span className={`font-semibold ${
-                                progress >= 100 ? 'text-emerald-300' : progress >= 60 ? 'text-amber-300' : 'text-indigo-300'
-                            }`}>
-                                {progress.toFixed(0)}%
+                {/* Progress bar (linear, for goals with targets) */}
+                {targetAmount && progress !== null && (
+                    <div className="mt-4">
+                        <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+                            <div
+                                className={`h-full rounded-full transition-all duration-700 ${
+                                    progress >= 100
+                                        ? 'bg-gradient-to-r from-emerald-500 to-emerald-300'
+                                        : progress >= 60
+                                            ? 'bg-gradient-to-r from-amber-500 to-orange-300'
+                                            : 'bg-gradient-to-r from-indigo-500 to-cyan-300'
+                                }`}
+                                style={{ width: `${progress}%` }}
+                            />
+                        </div>
+                        <div className="mt-1.5 flex items-center justify-between text-[11px]">
+                            <span className="text-gray-500">
+                                {remainingAmount != null && remainingAmount > 0 ? `Faltam ${formatCurrency(remainingAmount)}` : ''}
                             </span>
-                        )}
+                            <span className="text-gray-500">
+                                {progress >= 100 ? '✅ Pronta para concluir' : goal.status === 'completed' ? 'Já concluída' : ''}
+                            </span>
+                        </div>
                     </div>
-
-                    {progress !== null ? (
-                        <>
-                            <div className="h-2.5 overflow-hidden rounded-full bg-surface-800">
-                                <div
-                                    className={`h-full rounded-full transition-all duration-700 ${
-                                        progress >= 100
-                                            ? 'bg-gradient-to-r from-emerald-500 to-emerald-300'
-                                            : progress >= 60
-                                                ? 'bg-gradient-to-r from-amber-500 to-orange-300'
-                                                : 'bg-gradient-to-r from-indigo-500 to-cyan-300'
-                                    }`}
-                                    style={{ width: `${progress}%` }}
-                                />
-                            </div>
-                            <div className="mt-2 flex items-center justify-between text-xs">
-                                <span className="text-gray-400">
-                                    {remainingAmount != null ? `Faltam ${formatCurrency(remainingAmount)}` : 'Sem alvo financeiro'}
-                                </span>
-                                <span className="text-gray-500">
-                                    {progress >= 100 ? 'Pronta para concluir' : goal.status === 'completed' ? 'Ja concluida' : 'Em andamento'}
-                                </span>
-                            </div>
-                        </>
-                    ) : (
-                        <p className="text-xs text-gray-400">
-                            Meta sem valor alvo definido. Use o progresso para acompanhar o quanto ja foi acumulado.
-                        </p>
-                    )}
-                </div>
+                )}
             </div>
 
+            {/* ── Expanded Panel ── */}
             {expanded && (
-                <div className="border-t border-surface-800 px-5 pb-5 pt-4">
+                <div className="border-t border-surface-800/60 px-5 pb-5 pt-4 animate-fade-in">
                     {goal.description && (
                         <p className="mb-4 text-sm leading-relaxed text-gray-400">{goal.description}</p>
                     )}
 
+                    {/* Quick progress update (only for active goals) */}
                     {goal.status === 'active' && (
                         <div className="mb-4 rounded-2xl border border-white/5 bg-surface-950/30 p-3">
                             <div className="mb-3 flex items-center justify-between gap-2">
                                 <p className="text-sm font-medium text-gray-200">Atualizar progresso</p>
-                                <p className="text-xs text-gray-500">Ajuste fino ou atalhos</p>
+                                <p className="text-xs text-gray-500">Atalhos ou ajuste fino</p>
                             </div>
 
                             {editingProgress ? (
@@ -308,6 +374,7 @@ export function GoalCard({ goal, onUpdate, onDelete, onEdit }: GoalCardProps) {
                         </div>
                     )}
 
+                    {/* Action buttons */}
                     <div className="grid grid-cols-2 gap-2">
                         <Button size="sm" variant="secondary" onClick={() => onEdit(goal)}>
                             <Pencil className="mr-2 h-3.5 w-3.5" />

@@ -343,6 +343,9 @@ export function Documents() {
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const { documents, loading, refreshing, reload, upload, update, remove, download } = useUserDocuments();
 
+    /* Tab state */
+    const [activeTab, setActiveTab] = useState<'geral' | 'comprovantes'>('geral');
+
     /* Upload state */
     const [uploadTitle, setUploadTitle] = useState('');
     const [uploadDescription, setUploadDescription] = useState('');
@@ -369,6 +372,14 @@ export function Documents() {
     /* Stats */
     const totalBytes = documents.reduce((sum, item) => sum + item.sizeBytes, 0);
     const totalTags = documents.reduce((sum, item) => sum + item.tags.length, 0);
+
+    /* Fitlered docs based on active tab */
+    const filteredDocs = documents.filter((doc) => {
+        if (activeTab === 'comprovantes') {
+            return doc.source === 'whatsapp_receipt';
+        }
+        return doc.source !== 'whatsapp_receipt'; // Geral
+    });
 
     /* Sync edit fields when opening the edit modal */
     useEffect(() => {
@@ -587,18 +598,34 @@ export function Documents() {
                 </div>
             </div>
 
-            {/* Gallery */}
-            {documents.length === 0 ? (
+            {/* Tabs & Gallery */}
+            <div className="flex border-b border-surface-800 mb-6">
+                <button
+                    onClick={() => setActiveTab('geral')}
+                    className={`pb-3 px-4 text-sm font-medium transition-colors border-b-2 ${activeTab === 'geral' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-gray-400 hover:text-gray-300'}`}
+                >
+                    Arquivos
+                </button>
+                <button
+                    onClick={() => setActiveTab('comprovantes')}
+                    className={`pb-3 px-4 text-sm font-medium transition-colors border-b-2 gap-2 flex items-center ${activeTab === 'comprovantes' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-gray-400 hover:text-gray-300'}`}
+                >
+                    <FileText className="h-4 w-4" />
+                    Comprovantes
+                </button>
+            </div>
+
+            {filteredDocs.length === 0 ? (
                 <EmptyState
-                    icon={Files}
-                    title="Nenhum arquivo salvo"
-                    description="As imagens, PDFs e ZIPs enviados por aqui aparecerão nesta biblioteca."
-                    actionLabel="Selecionar arquivo"
-                    onAction={() => fileInputRef.current?.click()}
+                    icon={activeTab === 'comprovantes' ? FileText : Files}
+                    title={activeTab === 'comprovantes' ? "Nenhum comprovante salvo" : "Nenhum arquivo salvo"}
+                    description={activeTab === 'comprovantes' ? "Comprovantes eviados e lidos pela IA no WhatsApp aparecerão automaticamente aqui." : "As imagens, PDFs e ZIPs enviados por aqui aparecerão nesta biblioteca."}
+                    actionLabel={activeTab === 'geral' ? "Selecionar arquivo" : undefined}
+                    onAction={activeTab === 'geral' ? () => fileInputRef.current?.click() : undefined}
                 />
             ) : (
                 <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-                    {documents.map((item) => (
+                    {filteredDocs.map((item) => (
                         <GalleryCard
                             key={item.id}
                             item={item}

@@ -13,6 +13,7 @@ export interface AIActionAdd {
   categoryId: string;
   date: string;
   paymentMethod: PaymentMethod;
+  imageDataUrl?: string;
 }
 
 export interface AIActionUpdate {
@@ -44,6 +45,7 @@ export interface AIActionAddRecurring {
   paymentMethod: PaymentMethod;
   frequency: 'weekly' | 'monthly' | 'yearly';
   endDate?: string | null;
+  imageDataUrl?: string;
 }
 
 export interface AIActionAddReminder {

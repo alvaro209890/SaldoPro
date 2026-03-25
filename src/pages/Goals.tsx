@@ -12,17 +12,25 @@ import { toast } from 'sonner';
 import {
     ArrowDownRight,
     ArrowUpRight,
+    Award,
+    CalendarClock,
     CheckCircle2,
+    ChevronRight,
     CircleDollarSign,
     Clock3,
     Filter,
+    Flame,
+    MessageCircle,
     PiggyBank,
     Plus,
     RefreshCw,
+    Rocket,
     Sparkles,
     Target,
     TrendingUp,
+    Trophy,
     Wallet,
+    Zap,
 } from 'lucide-react';
 import type { FinancialProfileFormData, Goal, GoalFormData } from '@/types';
 
@@ -39,6 +47,13 @@ function getErrorMessage(error: unknown, fallback: string): string {
 
 function formatCurrency(value: number): string {
     return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function formatCompactCurrency(value: number): string {
+    if (value >= 1000) {
+        return `R$ ${(value / 1000).toFixed(1).replace('.0', '')}k`;
+    }
+    return formatCurrency(value);
 }
 
 function priorityScore(priority: Goal['priority']): number {
@@ -86,13 +101,112 @@ function getDaysUntil(dateValue: string | null): number | null {
     return Math.ceil((target.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
 }
 
-const FILTER_LABELS: Record<GoalsViewFilter, string> = {
-    all: 'Todas',
-    active: 'Ativas',
-    focus: 'Em foco',
-    completed: 'Concluidas',
-    cancelled: 'Pausadas',
+const FILTER_LABELS: Record<GoalsViewFilter, { label: string; icon: typeof Target }> = {
+    all: { label: 'Todas', icon: Target },
+    active: { label: 'Ativas', icon: Zap },
+    focus: { label: 'Em foco', icon: Flame },
+    completed: { label: 'Concluidas', icon: Trophy },
+    cancelled: { label: 'Pausadas', icon: Clock3 },
 };
+
+function SmartInsightBanner({ goals, activeGoals, completedGoals, focusGoals }: {
+    goals: Goal[];
+    activeGoals: Goal[];
+    completedGoals: Goal[];
+    focusGoals: Goal[];
+}) {
+    if (goals.length === 0) return null;
+
+    // Pick the most relevant insight
+    const urgentGoal = activeGoals.find(g => {
+        const days = getDaysUntil(g.deadline);
+        return days !== null && days <= 3 && days >= 0;
+    });
+
+    const almostDoneGoal = activeGoals.find(g => {
+        const progress = getGoalProgress(g);
+        return progress !== null && progress >= 85 && progress < 100;
+    });
+
+    const overdueGoal = activeGoals.find(g => {
+        const days = getDaysUntil(g.deadline);
+        return days !== null && days < 0;
+    });
+
+    if (overdueGoal) {
+        const days = Math.abs(getDaysUntil(overdueGoal.deadline)!);
+        return (
+            <div className="flex items-center gap-3 rounded-2xl border border-red-400/20 bg-gradient-to-r from-red-500/10 via-red-900/5 to-transparent p-4">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-500/15">
+                    <CalendarClock className="h-5 w-5 text-red-300" />
+                </div>
+                <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-white">Meta atrasada</p>
+                    <p className="mt-0.5 text-xs text-red-200/80">
+                        <span className="font-medium text-red-200">"{overdueGoal.title}"</span> está {days} dia{days !== 1 ? 's' : ''} atrasada. Atualize o prazo ou conclua.
+                    </p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-red-400/50" />
+            </div>
+        );
+    }
+
+    if (urgentGoal) {
+        const days = getDaysUntil(urgentGoal.deadline)!;
+        return (
+            <div className="flex items-center gap-3 rounded-2xl border border-amber-400/20 bg-gradient-to-r from-amber-500/10 via-amber-900/5 to-transparent p-4">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-500/15">
+                    <Flame className="h-5 w-5 text-amber-300" />
+                </div>
+                <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-white">Prazo chegando</p>
+                    <p className="mt-0.5 text-xs text-amber-200/80">
+                        <span className="font-medium text-amber-200">"{urgentGoal.title}"</span> vence em {days === 0 ? 'hoje' : `${days} dia${days !== 1 ? 's' : ''}`}!
+                    </p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-amber-400/50" />
+            </div>
+        );
+    }
+
+    if (almostDoneGoal) {
+        const progress = getGoalProgress(almostDoneGoal)!;
+        return (
+            <div className="flex items-center gap-3 rounded-2xl border border-emerald-400/20 bg-gradient-to-r from-emerald-500/10 via-emerald-900/5 to-transparent p-4">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/15">
+                    <Rocket className="h-5 w-5 text-emerald-300" />
+                </div>
+                <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-white">Quase lá! 🎉</p>
+                    <p className="mt-0.5 text-xs text-emerald-200/80">
+                        <span className="font-medium text-emerald-200">"{almostDoneGoal.title}"</span> está em {progress.toFixed(0)}%. Falta pouco para concluir!
+                    </p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-emerald-400/50" />
+            </div>
+        );
+    }
+
+    if (completedGoals.length > 0 && activeGoals.length > 0) {
+        return (
+            <div className="flex items-center gap-3 rounded-2xl border border-indigo-400/15 bg-gradient-to-r from-indigo-500/8 via-purple-900/5 to-transparent p-4">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-500/15">
+                    <Award className="h-5 w-5 text-indigo-300" />
+                </div>
+                <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-white">
+                        {completedGoals.length} meta{completedGoals.length !== 1 ? 's' : ''} concluída{completedGoals.length !== 1 ? 's' : ''}
+                    </p>
+                    <p className="mt-0.5 text-xs text-indigo-200/70">
+                        Continue assim! Você tem {activeGoals.length} meta{activeGoals.length !== 1 ? 's' : ''} ativa{activeGoals.length !== 1 ? 's' : ''} e {focusGoals.length} em foco.
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
+    return null;
+}
 
 export function Goals() {
     const { profile, loading: profileLoading, hasCompleted, save: saveProfile } = useFinancialProfile();
@@ -290,8 +404,17 @@ export function Goals() {
         );
     }
 
+    const filterCounts: Record<GoalsViewFilter, number> = {
+        all: sortedGoals.length,
+        active: activeGoals.length,
+        focus: focusGoals.length,
+        completed: completedGoals.length,
+        cancelled: cancelledGoals.length,
+    };
+
     return (
-        <div className="animate-fade-in space-y-6 pb-20 lg:pb-0">
+        <div className="animate-fade-in space-y-5 pb-20 lg:pb-0">
+            {/* ── Tab switcher ── */}
             <div className="flex w-full flex-col gap-1 rounded-2xl border border-surface-700/40 bg-surface-900/60 p-1 sm:w-auto sm:flex-row sm:gap-0">
                 <button
                     type="button"
@@ -323,214 +446,208 @@ export function Goals() {
 
             {activeTab === 'goals' ? (
                 <>
-                    <div className="grid gap-4 xl:grid-cols-[1.6fr_1fr]">
-                        <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(99,102,241,0.22),transparent_45%),radial-gradient(circle_at_85%_30%,rgba(16,185,129,0.14),transparent_35%),linear-gradient(135deg,rgba(15,23,42,0.92),rgba(15,23,42,0.68))] p-6">
-                            <div className="absolute -right-10 -top-10 h-36 w-36 rounded-full bg-indigo-400/10 blur-3xl" />
-                            <div className="relative space-y-5">
-                                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                                    <div className="space-y-2">
-                                        <div className="inline-flex items-center gap-2 rounded-full border border-indigo-400/20 bg-indigo-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-indigo-200">
-                                            <Sparkles className="h-3.5 w-3.5" />
-                                            Painel de metas
-                                        </div>
-                                        <div>
-                                            <h1 className="text-2xl font-bold text-white">Metas</h1>
-                                            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-300">
-                                                Organize objetivos, acompanhe o progresso e use o WhatsApp para pedir detalhes, atualizar valores, concluir metas e ajustar prioridades sem abrir o painel.
-                                            </p>
-                                        </div>
-                                    </div>
+                    {/* ══════════════════════════════════════════════ */}
+                    {/*               COMPACT HERO + STATS           */}
+                    {/* ══════════════════════════════════════════════ */}
+                    <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(99,102,241,0.18),transparent_50%),radial-gradient(circle_at_85%_15%,rgba(16,185,129,0.12),transparent_40%)] p-5 sm:p-6">
+                        <div className="absolute -right-10 -top-10 h-36 w-36 rounded-full bg-indigo-400/8 blur-3xl" />
 
-                                    <div className="flex flex-wrap items-center gap-2">
-                                        <Button variant="secondary" onClick={handleRegenerateAI} isLoading={generating} size="sm">
-                                            <RefreshCw className="mr-2 h-4 w-4" />
-                                            Regenerar IA
-                                        </Button>
-                                        <Button onClick={handleCreate} size="sm">
-                                            <Plus className="mr-2 h-4 w-4" />
-                                            Nova meta
-                                        </Button>
+                        <div className="relative">
+                            {/* Title row */}
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                <div className="flex items-center gap-3">
+                                    <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-indigo-500/15 text-indigo-300">
+                                        <Target className="h-5 w-5" />
+                                    </div>
+                                    <div>
+                                        <h1 className="text-xl font-bold text-white">Metas</h1>
+                                        <p className="text-xs text-slate-400">Acompanhe, conclua e organize seus objetivos</p>
                                     </div>
                                 </div>
 
-                                <div className="grid gap-3 sm:grid-cols-3">
-                                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Ativas</p>
-                                        <p className="mt-2 text-2xl font-semibold text-white">{activeGoals.length}</p>
-                                        <p className="mt-1 text-xs text-slate-400">em acompanhamento agora</p>
-                                    </div>
-                                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Acumulado</p>
-                                        <p className="mt-2 text-xl font-semibold text-white">{formatCurrency(portfolioStats.totalCurrent)}</p>
-                                        <p className="mt-1 text-xs text-slate-400">somando metas com alvo</p>
-                                    </div>
-                                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Progresso medio</p>
-                                        <p className="mt-2 text-2xl font-semibold text-white">{portfolioStats.averageProgress.toFixed(0)}%</p>
-                                        <p className="mt-1 text-xs text-slate-400">nas metas ativas com alvo</p>
-                                    </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <Button variant="secondary" onClick={handleRegenerateAI} isLoading={generating} size="sm">
+                                        <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                                        Gerar com IA
+                                    </Button>
+                                    <Button onClick={handleCreate} size="sm">
+                                        <Plus className="mr-1.5 h-3.5 w-3.5" />
+                                        Nova meta
+                                    </Button>
                                 </div>
                             </div>
+
+                            {/* Stats row */}
+                            <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                                <div className="rounded-2xl border border-indigo-400/15 bg-indigo-500/[0.06] p-3.5">
+                                    <div className="flex items-center gap-2">
+                                        <Zap className="h-3.5 w-3.5 text-indigo-300" />
+                                        <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-indigo-300/80">Ativas</p>
+                                    </div>
+                                    <p className="mt-1.5 text-2xl font-bold text-white">{activeGoals.length}</p>
+                                </div>
+                                <div className="rounded-2xl border border-emerald-400/15 bg-emerald-500/[0.06] p-3.5">
+                                    <div className="flex items-center gap-2">
+                                        <TrendingUp className="h-3.5 w-3.5 text-emerald-300" />
+                                        <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-emerald-300/80">Progresso</p>
+                                    </div>
+                                    <p className="mt-1.5 text-2xl font-bold text-white">{portfolioStats.averageProgress.toFixed(0)}%</p>
+                                </div>
+                                <div className="rounded-2xl border border-amber-400/15 bg-amber-500/[0.06] p-3.5">
+                                    <div className="flex items-center gap-2">
+                                        <CircleDollarSign className="h-3.5 w-3.5 text-amber-300" />
+                                        <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-amber-300/80">Acumulado</p>
+                                    </div>
+                                    <p className="mt-1.5 text-lg font-bold text-white">{formatCompactCurrency(portfolioStats.totalCurrent)}</p>
+                                </div>
+                                <div className="rounded-2xl border border-purple-400/15 bg-purple-500/[0.06] p-3.5">
+                                    <div className="flex items-center gap-2">
+                                        <Target className="h-3.5 w-3.5 text-purple-300" />
+                                        <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-purple-300/80">Falta</p>
+                                    </div>
+                                    <p className="mt-1.5 text-lg font-bold text-white">{formatCompactCurrency(portfolioStats.totalRemaining)}</p>
+                                </div>
+                            </div>
+
+                            {/* Overall progress bar */}
+                            {portfolioStats.totalTarget > 0 && (
+                                <div className="mt-4">
+                                    <div className="mb-1.5 flex items-center justify-between text-[11px]">
+                                        <span className="text-slate-400">Progresso geral</span>
+                                        <span className="font-semibold text-white">{formatCurrency(portfolioStats.totalCurrent)} de {formatCurrency(portfolioStats.totalTarget)}</span>
+                                    </div>
+                                    <div className="h-2 overflow-hidden rounded-full bg-white/[0.08]">
+                                        <div
+                                            className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-purple-500 to-emerald-400 transition-all duration-1000"
+                                            style={{ width: `${Math.min(100, (portfolioStats.totalCurrent / portfolioStats.totalTarget) * 100)}%` }}
+                                        />
+                                    </div>
+                                </div>
+                            )}
                         </div>
+                    </section>
 
-                        <div className="rounded-3xl border border-surface-700 bg-surface-900/60 p-5">
-                            <div className="mb-4 flex items-center gap-2">
-                                <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-300">
-                                    <CircleDollarSign className="h-4.5 w-4.5" />
-                                </div>
-                                <div>
-                                    <p className="text-sm font-semibold text-white">Comandos no WhatsApp</p>
-                                    <p className="text-xs text-gray-400">agora com mais controle de metas</p>
-                                </div>
-                            </div>
-                            <div className="space-y-2 text-sm text-gray-300">
-                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">"como estao minhas metas?"</div>
-                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">"atualize a meta reserva para 2500"</div>
-                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">"conclui minha meta viagem"</div>
-                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">"mude a prioridade da meta cartao para alta"</div>
-                            </div>
-                        </div>
-                    </div>
+                    {/* ── Smart Insight Banner ── */}
+                    <SmartInsightBanner
+                        goals={goals}
+                        activeGoals={activeGoals}
+                        completedGoals={completedGoals}
+                        focusGoals={focusGoals}
+                    />
 
+                    {/* ── Financial Profile Strip ── */}
                     {profile && (
-                        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                            <div className="rounded-2xl border border-surface-700 bg-surface-900/50 p-4">
-                                <div className="mb-2 flex items-center gap-2">
-                                    <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-500/10">
-                                        <ArrowUpRight className="h-4 w-4 text-emerald-400" />
-                                    </div>
-                                    <span className="text-xs text-gray-500">Renda</span>
+                        <div className="grid grid-cols-4 gap-2">
+                            <div className="rounded-xl border border-surface-700/60 bg-surface-900/40 px-3 py-2.5">
+                                <div className="flex items-center gap-1.5">
+                                    <ArrowUpRight className="h-3 w-3 text-emerald-400" />
+                                    <span className="text-[10px] font-medium uppercase tracking-wider text-gray-500">Renda</span>
                                 </div>
-                                <p className="text-sm font-semibold text-white">{formatCurrency(profile.monthlyIncome)}</p>
+                                <p className="mt-1 text-sm font-semibold text-white">{formatCompactCurrency(profile.monthlyIncome)}</p>
                             </div>
-                            <div className="rounded-2xl border border-surface-700 bg-surface-900/50 p-4">
-                                <div className="mb-2 flex items-center gap-2">
-                                    <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-red-500/10">
-                                        <ArrowDownRight className="h-4 w-4 text-red-400" />
-                                    </div>
-                                    <span className="text-xs text-gray-500">Fixos</span>
+                            <div className="rounded-xl border border-surface-700/60 bg-surface-900/40 px-3 py-2.5">
+                                <div className="flex items-center gap-1.5">
+                                    <ArrowDownRight className="h-3 w-3 text-red-400" />
+                                    <span className="text-[10px] font-medium uppercase tracking-wider text-gray-500">Fixos</span>
                                 </div>
-                                <p className="text-sm font-semibold text-white">{formatCurrency(profile.fixedExpenses)}</p>
+                                <p className="mt-1 text-sm font-semibold text-white">{formatCompactCurrency(profile.fixedExpenses)}</p>
                             </div>
-                            <div className="rounded-2xl border border-surface-700 bg-surface-900/50 p-4">
-                                <div className="mb-2 flex items-center gap-2">
-                                    <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/10">
-                                        <Wallet className="h-4 w-4 text-amber-400" />
-                                    </div>
-                                    <span className="text-xs text-gray-500">Variaveis</span>
+                            <div className="rounded-xl border border-surface-700/60 bg-surface-900/40 px-3 py-2.5">
+                                <div className="flex items-center gap-1.5">
+                                    <Wallet className="h-3 w-3 text-amber-400" />
+                                    <span className="text-[10px] font-medium uppercase tracking-wider text-gray-500">Var.</span>
                                 </div>
-                                <p className="text-sm font-semibold text-white">{formatCurrency(profile.variableExpenses)}</p>
+                                <p className="mt-1 text-sm font-semibold text-white">{formatCompactCurrency(profile.variableExpenses)}</p>
                             </div>
-                            <div className="rounded-2xl border border-surface-700 bg-surface-900/50 p-4">
-                                <div className="mb-2 flex items-center gap-2">
-                                    <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-500/10">
-                                        <PiggyBank className="h-4 w-4 text-indigo-400" />
-                                    </div>
-                                    <span className="text-xs text-gray-500">Meta de economia</span>
+                            <div className="rounded-xl border border-surface-700/60 bg-surface-900/40 px-3 py-2.5">
+                                <div className="flex items-center gap-1.5">
+                                    <PiggyBank className="h-3 w-3 text-indigo-400" />
+                                    <span className="text-[10px] font-medium uppercase tracking-wider text-gray-500">Poupar</span>
                                 </div>
-                                <p className="text-sm font-semibold text-white">{profile.savingsTargetPct}%</p>
+                                <p className="mt-1 text-sm font-semibold text-white">{profile.savingsTargetPct}%</p>
                             </div>
                         </div>
                     )}
 
-                    <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-                        <div className="rounded-3xl border border-surface-700 bg-surface-900/55 p-5">
-                            <div className="mb-5 flex items-center gap-3">
-                                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-indigo-500/10 text-indigo-300">
-                                    <TrendingUp className="h-5 w-5" />
-                                </div>
-                                <div>
-                                    <h2 className="text-sm font-semibold text-white">Radar de progresso</h2>
-                                    <p className="text-xs text-gray-400">o panorama rapido das metas que pedem atencao</p>
-                                </div>
+                    {/* ── Highlights Row: Nearest deadline + Closest to finish + WhatsApp tips ── */}
+                    <div className="grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-2xl border border-white/[0.06] bg-surface-900/50 p-4">
+                            <div className="mb-2 flex items-center gap-2">
+                                <CalendarClock className="h-4 w-4 text-amber-300" />
+                                <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">Prazo mais próximo</p>
                             </div>
-
-                            <div className="grid gap-3 sm:grid-cols-3">
-                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-4">
-                                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">Falta total</p>
-                                    <p className="mt-2 text-lg font-semibold text-white">{formatCurrency(portfolioStats.totalRemaining)}</p>
-                                    <p className="mt-1 text-xs text-gray-400">para bater as metas ativas com alvo</p>
-                                </div>
-                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-4">
-                                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">Mais proxima</p>
-                                    <p className="mt-2 text-sm font-semibold text-white">
-                                        {portfolioStats.nearestDeadlineGoal?.title ?? 'Sem prazo definido'}
-                                    </p>
-                                    <p className="mt-1 text-xs text-gray-400">
-                                        {portfolioStats.nearestDeadlineGoal?.deadline ?? 'Adicione prazos para ganhar mais contexto'}
-                                    </p>
-                                </div>
-                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-4">
-                                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">Mais perto da linha</p>
-                                    <p className="mt-2 text-sm font-semibold text-white">
-                                        {portfolioStats.closestToCompleteGoal?.title ?? 'Sem meta com alvo'}
-                                    </p>
-                                    <p className="mt-1 text-xs text-gray-400">
-                                        {portfolioStats.closestToCompleteGoal
-                                            ? `${(getGoalProgress(portfolioStats.closestToCompleteGoal) ?? 0).toFixed(0)}% concluido`
-                                            : 'Adicione valores alvo para medir progresso'}
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="rounded-3xl border border-surface-700 bg-surface-900/55 p-5">
-                            <div className="mb-4 flex items-center gap-3">
-                                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-300">
-                                    <Clock3 className="h-5 w-5" />
-                                </div>
-                                <div>
-                                    <h2 className="text-sm font-semibold text-white">Visao rapida</h2>
-                                    <p className="text-xs text-gray-400">saiba onde agir primeiro</p>
-                                </div>
-                            </div>
-                            <div className="space-y-3 text-sm">
-                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">
-                                    <p className="text-xs uppercase tracking-[0.18em] text-gray-500">Em foco</p>
-                                    <p className="mt-1 font-medium text-white">{focusGoals.length} meta(s)</p>
-                                    <p className="mt-1 text-xs text-gray-400">alta prioridade, prazo proximo ou progresso acelerado</p>
-                                </div>
-                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">
-                                    <p className="text-xs uppercase tracking-[0.18em] text-gray-500">Concluidas</p>
-                                    <p className="mt-1 font-medium text-white">{completedGoals.length} meta(s)</p>
-                                    <p className="mt-1 text-xs text-gray-400">use o WhatsApp para reativar ou criar a proxima</p>
-                                </div>
-                                <div className="rounded-2xl border border-white/5 bg-surface-950/30 p-3">
-                                    <p className="text-xs uppercase tracking-[0.18em] text-gray-500">Pausadas</p>
-                                    <p className="mt-1 font-medium text-white">{cancelledGoals.length} meta(s)</p>
-                                    <p className="mt-1 text-xs text-gray-400">retome quando fizer sentido</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="rounded-3xl border border-surface-700 bg-surface-900/50 p-4">
-                        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                            <div className="flex items-center gap-2">
-                                <Filter className="h-4 w-4 text-indigo-300" />
-                                <p className="text-sm font-semibold text-white">Filtrar metas</p>
-                            </div>
-                            <p className="text-xs text-gray-400">
-                                {filteredGoals.length} meta{filteredGoals.length !== 1 ? 's' : ''} em exibicao
+                            <p className="text-sm font-semibold text-white truncate">
+                                {portfolioStats.nearestDeadlineGoal?.title ?? 'Nenhum prazo'}
+                            </p>
+                            <p className="mt-0.5 text-xs text-gray-500">
+                                {portfolioStats.nearestDeadlineGoal?.deadline
+                                    ? (() => {
+                                        const d = getDaysUntil(portfolioStats.nearestDeadlineGoal!.deadline);
+                                        if (d === null) return '';
+                                        if (d < 0) return `Atrasada há ${Math.abs(d)} dias`;
+                                        if (d === 0) return 'Vence hoje';
+                                        return `Em ${d} dia${d !== 1 ? 's' : ''}`;
+                                    })()
+                                    : 'Adicione prazos às metas'}
                             </p>
                         </div>
-                        <div className="flex flex-wrap gap-2">
-                            {(Object.keys(FILTER_LABELS) as GoalsViewFilter[]).map((filterKey) => (
-                                <button
-                                    key={filterKey}
-                                    type="button"
-                                    onClick={() => setViewFilter(filterKey)}
-                                    className={`rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition-all ${viewFilter === filterKey
-                                            ? 'border-indigo-400/30 bg-indigo-500/10 text-indigo-200'
-                                            : 'border-surface-700 bg-surface-800 text-gray-400 hover:text-gray-200'
-                                        }`}
-                                >
-                                    {FILTER_LABELS[filterKey]}
-                                </button>
-                            ))}
+                        <div className="rounded-2xl border border-white/[0.06] bg-surface-900/50 p-4">
+                            <div className="mb-2 flex items-center gap-2">
+                                <Trophy className="h-4 w-4 text-emerald-300" />
+                                <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">Mais perto de concluir</p>
+                            </div>
+                            <p className="text-sm font-semibold text-white truncate">
+                                {portfolioStats.closestToCompleteGoal?.title ?? 'Nenhuma com alvo'}
+                            </p>
+                            <p className="mt-0.5 text-xs text-gray-500">
+                                {portfolioStats.closestToCompleteGoal
+                                    ? `${(getGoalProgress(portfolioStats.closestToCompleteGoal) ?? 0).toFixed(0)}% concluído`
+                                    : 'Defina valores alvo'}
+                            </p>
+                        </div>
+                        <div className="rounded-2xl border border-white/[0.06] bg-surface-900/50 p-4">
+                            <div className="mb-2 flex items-center gap-2">
+                                <MessageCircle className="h-4 w-4 text-indigo-300" />
+                                <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">Dica WhatsApp</p>
+                            </div>
+                            <p className="text-[13px] font-medium text-white leading-snug">
+                                "atualize minha meta [nome] para R$ [valor]"
+                            </p>
+                            <p className="mt-0.5 text-xs text-gray-500">
+                                Gerencie metas direto pelo chat
+                            </p>
                         </div>
                     </div>
 
+                    {/* ── Filter pills ── */}
+                    <div className="rounded-2xl border border-surface-700/50 bg-surface-900/40 p-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <Filter className="h-3.5 w-3.5 text-gray-500" />
+                            {(Object.keys(FILTER_LABELS) as GoalsViewFilter[]).map((filterKey) => {
+                                const { label, icon: Icon } = FILTER_LABELS[filterKey];
+                                const count = filterCounts[filterKey];
+                                return (
+                                    <button
+                                        key={filterKey}
+                                        type="button"
+                                        onClick={() => setViewFilter(filterKey)}
+                                        className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-all ${viewFilter === filterKey
+                                                ? 'border-indigo-400/30 bg-indigo-500/12 text-indigo-200'
+                                                : 'border-surface-700/60 bg-transparent text-gray-400 hover:text-gray-200 hover:bg-white/[0.03]'
+                                            }`}
+                                    >
+                                        <Icon className="h-3 w-3" />
+                                        {label}
+                                        <span className={`ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] ${viewFilter === filterKey ? 'bg-indigo-500/20 text-indigo-200' : 'bg-white/5 text-gray-500'}`}>
+                                            {count}
+                                        </span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {/* ── Goal Cards ── */}
                     {goals.length === 0 ? (
                         <EmptyState
                             icon={Target}
@@ -561,6 +678,7 @@ export function Goals() {
                         </div>
                     )}
 
+                    {/* FAB mobile */}
                     <button
                         onClick={handleCreate}
                         className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 transition-transform active:scale-95 lg:hidden"

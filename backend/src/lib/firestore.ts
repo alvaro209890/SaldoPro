@@ -404,6 +404,7 @@ export interface UpdateUserDocumentInput {
   normalizedTitle?: string;
   normalizedDescription?: string | null;
   searchTokens?: string[];
+  storagePath?: string;
   status?: 'ready' | 'deleted';
 }
 

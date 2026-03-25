@@ -46,7 +46,7 @@ const qrcode_terminal_1 = __importDefault(require("qrcode-terminal"));
 const assistant_1 = require("../ai/assistant");
 const document_storage_1 = require("../lib/document-storage");
 const daily_ai_quota_1 = require("../lib/daily-ai-quota");
-const firebase_user_access_1 = require("../lib/firebase-user-access");
+const supabase_user_access_1 = require("../lib/supabase-user-access");
 const subscription_access_1 = require("../lib/subscription-access");
 const env_1 = require("../config/env");
 const firestore_1 = require("../lib/firestore");
@@ -1200,7 +1200,7 @@ class WhatsAppClient {
             this.rememberInbound(messageId);
             return;
         }
-        const ownerActive = await (0, firebase_user_access_1.isFirebaseUserActive)(binding.uid);
+        const ownerActive = await (0, supabase_user_access_1.isSupabaseUserActive)(binding.uid);
         if (!ownerActive) {
             logger_1.logger.warn('MSG_BLOCKED_USER: ignoring inbound WhatsApp message for blocked/unavailable account', {
                 uid: binding.uid,

@@ -1970,6 +1970,18 @@ export async function processWhatsAppAIMessage(
   const ai = await queryGroqAssistant(sanitizedMessages, context, {
     extraSystemPrompt: options.extraSystemPrompt
   });
+  // Attach imageDataUrl to the action if we have one and the action supports it
+  let imageDataUrlStr = [...sanitizedMessages].reverse().find((message) => message.role === 'user' && message.imageDataUrl)?.imageDataUrl;
+  
+  if (ai.actionObjects.length > 0) {
+    ai.actionObjects = ai.actionObjects.map((action) => {
+      if ((action.action === 'add_transaction' || action.action === 'add_recurring_transaction') && imageDataUrlStr) {
+        return { ...action, imageDataUrl: imageDataUrlStr };
+      }
+      return action;
+    });
+  }
+
   const preparedActions = prepareActionsForExecution(ai.actionObjects, {
     ...options,
     latestUserMessageText
@@ -2150,6 +2162,35 @@ async function executeAction(
       trackUndoableAction(uid, { actionKind: 'added', resourceId: transactionId });
       const categoryName = categories.find((c) => c.id === category)?.name ?? category;
 
+      // Handle automatic document creation from WhatsApp image
+      if (action.imageDataUrl) {
+        try {
+          const docHelpers = await import('../lib/document-storage.js');
+          const firestoreHelpers = await import('../lib/firestore.js');
+          
+          const pendingDoc = await docHelpers.uploadPendingDocument(uid, action.imageDataUrl);
+          const documentId = await firestoreHelpers.createUserDocument(uid, {
+            source: 'whatsapp_receipt',
+            title: `Comprovante - ${categoryName} - ${payload.date}`,
+            normalizedTitle: `comprovante ${categoryName.toLowerCase()} ${payload.date}`,
+            storagePath: 'pending', // Will be updated
+            mimeType: pendingDoc.mimeType,
+            sizeBytes: pendingDoc.sizeBytes,
+            status: 'ready'
+          });
+          const finalPath = await docHelpers.finalizePendingDocumentMove(
+            uid,
+            pendingDoc.storagePath,
+            documentId,
+            pendingDoc.mimeType
+          );
+          await firestoreHelpers.updateUserDocument(uid, documentId, { storagePath: finalPath });
+          logger.info('Auto-saved receipt document', { uid, transactionId, documentId });
+        } catch (error) {
+          logger.error('Failed to auto-save receipt document', { uid, transactionId, error });
+        }
+      }
+
       return {
         kind: 'added',
         receipt: {
@@ -2291,6 +2332,35 @@ async function executeAction(
       invalidateContextCache(uid);
       trackUndoableAction(uid, { actionKind: 'added_recurring', resourceId: recurringId });
       const categoryName = categories.find((c) => c.id === category)?.name ?? category;
+
+      // Handle automatic document creation from WhatsApp image
+      if (action.imageDataUrl) {
+        try {
+          const docHelpers = await import('../lib/document-storage.js');
+          const firestoreHelpers = await import('../lib/firestore.js');
+          
+          const pendingDoc = await docHelpers.uploadPendingDocument(uid, action.imageDataUrl);
+          const documentId = await firestoreHelpers.createUserDocument(uid, {
+            source: 'whatsapp_receipt',
+            title: `Comprovante Recorrente - ${categoryName} - ${payload.startDate}`,
+            normalizedTitle: `comprovante recorrente ${categoryName.toLowerCase()} ${payload.startDate}`,
+            storagePath: 'pending', // Will be updated
+            mimeType: pendingDoc.mimeType,
+            sizeBytes: pendingDoc.sizeBytes,
+            status: 'ready'
+          });
+          const finalPath = await docHelpers.finalizePendingDocumentMove(
+            uid,
+            pendingDoc.storagePath,
+            documentId,
+            pendingDoc.mimeType
+          );
+          await firestoreHelpers.updateUserDocument(uid, documentId, { storagePath: finalPath });
+          logger.info('Auto-saved receipt document for recurring tx', { uid, recurringId, documentId });
+        } catch (error) {
+          logger.error('Failed to auto-save receipt document for recurring tx', { uid, recurringId, error });
+        }
+      }
 
       return {
         kind: 'added_recurring',
