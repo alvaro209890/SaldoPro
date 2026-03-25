@@ -1159,13 +1159,15 @@ function detectTransactionType(text) {
     return 'expense';
 }
 function extractDescriptionFromText(text) {
-    const labeledDescription = text.match(/\b(?:descricao|estabelecimento|loja|empresa|favorecido|recebedor)\s*[:\-]\s*([^\n,.;]+)/i)?.[1];
+    const labeledDescription = text.match(/\b(?:descricao|estabelecimento|loja|empresa|favorecido|recebedor|compra)\s*[:\-]\s*([^\n,.;]+)/i)?.[1];
     if (labeledDescription) {
         const value = labeledDescription.trim().slice(0, 120);
         if (value.length > 0)
             return value;
     }
-    return 'Lancamento via imagem';
+    // Try to clean text and use it as description so `resolveBestCategoryId` can use it
+    const clean = text.replace(/[*#]/g, '').replace(/\n/g, ' ').trim();
+    return clean.slice(0, 120) || 'Lancamento via imagem';
 }
 function stripVisionContradictions(reply) {
     const normalized = normalizeTextForMatch(reply);
@@ -1305,13 +1307,16 @@ async function callGroqModel(modelId, systemPrompt, formattedMessages, isVisionR
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), env_1.env.groqTimeoutMs);
     const startTime = Date.now();
+    const finalSystemPrompt = isVisionRequest
+        ? systemPrompt + '\n\nATENCAO: RETORNE APENAS UM JSON VALIDO. NAO USE MARKDOWN. NAO COLOQUE TEXTO FORA DO JSON.'
+        : systemPrompt;
     try {
         const requestBody = JSON.stringify({
             model: modelId,
             temperature: 0.5,
             ...(isVisionRequest ? {} : { response_format: { type: 'json_object' } }),
             messages: [
-                { role: 'system', content: systemPrompt },
+                { role: 'system', content: finalSystemPrompt },
                 ...formattedMessages
             ]
         });
