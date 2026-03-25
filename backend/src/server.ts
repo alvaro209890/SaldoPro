@@ -3,6 +3,7 @@ import cors from 'cors';
 import { env } from './config/env';
 import { logger } from './lib/logger';
 import { healthRouter } from './routes/health';
+import { createAuthRouter } from './routes/auth';
 import { createQrPageRouter } from './routes/qr-page';
 import { createWhatsAppRouter } from './routes/whatsapp';
 import { createAdminRouter } from './routes/admin';
@@ -28,6 +29,7 @@ app.use(express.json({
   }
 }));
 app.use(healthRouter);
+app.use('/api/auth', createAuthRouter());
 app.use(createQrPageRouter(whatsappManager));
 app.use('/api/whatsapp', createWhatsAppRouter(whatsappManager));
 app.use('/api/admin', createAdminRouter(whatsappManager));

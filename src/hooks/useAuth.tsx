@@ -1,9 +1,14 @@
 import { createContext, useContext, useEffect, useState } from 'react';
-import type { User } from '@supabase/supabase-js';
-import { supabase } from '@/supabase/client';
+import {
+    AUTH_CHANGED_EVENT,
+    getStoredAuthSession,
+    restoreAuthSession,
+    type AuthSession,
+    type AuthUser,
+} from '@/supabase/auth';
 
 interface AuthContextType {
-    user: User | null;
+    user: AuthUser | null;
     loading: boolean;
     displayName: string | null;
 }
@@ -15,31 +20,37 @@ const AuthContext = createContext<AuthContextType>({
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-    const [user, setUser] = useState<User | null>(null);
+    const [user, setUser] = useState<AuthUser | null>(null);
     const [loading, setLoading] = useState(true);
     const [displayName, setDisplayName] = useState<string | null>(null);
 
+    const applySession = (session: AuthSession | null) => {
+        const currentUser = session?.user ?? null;
+        setUser(currentUser);
+        setDisplayName((currentUser?.user_metadata?.display_name as string | undefined) ?? null);
+    };
+
     useEffect(() => {
-        // Initial session fetch
-        supabase.auth.getSession().then(({ data: { session } }) => {
-            const currentUser = session?.user ?? null;
-            setUser(currentUser);
-            setDisplayName(currentUser?.user_metadata?.display_name || null);
+        let cancelled = false;
+        applySession(getStoredAuthSession());
+
+        void restoreAuthSession().then((session) => {
+            if (cancelled) return;
+            applySession(session);
             setLoading(false);
         });
 
-        // Listen for auth changes (login, logout, token refresh)
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(
-            (_event, session) => {
-                const currentUser = session?.user ?? null;
-                setUser(currentUser);
-                setDisplayName(currentUser?.user_metadata?.display_name || null);
-                setLoading(false);
-            }
-        );
+        const handleAuthChanged = (event: Event) => {
+            const detail = (event as CustomEvent<{ session?: AuthSession | null }>).detail;
+            applySession(detail?.session ?? null);
+            setLoading(false);
+        };
+
+        window.addEventListener(AUTH_CHANGED_EVENT, handleAuthChanged);
 
         return () => {
-            subscription.unsubscribe();
+            cancelled = true;
+            window.removeEventListener(AUTH_CHANGED_EVENT, handleAuthChanged);
         };
     }, []);
 

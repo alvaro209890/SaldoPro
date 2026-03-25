@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import { requireFirebaseAuth } from '../middleware/firebase-auth';
+import { requireSupabaseAuth } from '../middleware/supabase-auth';
 import { requirePlanFeature } from '../middleware/plan-access';
 import { type GroqChatMessage } from '../ai/groq';
 import { processWebAIMessage } from '../ai/assistant';
@@ -22,8 +22,7 @@ function normalizeUtf8Text(value: string): string {
 export function createAiChatRouter(): Router {
     const router = Router();
 
-    // All routes require Firebase Auth
-    router.use(requireFirebaseAuth);
+    router.use(requireSupabaseAuth);
 
     router.post(
         '/chat',

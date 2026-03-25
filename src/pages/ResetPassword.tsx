@@ -75,13 +75,9 @@ export function ResetPassword() {
                 if (cancelled) return;
                 setResetEmail(email);
             })
-            .catch((error: any) => {
+            .catch((error: unknown) => {
                 if (cancelled) return;
-                setCodeError(
-                    error?.code === 'auth/expired-action-code'
-                        ? 'Este link expirou. Solicite um novo email de recuperação.'
-                        : 'Este link de recuperação é inválido ou já foi usado.'
-                );
+                setCodeError(error instanceof Error ? error.message : 'Este link de recuperação é inválido ou já foi usado.');
             })
             .finally(() => {
                 if (!cancelled) {
@@ -100,16 +96,8 @@ export function ResetPassword() {
             await resetPassword(data.email);
             setIsRequestSuccess(true);
             toast.success('Email de recuperação enviado!');
-        } catch (error: any) {
-            toast.error(
-                error.code === 'auth/unauthorized-continue-uri'
-                    ? 'A URL de recuperação não está autorizada no Firebase.'
-                    : error.code === 'auth/invalid-continue-uri'
-                        ? 'A URL configurada para recuperação é inválida.'
-                        : error.code === 'auth/user-not-found'
-                            ? 'Nenhuma conta encontrada com este email'
-                            : 'Erro ao enviar email de recuperação'
-            );
+        } catch (error: unknown) {
+            toast.error(error instanceof Error ? error.message : 'Erro ao enviar email de recuperação');
         } finally {
             setIsRequestLoading(false);
         }
@@ -121,14 +109,8 @@ export function ResetPassword() {
             await confirmUserPasswordReset(oobCode, data.password);
             setIsResetSuccess(true);
             toast.success('Senha redefinida com sucesso!');
-        } catch (error: any) {
-            toast.error(
-                error.code === 'auth/expired-action-code'
-                    ? 'Este link expirou. Solicite um novo email.'
-                    : error.code === 'auth/weak-password'
-                        ? 'A nova senha é muito fraca.'
-                        : 'Erro ao redefinir a senha'
-            );
+        } catch (error: unknown) {
+            toast.error(error instanceof Error ? error.message : 'Erro ao redefinir a senha');
         } finally {
             setIsResetLoading(false);
         }

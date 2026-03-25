@@ -34,14 +34,9 @@ export function Login() {
         setIsLoading(true);
         try {
             await loginUser(data.email, data.password);
-            // Handling rememberMe strategy would go here if not default in Firebase
             navigate('/app/dashboard');
-        } catch (error: any) {
-            toast.error(
-                error.code === 'auth/invalid-credential'
-                    ? 'Email ou senha incorretos'
-                    : 'Erro ao fazer login'
-            );
+        } catch (error: unknown) {
+            toast.error(error instanceof Error ? error.message : 'Erro ao fazer login');
         } finally {
             setIsLoading(false);
         }

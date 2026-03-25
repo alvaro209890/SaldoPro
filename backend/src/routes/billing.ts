@@ -23,7 +23,7 @@ import {
   updateUserSubscriptionRecord
 } from '../lib/subscription-access';
 import { logger } from '../lib/logger';
-import { requireFirebaseAuth } from '../middleware/firebase-auth';
+import { requireSupabaseAuth } from '../middleware/supabase-auth';
 
 interface RawBodyRequest extends Request {
   rawBody?: string;
@@ -152,7 +152,7 @@ export function createBillingRouter(): Router {
     }
   });
 
-  router.get('/subscription', requireFirebaseAuth, async (req: Request, res: Response, next) => {
+  router.get('/subscription', requireSupabaseAuth, async (req: Request, res: Response, next) => {
     try {
       const uid = getUid(req);
       const [subscription, access] = await Promise.all([
@@ -176,7 +176,7 @@ export function createBillingRouter(): Router {
     }
   });
 
-  router.post('/subscriptions/checkout', requireFirebaseAuth, async (req: Request, res: Response, next) => {
+  router.post('/subscriptions/checkout', requireSupabaseAuth, async (req: Request, res: Response, next) => {
     try {
       const uid = getUid(req);
       const body = (req.body ?? {}) as CheckoutBody;
@@ -268,7 +268,7 @@ export function createBillingRouter(): Router {
     }
   });
 
-  router.post('/subscriptions/cancel', requireFirebaseAuth, async (req: Request, res: Response, next) => {
+  router.post('/subscriptions/cancel', requireSupabaseAuth, async (req: Request, res: Response, next) => {
     try {
       const uid = getUid(req);
       const current = await getLatestUserSubscription(uid);

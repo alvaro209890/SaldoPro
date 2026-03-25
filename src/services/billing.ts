@@ -1,4 +1,4 @@
-import { supabase } from '@/supabase/client';
+import { getAccessToken } from '@/supabase/auth';
 import { BACKEND_URL } from '@/config/backend';
 
 export type BillingPlanCode = 'monthly' | 'quarterly' | 'yearly';
@@ -70,8 +70,7 @@ export class BillingApiError extends Error {
 }
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
-    const { data: sessionData } = await supabase.auth.getSession();
-    const token = sessionData.session?.access_token;
+    const token = await getAccessToken();
 
     if (!token) {
         throw new Error('Usu\u00e1rio n\u00e3o autenticado.');

@@ -7,7 +7,7 @@ const daily_ai_quota_1 = require("../lib/daily-ai-quota");
 const mercado_pago_1 = require("../lib/mercado-pago");
 const subscription_access_1 = require("../lib/subscription-access");
 const logger_1 = require("../lib/logger");
-const firebase_auth_1 = require("../middleware/firebase-auth");
+const supabase_auth_1 = require("../middleware/supabase-auth");
 function asString(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
@@ -96,7 +96,7 @@ function createBillingRouter() {
             next(error);
         }
     });
-    router.get('/subscription', firebase_auth_1.requireFirebaseAuth, async (req, res, next) => {
+    router.get('/subscription', supabase_auth_1.requireSupabaseAuth, async (req, res, next) => {
         try {
             const uid = getUid(req);
             const [subscription, access] = await Promise.all([
@@ -119,7 +119,7 @@ function createBillingRouter() {
             next(error);
         }
     });
-    router.post('/subscriptions/checkout', firebase_auth_1.requireFirebaseAuth, async (req, res, next) => {
+    router.post('/subscriptions/checkout', supabase_auth_1.requireSupabaseAuth, async (req, res, next) => {
         try {
             const uid = getUid(req);
             const body = (req.body ?? {});
@@ -203,7 +203,7 @@ function createBillingRouter() {
             next(error);
         }
     });
-    router.post('/subscriptions/cancel', firebase_auth_1.requireFirebaseAuth, async (req, res, next) => {
+    router.post('/subscriptions/cancel', supabase_auth_1.requireSupabaseAuth, async (req, res, next) => {
         try {
             const uid = getUid(req);
             const current = await (0, subscription_access_1.getLatestUserSubscription)(uid);

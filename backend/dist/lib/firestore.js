@@ -8,6 +8,7 @@ exports.bootstrapUserData = bootstrapUserData;
 exports.getUserSettings = getUserSettings;
 exports.updateUserSettings = updateUserSettings;
 exports.getUserProfile = getUserProfile;
+exports.updateUserDisplayName = updateUserDisplayName;
 exports.listAdminUserSnapshots = listAdminUserSnapshots;
 exports.getAdminUserSnapshot = getAdminUserSnapshot;
 exports.getUserCategories = getUserCategories;
@@ -433,6 +434,16 @@ async function getUserProfile(uid) {
         .maybeSingle();
     assertNoError(error, 'getUserProfile');
     return { displayName: data?.display_name ?? '' };
+}
+async function updateUserDisplayName(uid, displayName) {
+    const trimmed = displayName.trim();
+    if (!trimmed)
+        throw new Error('updateUserDisplayName: nome obrigatorio');
+    const { error } = await supabase_1.supabaseAdmin
+        .from('app_users')
+        .update({ display_name: trimmed })
+        .eq('uid', uid);
+    assertNoError(error, 'updateUserDisplayName');
 }
 async function listAdminUserSnapshots() {
     const [usersRes, settingsRes, transactionsRes, remindersRes, categoriesRes, messagesRes] = await Promise.all([

@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.createDataRouter = createDataRouter;
 const node_crypto_1 = require("node:crypto");
 const express_1 = require("express");
-const firebase_auth_1 = require("../middleware/firebase-auth");
+const supabase_auth_1 = require("../middleware/supabase-auth");
 const plan_access_1 = require("../middleware/plan-access");
 const firestore_1 = require("../lib/firestore");
 const groq_1 = require("../ai/groq");
@@ -133,7 +133,7 @@ function getDocumentMetadata(body) {
 }
 function createDataRouter(signupWelcomeDispatcher) {
     const router = (0, express_1.Router)();
-    router.use(firebase_auth_1.requireFirebaseAuth);
+    router.use(supabase_auth_1.requireSupabaseAuth);
     router.post('/bootstrap', async (req, res) => {
         const uid = getUid(req);
         const body = (req.body ?? {});
@@ -158,6 +158,17 @@ function createDataRouter(signupWelcomeDispatcher) {
                 displayName
             });
         }
+    });
+    router.patch('/profile', async (req, res) => {
+        const uid = getUid(req);
+        const body = (req.body ?? {});
+        const displayName = asString(body.displayName);
+        if (!displayName) {
+            res.status(400).json({ error: '`displayName` e obrigatorio.' });
+            return;
+        }
+        await (0, firestore_1.updateUserDisplayName)(uid, displayName);
+        res.json({ ok: true, displayName: displayName.trim() });
     });
     router.get('/settings', async (req, res) => {
         const uid = getUid(req);

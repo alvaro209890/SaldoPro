@@ -1335,6 +1335,24 @@ function buildMutationFailureMessage(actions, detail) {
     }
     return `${baseMessage}\n\n${normalizedDetail}`;
 }
+function isLikelyMutationSuccessClaim(text) {
+    const normalized = normalizeHumanText(text);
+    if (!normalized)
+        return false;
+    const hasSuccessVerb = /\b(registrei|registrado|registrada|adicionei|adicionado|adicionada|salvei|salvo|salva|criei|criado|criada|atualizei|atualizado|atualizada|exclui|excluido|excluida|conclui|concluido|concluida|lancei|lancado|lancada|agendei|agendado|agendada|anotei|anotado|anotada)\b/.test(normalized);
+    const hasEntity = /\b(transacao|transacoes|receita|receitas|despesa|despesas|lancamento|lancamentos|lembrete|lembretes|meta|metas|recorrente|recorrentes|gasto|gastos|conta|contas)\b/.test(normalized);
+    return hasSuccessVerb && hasEntity;
+}
+function buildUnconfirmedMutationMessage(latestUserMessageText, aiReply) {
+    const inferredActions = buildFallbackActionsFromText(latestUserMessageText) ?? [];
+    if (inferredActions.length > 0) {
+        return buildMutationFailureMessage(inferredActions, 'A resposta anterior indicava sucesso, mas nenhuma gravacao foi confirmada no sistema.');
+    }
+    if (isLikelyMutationSuccessClaim(aiReply)) {
+        return 'Nao consegui confirmar nenhuma gravacao no sistema. Tente novamente e, se quiser, envie valor, descricao e data na mesma mensagem.';
+    }
+    return aiReply;
+}
 function prepareActionsForExecution(actions, options) {
     const baseActions = Array.isArray(actions) && actions.length > 0
         ? actions.slice(0, MAX_ACTIONS_PER_MESSAGE)
@@ -1395,7 +1413,9 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
     if (sanitizedMessages.length === 0) {
         return { text: 'Nao consegui interpretar a mensagem recebida.' };
     }
-    // Use cached context if available (TTL 2 min), otherwise fetch from Firestore
+    // Always invalidate cache before AI call so query responses reflect the
+    // latest data — especially important after recent mutations (add/delete).
+    invalidateContextCache(uid);
     const cached = getCachedContext(uid);
     let categories;
     let recentTransactions;
@@ -1474,6 +1494,12 @@ async function processWhatsAppAIMessage(uid, messages, options = {}) {
         if (requestedMutation) {
             return {
                 text: buildMutationFailureMessage(preparedActions.actions).slice(0, env_1.env.maxMessageLength),
+                mediaUrl
+            };
+        }
+        if (isLikelyMutationSuccessClaim(ai.reply)) {
+            return {
+                text: buildUnconfirmedMutationMessage(latestUserMessageText, ai.reply).slice(0, env_1.env.maxMessageLength),
                 mediaUrl
             };
         }

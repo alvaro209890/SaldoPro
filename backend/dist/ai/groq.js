@@ -30,7 +30,7 @@ function toFriendlyTransactionCode(transactionId) {
 function buildFinancialSummary(transactions, settings, categories) {
     if (transactions.length === 0)
         return 'O usuario ainda nao possui transacoes registradas neste mes.';
-    const now = new Date();
+    const now = (0, date_utils_1.getBrasiliaDate)();
     const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     const monthTx = transactions.filter((t) => t.monthKey === currentMonth);
     if (monthTx.length === 0)
@@ -389,6 +389,10 @@ function isQueryOnlyIntent(messages, context) {
     if (/\b(gastei|paguei|comprei|recebi|ganhei|registr|lanca|adiciona|coloca|bota|paga|gasta|receb|todo mes|toda semana|mensal|semanal|anual|edita|altera|muda|exclui|delet|apaga|remove|lembrete|lembrar|lembra|lembre|vencimento|conclu|cumpr|atingi|atingir|reativa|reativar|cancela|cancelar)\b/.test(text)) {
         return false;
     }
+    // Monetary values paired with past-tense action verbs imply a transaction → needs full prompt
+    if (/r\$\s*[\d.,]+|\b\d+[.,]\d{2}\b/.test(text) && /\b(gastei|paguei|comprei|recebi|ganhei|vendi|lucrei|depositei)\b/.test(text)) {
+        return false;
+    }
     // Explicit query patterns → compact prompt
     if (/\b(quanto|qual|quais|como|onde|quando|quem|porque|por ?que|mostr|resum|saldo|total|relat|analise|dica|conselho|sugest|explica|ajuda|me fala|me diz|me conta|meta|metas|objetivo|objetivos|andamento|progresso|prioridade)\b/.test(text)) {
         return true;
@@ -430,6 +434,10 @@ function buildCompactSystemPrompt(context) {
     const financialSummary = buildFinancialSummary(recentTransactions, settings, categories);
     const goalsSummary = buildGoalsSummary(userGoals, settings.currency);
     const categoryNames = categories.map((c) => c.name).join(', ');
+    const txList = recentTransactions
+        .slice(0, PROMPT_TX_LIMIT)
+        .map((t) => `- Data: ${t.date}, Desc: "${t.description}", Valor: ${t.amount}, Tipo: ${t.type}`)
+        .join('\n');
     return `Voce e o SaldoPro, assistente financeiro pessoal via WhatsApp.
 ${userInfo}
 
@@ -447,6 +455,9 @@ Se o usuario pedir o link do painel, site, dashboard ou app, forneca EXATAMENTE 
 
 ${financialSummary}
 
+Transacoes recentes (referencia para respostas precisas — use APENAS estes dados, nao invente valores):
+${txList || '(nenhuma transacao)'}
+
 ${goalsSummary}
 
 Categorias: ${categoryNames || '(nenhuma)'}
@@ -457,7 +468,9 @@ Moeda: ${settings.currency}
 ${settings.budget > 0 ? `Orcamento mensal: ${formatCurrency(settings.budget, settings.currency)}` : ''}
 
 FORMATO: Retorne SEMPRE um JSON valido com exatamente duas chaves:
-{"reply":"sua resposta aqui","actionObjects":[{"action":"none"}]}`;
+{"reply":"sua resposta aqui","actionObjects":[{"action":"none"}]}
+
+ATENCAO: Neste modo voce NAO pode registrar, editar ou excluir nada. Apenas responda a pergunta. NUNCA diga "registrei", "adicionei" ou "salvei" no reply — voce NAO executou nenhuma acao.`;
 }
 function buildSystemPrompt(context) {
     const { profile, settings, categories, recentTransactions } = context;

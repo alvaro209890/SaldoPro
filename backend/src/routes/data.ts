@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Router, type NextFunction, type Request, type Response } from 'express';
-import { requireFirebaseAuth } from '../middleware/firebase-auth';
+import { requireSupabaseAuth } from '../middleware/supabase-auth';
 import { requirePlanFeature } from '../middleware/plan-access';
 import {
   addRecurringTransaction,
@@ -215,7 +215,7 @@ function getDocumentMetadata(body: Record<string, unknown>): {
 export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatcher): Router {
   const router = Router();
 
-  router.use(requireFirebaseAuth);
+  router.use(requireSupabaseAuth);
 
   router.post('/bootstrap', async (req: Request, res: Response) => {
     const uid = getUid(req);

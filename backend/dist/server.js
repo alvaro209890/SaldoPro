@@ -8,6 +8,7 @@ const cors_1 = __importDefault(require("cors"));
 const env_1 = require("./config/env");
 const logger_1 = require("./lib/logger");
 const health_1 = require("./routes/health");
+const auth_1 = require("./routes/auth");
 const qr_page_1 = require("./routes/qr-page");
 const whatsapp_1 = require("./routes/whatsapp");
 const admin_1 = require("./routes/admin");
@@ -31,6 +32,7 @@ app.use(express_1.default.json({
     }
 }));
 app.use(health_1.healthRouter);
+app.use('/api/auth', (0, auth_1.createAuthRouter)());
 app.use((0, qr_page_1.createQrPageRouter)(whatsappManager));
 app.use('/api/whatsapp', (0, whatsapp_1.createWhatsAppRouter)(whatsappManager));
 app.use('/api/admin', (0, admin_1.createAdminRouter)(whatsappManager));

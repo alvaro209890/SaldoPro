@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createAiChatRouter = createAiChatRouter;
 const express_1 = require("express");
-const firebase_auth_1 = require("../middleware/firebase-auth");
+const supabase_auth_1 = require("../middleware/supabase-auth");
 const plan_access_1 = require("../middleware/plan-access");
 const assistant_1 = require("../ai/assistant");
 const logger_1 = require("../lib/logger");
@@ -11,8 +11,7 @@ function normalizeUtf8Text(value) {
 }
 function createAiChatRouter() {
     const router = (0, express_1.Router)();
-    // All routes require Firebase Auth
-    router.use(firebase_auth_1.requireFirebaseAuth);
+    router.use(supabase_auth_1.requireSupabaseAuth);
     router.post('/chat', (0, plan_access_1.requirePlanFeature)('web_ai_chat', {
         code: 'PLAN_REQUIRED_FOR_WEB_AI',
         message: 'O chat com IA exige um plano ativo.'

@@ -82,12 +82,8 @@ export function Register() {
             await registerUser(data.email, data.password, data.displayName, normalizedPhone);
             toast.success('Conta criada com sucesso!');
             navigate('/app/dashboard');
-        } catch (error: any) {
-            toast.error(
-                error.code === 'auth/email-already-in-use'
-                    ? 'Este email já está em uso'
-                    : 'Erro ao criar conta'
-            );
+        } catch (error: unknown) {
+            toast.error(error instanceof Error ? error.message : 'Erro ao criar conta');
         } finally {
             setIsLoading(false);
         }

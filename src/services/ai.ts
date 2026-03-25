@@ -1,4 +1,4 @@
-import { supabase } from '@/supabase/client';
+import { getAccessToken } from '@/supabase/auth';
 import { BACKEND_URL } from '@/config/backend';
 
 export type Role = 'user' | 'assistant' | 'system';
@@ -20,8 +20,7 @@ function normalizeChatText(value: string): string {
 export async function chatWithAI(
     messages: ChatMessage[]
 ): Promise<AIChatResponse> {
-    const { data: sessionData } = await supabase.auth.getSession();
-    const idToken = sessionData.session?.access_token;
+    const idToken = await getAccessToken();
 
     if (!idToken) {
         throw new Error('Você precisa estar logado para usar o assistente de IA.');
