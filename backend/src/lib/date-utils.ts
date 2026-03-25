@@ -57,5 +57,5 @@ export function getBrasiliaISOString(): string {
             map[part.type] = part.value;
         }
     }
-    return `${map.year}-${map.month}-${map.day}T${map.hour}:${map.minute}:${map.second}.000Z`;
+    return `${map.year}-${map.month}-${map.day}T${map.hour}:${map.minute}:${map.second}-03:00`;
 }

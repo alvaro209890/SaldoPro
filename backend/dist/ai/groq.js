@@ -509,7 +509,9 @@ Data de hoje (Brasilia): ${today}
 Hora atual (Brasilia): ${currentTime}
 Data e hora atuais (Brasilia): ${currentDateTime}
 Moeda: ${settings.currency}
-${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.budget, settings.currency)}` : 'Sem orcamento mensal definido.'}`;
+${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.budget, settings.currency)}` : 'Sem orcamento mensal definido.'}
+
+IMPORTANTE: Use SEMPRE o horario de Brasilia (UTC-3) fornecido acima para lembretes e transacoes. NAO faça conversao para UTC. O sistema ja espera o horario local de Brasilia.`;
     }
     else {
         // Full context: categories with IDs + recent transactions for edit/delete operations
@@ -563,7 +565,9 @@ Data de hoje (Brasilia): ${today}
 Hora atual (Brasilia): ${currentTime}
 Data e hora atuais (Brasilia): ${currentDateTime}
 Moeda: ${settings.currency}
-${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.budget, settings.currency)}` : 'Sem orcamento mensal definido.'}`;
+${settings.budget > 0 ? `Orcamento mensal definido: ${formatCurrency(settings.budget, settings.currency)}` : 'Sem orcamento mensal definido.'}
+
+IMPORTANTE: Use SEMPRE o horario de Brasilia (UTC-3) fornecido acima para lembretes e transacoes. NAO faça conversao para UTC. O sistema ja espera o horario local de Brasilia.`;
     }
     return `Voce e o SaldoPro, assistente financeiro pessoal via WhatsApp.
 ${userInfo}
