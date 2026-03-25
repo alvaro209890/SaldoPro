@@ -943,7 +943,13 @@ export function App() {
               <div className="space-y-2">
                 {txs.map(t => (
                   <div key={t.id} className="flex items-center justify-between text-sm py-1.5 border-b border-white/4 last:border-0">
-                    <div><p className="text-white">{t.description || '—'}</p><p className="text-xs text-zinc-500">{t.date}</p></div>
+                    <div>
+                      <p className="text-white">
+                        {t.description || '—'}
+                        {t.category && <span className="text-xs text-zinc-400 bg-white/5 border border-white/10 px-1.5 py-0.5 rounded ml-2">{t.category}</span>}
+                      </p>
+                      <p className="text-xs text-zinc-500 mt-0.5">{t.date} • {t.paymentMethod}</p>
+                    </div>
                     <span className={t.type === 'income' ? 'text-emerald-400 font-semibold' : 'text-rose-400 font-semibold'}>
                       {t.type === 'income' ? '+' : '-'}{fmtCurrency(t.amount)}
                     </span>
@@ -958,7 +964,12 @@ export function App() {
               <div className="space-y-2">
                 {reminders.map(r => (
                   <div key={r.id} className="flex items-center justify-between text-sm py-1.5 border-b border-white/4 last:border-0">
-                    <div><p className="text-white">{r.title}</p><p className="text-xs text-zinc-500">{r.dueDate}</p></div>
+                    <div>
+                      <p className="text-white">{r.title}</p>
+                      <p className="text-xs text-zinc-500 mt-0.5">
+                        {r.dueDate} {r.amount ? ` • ${fmtCurrency(r.amount)}` : ''}
+                      </p>
+                    </div>
                     <span className={r.status === 'paid' ? 'badge badge-green' : 'badge badge-amber'}>{r.status === 'paid' ? 'Pago' : 'Pendente'}</span>
                   </div>
                 ))}
@@ -1505,7 +1516,7 @@ export function App() {
             {/* Users table */}
             <div className="card overflow-x-auto">
               <table className="data-table">
-                <thead><tr><th>Nome</th><th>Email</th><th>Conta</th><th>Assinatura</th><th>Txs</th><th>Msgs</th><th>WhatsApp</th><th>Última Atividade</th><th></th></tr></thead>
+                <thead><tr><th>Nome</th><th>Email</th><th>Conta</th><th>Assinatura</th><th>Txs</th><th>Msgs</th><th>WhatsApp</th><th>Cadastro</th><th>Última Atividade</th><th></th></tr></thead>
                 <tbody>
                   {filtered.map(u => (
                     <tr key={u.uid} className={`cursor-pointer ${selUid === u.uid ? 'bg-emerald-500/5' : ''}`} onClick={() => setSelUid(u.uid)}>
@@ -1516,6 +1527,7 @@ export function App() {
                       <td className="text-white">{u.metrics.transactions}</td>
                       <td className="text-white">{u.metrics.whatsappMessages}</td>
                       <td>{u.whatsappAllowedNumbers.length > 0 ? <span className="badge badge-green">{u.whatsappAllowedNumbers[0]}</span> : <span className="text-zinc-600">—</span>}</td>
+                      <td className="text-xs">{fmtDate(u.createdAt)}</td>
                       <td className="text-xs">{fmtDate(u.metrics.lastWhatsAppMessageAt)}</td>
                       <td>
                         <button onClick={ev => { ev.stopPropagation(); setSelUid(u.uid); setDetailUid(u.uid); }}
