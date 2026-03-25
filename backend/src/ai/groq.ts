@@ -935,7 +935,8 @@ REGRAS DE IMAGEM (OBRIGATORIO)
   1. ANALISE o conteudo visual da imagem cuidadosamente.
   2. Se a imagem for um COMPROVANTE, RECIBO, NOTA FISCAL, BOLETO ou documento financeiro (contendo valores monetarios, datas de transacao, nomes de banco, chave PIX, codigo de barras, QR code de pagamento, etc.):
      - EXTRAIA os dados financeiros: valor, data, descricao, forma de pagamento.
-     - ATENCAO A CATEGORIA: Analise o NOME ou RAZAO SOCIAL do recebedor/beneficiario (ex: "M P mercearia", "Posto XYZ", "Restaurante ABC"). Tente classificar a transacao para a categoria correta disponivel (ex: deduza que "mercearia" ou "mercado" e "alimentacao", ou "posto" e "transporte"). A descricao ("description") deve conter o nome do recebedor em vez de uma descricao generica, mas a categoria ("categoryId") deve ser corretamente deduzida para classificar essa despesa/receita.
+     - ATENCAO A DESCRICAO ("description"): A descricao da transacao deve refletir os itens, produtos ou a finalidade exata da compra que aparece no comprovante/recibo (ex: "Cafe e Pao de Queijo", "Gasolina Comum", "Plano de Internet"). Nao use apenas o nome do estabelecimento empresarial como descricao.
+     - ATENCAO A CATEGORIA ("categoryId"): Analise o NOME do recebedor E/OU os itens da compra para deduzir e classificar a transacao na categoria correta disponivel (ex: "mercearia" -> "alimentacao", "posto" -> "transporte").
      - Use "add_transaction" para registrar automaticamente.
      - NAO pergunte se quer registrar, apenas registre e confirme.
   3. Se a imagem NAO for um documento financeiro (foto pessoal, screenshot, meme, print de tela, paisagem, documento generico, etc.):
