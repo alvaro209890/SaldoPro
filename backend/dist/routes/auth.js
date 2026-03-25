@@ -56,7 +56,7 @@ function getAuthUid(req) {
     }
     return uid;
 }
-function createAuthRouter() {
+function createAuthRouter(signupWelcomeDispatcher) {
     const router = (0, express_1.Router)();
     router.post('/login', async (req, res) => {
         const body = (req.body ?? {});
@@ -105,8 +105,9 @@ function createAuthRouter() {
             });
             return;
         }
+        let bootstrapResult;
         try {
-            await (0, firestore_1.bootstrapUserData)(created.data.user.id, {
+            bootstrapResult = await (0, firestore_1.bootstrapUserData)(created.data.user.id, {
                 email,
                 displayName,
                 phone
@@ -146,6 +147,13 @@ function createAuthRouter() {
                 error: 'Conta criada, mas não foi possível iniciar a sessão automaticamente.'
             });
             return;
+        }
+        if (bootstrapResult.isNewUser && bootstrapResult.normalizedPhone) {
+            signupWelcomeDispatcher.enqueue({
+                uid: created.data.user.id,
+                phone: bootstrapResult.normalizedPhone,
+                displayName
+            });
         }
         res.status(201).json({ session: serializeSession(signedIn.data.session) });
     });

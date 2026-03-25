@@ -29,7 +29,7 @@ app.use(express.json({
   }
 }));
 app.use(healthRouter);
-app.use('/api/auth', createAuthRouter());
+app.use('/api/auth', createAuthRouter(signupWelcomeDispatcher));
 app.use(createQrPageRouter(whatsappManager));
 app.use('/api/whatsapp', createWhatsAppRouter(whatsappManager));
 app.use('/api/admin', createAdminRouter(whatsappManager));

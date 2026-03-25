@@ -5,6 +5,7 @@ import { bootstrapUserData } from '../lib/firestore';
 import { logger } from '../lib/logger';
 import { createSupabaseServerClient } from '../lib/supabase';
 import { requireSupabaseAuth, type AuthenticatedRequest } from '../middleware/supabase-auth';
+import type { SignupWelcomeDispatcher } from '../whatsapp/signup-welcome-dispatcher';
 
 interface RegisterBody {
   email?: unknown;
@@ -83,7 +84,7 @@ function getAuthUid(req: Request): string {
   return uid;
 }
 
-export function createAuthRouter(): Router {
+export function createAuthRouter(signupWelcomeDispatcher: SignupWelcomeDispatcher): Router {
   const router = Router();
 
   router.post('/login', async (req: Request, res: Response) => {
@@ -142,8 +143,9 @@ export function createAuthRouter(): Router {
       return;
     }
 
+    let bootstrapResult;
     try {
-      await bootstrapUserData(created.data.user.id, {
+      bootstrapResult = await bootstrapUserData(created.data.user.id, {
         email,
         displayName,
         phone
@@ -186,6 +188,14 @@ export function createAuthRouter(): Router {
         error: 'Conta criada, mas não foi possível iniciar a sessão automaticamente.'
       });
       return;
+    }
+
+    if (bootstrapResult.isNewUser && bootstrapResult.normalizedPhone) {
+      signupWelcomeDispatcher.enqueue({
+        uid: created.data.user.id,
+        phone: bootstrapResult.normalizedPhone,
+        displayName
+      });
     }
 
     res.status(201).json({ session: serializeSession(signedIn.data.session) });

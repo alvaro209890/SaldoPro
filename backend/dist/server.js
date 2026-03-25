@@ -32,7 +32,7 @@ app.use(express_1.default.json({
     }
 }));
 app.use(health_1.healthRouter);
-app.use('/api/auth', (0, auth_1.createAuthRouter)());
+app.use('/api/auth', (0, auth_1.createAuthRouter)(signupWelcomeDispatcher));
 app.use((0, qr_page_1.createQrPageRouter)(whatsappManager));
 app.use('/api/whatsapp', (0, whatsapp_1.createWhatsAppRouter)(whatsappManager));
 app.use('/api/admin', (0, admin_1.createAdminRouter)(whatsappManager));
