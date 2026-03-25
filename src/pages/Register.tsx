@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Mail, Lock, User, Phone, CheckCircle2 } from 'lucide-react';
+import { Mail, Lock, User, Phone, CheckCircle2, Shield, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { registerUser } from '@/firebase/auth';
@@ -40,19 +40,19 @@ function formatSignupPhone(value: string): string {
 
 const schema = z
     .object({
-        displayName: z.string().min(2, 'Nome deve ter no mínimo 2 caracteres'),
+        displayName: z.string().min(2, 'No mínimo 2 caracteres'),
         whatsappPhone: z
             .string()
-            .min(1, 'Número do WhatsApp é obrigatório')
+            .min(1, 'Número obrigatório')
             .refine(
                 (val) => {
                     const digits = normalizeSignupPhone(val);
                     return digits.length >= 10 && digits.length <= 11;
                 },
-                'Digite apenas DDD + número (ex: 11999999999)'
+                'Formato inválido (DDD+Num)'
             ),
         email: z.string().email('Email inválido'),
-        password: z.string().min(6, 'Senha deve ter no mínimo 6 caracteres'),
+        password: z.string().min(6, 'No mínimo 6 caracteres'),
         confirmPassword: z.string(),
     })
     .refine((data) => data.password === data.confirmPassword, {
@@ -100,8 +100,8 @@ export function Register() {
             <div className="absolute bottom-[-10%] right-[-10%] w-[500px] h-[500px] bg-teal-600/10 rounded-full blur-[120px] pointer-events-none opacity-50 lg:opacity-100" />
 
             {/* Form Section - Left on desktop, centered on mobile */}
-            <div className="w-full lg:w-1/2 flex flex-col items-center justify-center p-6 sm:p-12 z-10">
-                <div className="w-full max-w-[420px]">
+            <div className="w-full lg:w-1/2 flex flex-col items-center justify-center p-6 sm:p-12 z-10 lg:order-1 order-2">
+                <div className="w-full max-w-[460px]">
                     
                     {/* Mobile Logo */}
                     <div className="lg:hidden flex flex-col items-center justify-center gap-3 mb-8">
@@ -111,29 +111,30 @@ export function Register() {
                         <h1 className="text-2xl font-bold tracking-tight text-white">SaldoPro</h1>
                     </div>
 
-                    <div className="rounded-3xl sm:border border-white/10 sm:bg-white/[0.02] sm:backdrop-blur-2xl sm:p-8 sm:shadow-2xl shadow-black/50">
+                    <div className="rounded-[24px] sm:border border-white/10 sm:bg-white/[0.02] sm:backdrop-blur-2xl sm:p-10 sm:shadow-2xl shadow-black/50">
                         <div className="mb-8 text-center sm:text-left">
                             <h2 className="text-2xl font-bold text-white mb-2 tracking-tight">Criar conta grátis</h2>
-                            <p className="text-slate-400 text-sm">Junte-se a nós e comece a controlar seu dinheiro.</p>
+                            <p className="text-slate-400 text-[13px]">Demora menos de 1 minuto para começar.</p>
                         </div>
 
                         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-                            <Input
-                                label="Nome completo"
-                                icon={User}
-                                placeholder="Seu nome"
-                                autoComplete="name"
-                                error={errors.displayName?.message}
-                                {...register('displayName')}
-                            />
+                            
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <Input
+                                    label="Nome"
+                                    icon={User}
+                                    placeholder="Seu nome"
+                                    autoComplete="name"
+                                    error={errors.displayName?.message}
+                                    {...register('displayName')}
+                                />
 
-                            <div>
                                 <Controller
                                     name="whatsappPhone"
                                     control={control}
                                     render={({ field }) => (
                                         <Input
-                                            label="Número do WhatsApp"
+                                            label="WhatsApp"
                                             icon={Phone}
                                             placeholder="(11) 99999-9999"
                                             autoComplete="tel"
@@ -151,7 +152,7 @@ export function Register() {
                             </div>
 
                             <Input
-                                label="Email"
+                                label="E-mail"
                                 icon={Mail}
                                 placeholder="seu@email.com"
                                 autoComplete="email"
@@ -161,7 +162,7 @@ export function Register() {
 
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <Input
-                                    label="Senha"
+                                    label="Senha de acesso"
                                     type="password"
                                     icon={Lock}
                                     placeholder="••••••••"
@@ -171,7 +172,7 @@ export function Register() {
                                 />
 
                                 <Input
-                                    label="Confirmar"
+                                    label="Confirmar senha"
                                     type="password"
                                     icon={Lock}
                                     placeholder="••••••••"
@@ -187,18 +188,18 @@ export function Register() {
                                 size="lg" 
                                 isLoading={isLoading}
                             >
-                                Criar minha conta
+                                Criar conta grátis
                             </Button>
                         </form>
 
                         <div className="mt-8 pt-6 border-t border-white/5 text-center">
-                            <p className="text-sm text-slate-400">
+                            <p className="text-[13px] text-slate-400">
                                 Já tem uma conta?{' '}
                                 <Link
                                     to="/login"
-                                    className="font-bold text-emerald-400 hover:text-emerald-300 transition-colors"
+                                    className="font-bold text-emerald-400 hover:text-emerald-300 transition-colors ml-1"
                                 >
-                                    Fazer login
+                                    Acessar agora
                                 </Link>
                             </p>
                         </div>
@@ -207,39 +208,52 @@ export function Register() {
             </div>
 
             {/* Visual Identity Section - Right (Desktop only) */}
-            <div className="hidden lg:flex w-1/2 flex-col justify-center relative p-16 z-10 border-l border-white/5 bg-gradient-to-bl from-emerald-950/30 to-slate-950/80 backdrop-blur-sm">
-                <div className="max-w-xl ml-auto">
-                    <div className="flex items-center gap-3 mb-10 justify-end">
+            <div className="hidden lg:flex w-1/2 flex-col justify-center relative p-16 z-10 border-l border-white/5 bg-gradient-to-bl from-emerald-950/30 to-slate-950/80 backdrop-blur-sm lg:order-2 order-1">
+                <div className="max-w-xl mx-auto w-full">
+                    <div className="flex items-center gap-3 mb-12 justify-end">
                         <h1 className="text-3xl font-bold tracking-tight text-white">SaldoPro</h1>
                         <BrandLogo className="h-12 w-12" />
                     </div>
                     
-                    <h2 className="text-5xl font-extrabold mb-6 leading-[1.1] text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-200 text-right">
-                        O primeiro passo para sua liberdade.
+                    <h2 className="text-[3.25rem] font-extrabold mb-6 leading-[1.05] text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-200 text-right">
+                        O setup mais rápido do mercado.
                     </h2>
-                    <p className="text-slate-400 text-lg leading-relaxed mb-10 text-right">
-                        Configure seu perfil em menos de um minuto. Categorias e dados automáticos prontos para uso logo no primeiro clique.
+                    <p className="text-slate-400 text-lg leading-relaxed mb-12 text-right">
+                        Não perca tempo configurando planilhas complexas. Categorias essenciais já prontas para você usar assim que entrar.
                     </p>
 
                     <div className="grid grid-cols-1 gap-4 text-left ml-auto max-w-sm">
-                        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 backdrop-blur-md hover:bg-white/[0.05] transition flex items-center gap-4">
+                        
+                        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 backdrop-blur-md hover:bg-white/[0.05] transition flex items-center gap-4">
                             <div className="flex bg-emerald-500/10 p-2.5 rounded-xl border border-emerald-500/20 text-emerald-400">
-                                <CheckCircle2 className="w-5 h-5" />
+                                <Zap className="w-5 h-5" />
                             </div>
                             <div>
-                                <h3 className="font-bold text-white text-[15px]">Configuração Expressa</h3>
-                                <p className="text-xs text-slate-400 mt-1">Sua conta configurada instantaneamente.</p>
+                                <h3 className="font-bold text-white text-[14px]">I.A. no WhatsApp</h3>
+                                <p className="text-[12px] text-slate-400 mt-0.5">Lançamentos via áudio ou texto.</p>
                             </div>
                         </div>
-                        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 backdrop-blur-md hover:bg-white/[0.05] transition flex items-center gap-4">
+
+                        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 backdrop-blur-md hover:bg-white/[0.05] transition flex items-center gap-4">
                             <div className="flex bg-teal-500/10 p-2.5 rounded-xl border border-teal-500/20 text-teal-400">
                                 <CheckCircle2 className="w-5 h-5" />
                             </div>
                             <div>
-                                <h3 className="font-bold text-white text-[15px]">Dados Protegidos</h3>
-                                <p className="text-xs text-slate-400 mt-1">Criptografia de ponta a ponta nativa da nuvem.</p>
+                                <h3 className="font-bold text-white text-[14px]">Configuração Expressa</h3>
+                                <p className="text-[12px] text-slate-400 mt-0.5">Sua conta pronta em menos de 1 min.</p>
                             </div>
                         </div>
+
+                        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 backdrop-blur-md hover:bg-white/[0.05] transition flex items-center gap-4">
+                            <div className="flex bg-indigo-500/10 p-2.5 rounded-xl border border-indigo-500/20 text-indigo-400">
+                                <Shield className="w-5 h-5" />
+                            </div>
+                            <div>
+                                <h3 className="font-bold text-white text-[14px]">Criptografia Nativa</h3>
+                                <p className="text-[12px] text-slate-400 mt-0.5">Proteção rígida de ponta a ponta.</p>
+                            </div>
+                        </div>
+
                     </div>
                 </div>
             </div>
