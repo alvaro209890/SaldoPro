@@ -1868,6 +1868,9 @@ async function updateUserDocument(uid, documentId, input) {
     if (Array.isArray(input.searchTokens)) {
         updates.search_tokens = input.searchTokens;
     }
+    if (typeof input.storagePath === 'string') {
+        updates.storage_path = input.storagePath;
+    }
     if (input.status === 'ready' || input.status === 'deleted') {
         updates.status = input.status;
     }
