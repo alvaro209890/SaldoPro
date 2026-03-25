@@ -1,4 +1,4 @@
-﻿import makeWASocket, {
+import makeWASocket, {
   DisconnectReason,
   downloadMediaMessage,
   fetchLatestBaileysVersion,
@@ -22,7 +22,7 @@ import {
   uploadPendingDocument
 } from '../lib/document-storage';
 import { consumeFreeWhatsAppQuota, getFreeWhatsAppQuotaState } from '../lib/daily-ai-quota';
-import { isFirebaseUserActive } from '../lib/firebase-user-access';
+import { isSupabaseUserActive } from '../lib/supabase-user-access';
 import { getUserPlanAccess } from '../lib/subscription-access';
 import type { GroqChatMessage } from '../ai/groq';
 import { env } from '../config/env';
@@ -1363,7 +1363,7 @@ export class WhatsAppClient {
       return;
     }
 
-    const ownerActive = await isFirebaseUserActive(binding.uid);
+    const ownerActive = await isSupabaseUserActive(binding.uid);
     if (!ownerActive) {
       logger.warn('MSG_BLOCKED_USER: ignoring inbound WhatsApp message for blocked/unavailable account', {
         uid: binding.uid,

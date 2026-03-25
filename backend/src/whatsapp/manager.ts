@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { env } from '../config/env';
-import { isFirebaseUserActive } from '../lib/firebase-user-access';
+import { isSupabaseUserActive } from '../lib/supabase-user-access';
 import { logger } from '../lib/logger';
 import {
   acquireWhatsAppConnectionLock,
@@ -122,7 +122,7 @@ export class WhatsAppClientsManager {
       throw new Error('Invalid destination phone');
     }
 
-    const ownerActive = await isFirebaseUserActive(input.ownerUid);
+    const ownerActive = await isSupabaseUserActive(input.ownerUid);
     if (!ownerActive) {
       throw new Error('Target account is blocked or unavailable');
     }

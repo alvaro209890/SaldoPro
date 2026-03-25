@@ -122,7 +122,23 @@ async function refreshAuthSession(refreshToken: string): Promise<AuthSession> {
     return session;
 }
 
+// ─── Deduplication and caching for session restore ───────────────────────────
+// Prevents multiple concurrent calls from hitting the network simultaneously.
+let _restoreInFlight: Promise<AuthSession | null> | null = null;
+
 export async function restoreAuthSession(): Promise<AuthSession | null> {
+    // If a restore is already in progress, reuse it to prevent request storms.
+    if (_restoreInFlight) return _restoreInFlight;
+
+    _restoreInFlight = _doRestoreAuthSession();
+    try {
+        return await _restoreInFlight;
+    } finally {
+        _restoreInFlight = null;
+    }
+}
+
+async function _doRestoreAuthSession(): Promise<AuthSession | null> {
     const stored = getStoredAuthSession();
     if (!stored) {
         return null;
@@ -151,8 +167,13 @@ export async function restoreAuthSession(): Promise<AuthSession | null> {
     }
 }
 
+/**
+ * Returns the stored access token WITHOUT making any network requests.
+ * This is called by every data/API request and must be fast and synchronous-like.
+ * Session validation is done once at app startup via restoreAuthSession() in useAuth.
+ */
 export async function getAccessToken(): Promise<string> {
-    const session = await restoreAuthSession();
+    const session = getStoredAuthSession();
     if (!session?.accessToken) {
         throw new Error('Usuário não autenticado.');
     }
