@@ -475,15 +475,14 @@ export function Plans() {
 
               {/* CTA */}
               <div className="mt-4">
-                <Button onClick={goCheckout} disabled={!selectedPlan} size="lg"
-                  className="w-full h-12 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-sm font-bold text-white shadow-xl shadow-emerald-500/20 hover:brightness-110 hover:scale-[1.01] transition-all">
+                <Button disabled={true} size="lg"
+                  className="w-full h-12 rounded-xl bg-emerald-500/20 text-sm font-bold text-emerald-200 cursor-not-allowed">
                   <CreditCard className="mr-2 h-4 w-4" />
-                  <span className="hidden sm:inline">Assinar {selectedPlan?.name ?? ''} e desbloquear premium</span>
-                  <span className="sm:hidden">Assinar agora</span>
-                  <ArrowRight className="ml-2 h-4 w-4" />
+                  <span className="hidden sm:inline">Assinaturas temporariamente suspensas</span>
+                  <span className="sm:hidden">Suspenso</span>
                 </Button>
                 <p className="text-[10px] text-slate-500 text-center mt-2">
-                  Cancele quando quiser. Todos os planos desbloqueiam o mesmo pacote premium completo.
+                  Estamos passando por uma atualização sistêmica. As novas assinaturas voltarão em breve.
                 </p>
               </div>
             </section>

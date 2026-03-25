@@ -20,6 +20,7 @@ import {
     PanelLeftOpen,
     CheckCircle2,
     MessageSquare,
+    Crown,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -39,6 +40,7 @@ const NAV_ITEMS = [
     { label: 'Recorrentes', path: '/app/recurring', icon: Repeat },
     { label: 'Metas', path: '/app/goals', icon: Target },
     { label: 'Arquivos', path: '/app/documents', icon: Images },
+    { label: 'Planos', path: '/app/plans', icon: Crown },
     { label: 'Configurações', path: '/app/settings', icon: Settings },
 ];
 
