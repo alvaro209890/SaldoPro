@@ -172,26 +172,6 @@ function emitProfileUpdated(uid: string, displayName: string | null): void {
     );
 }
 
-async function bootstrapUser(accessToken: string, email: string, displayName: string, phone: string): Promise<void> {
-    const response = await fetch(`${BACKEND_URL}/api/data/bootstrap`, {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            email,
-            displayName,
-            phone,
-        }),
-    });
-
-    if (!response.ok) {
-        const payload = await response.json().catch(() => ({ error: 'Erro ao inicializar dados no backend.' }));
-        throw new Error(payload.error || 'Erro ao inicializar dados no backend.');
-    }
-}
-
 export async function registerUser(email: string, password: string, displayName: string, phone: string) {
     const payload = await authRequest<AuthSessionResponse>(
         '/api/auth/register',
@@ -205,7 +185,6 @@ export async function registerUser(email: string, password: string, displayName:
     const session = normalizeSession(payload.session);
     writeSession(session);
     emitProfileUpdated(session.user.id, displayName);
-    await bootstrapUser(session.accessToken, email, displayName, phone);
     return session.user;
 }
 

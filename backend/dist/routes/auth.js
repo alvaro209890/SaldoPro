@@ -3,8 +3,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.createAuthRouter = createAuthRouter;
 const express_1 = require("express");
 const env_1 = require("../config/env");
-const supabase_1 = require("../lib/supabase");
+const firestore_1 = require("../lib/firestore");
 const logger_1 = require("../lib/logger");
+const supabase_1 = require("../lib/supabase");
 const supabase_auth_1 = require("../middleware/supabase-auth");
 function asString(value) {
     return typeof value === 'string' ? value.trim() : '';
@@ -65,7 +66,8 @@ function createAuthRouter() {
             res.status(400).json({ error: 'Email e senha válidos são obrigatórios.' });
             return;
         }
-        const { data, error } = await supabase_1.supabaseAdmin.auth.signInWithPassword({
+        const authClient = (0, supabase_1.createSupabaseServerClient)();
+        const { data, error } = await authClient.auth.signInWithPassword({
             email,
             password
         });
@@ -87,7 +89,8 @@ function createAuthRouter() {
             res.status(400).json({ error: 'Email, senha, nome e telefone válidos são obrigatórios.' });
             return;
         }
-        const created = await supabase_1.supabaseAdmin.auth.admin.createUser({
+        const authClient = (0, supabase_1.createSupabaseServerClient)();
+        const created = await authClient.auth.admin.createUser({
             email,
             password,
             email_confirm: true,
@@ -102,7 +105,35 @@ function createAuthRouter() {
             });
             return;
         }
-        const signedIn = await supabase_1.supabaseAdmin.auth.signInWithPassword({
+        try {
+            await (0, firestore_1.bootstrapUserData)(created.data.user.id, {
+                email,
+                displayName,
+                phone
+            });
+        }
+        catch (error) {
+            logger_1.logger.error('Supabase register: bootstrap failed after account creation', {
+                email,
+                uid: created.data.user.id,
+                error: error instanceof Error ? error.message : 'unknown'
+            });
+            const cleanupClient = (0, supabase_1.createSupabaseServerClient)();
+            const { error: deleteError } = await cleanupClient.auth.admin.deleteUser(created.data.user.id);
+            if (deleteError) {
+                logger_1.logger.error('Supabase register: failed to rollback account after bootstrap error', {
+                    email,
+                    uid: created.data.user.id,
+                    error: deleteError.message
+                });
+            }
+            res.status(500).json({
+                error: 'Não foi possível preparar sua conta agora. Tente novamente em instantes.'
+            });
+            return;
+        }
+        const signInClient = (0, supabase_1.createSupabaseServerClient)();
+        const signedIn = await signInClient.auth.signInWithPassword({
             email,
             password
         });
@@ -125,7 +156,8 @@ function createAuthRouter() {
             res.status(400).json({ error: 'Refresh token é obrigatório.' });
             return;
         }
-        const { data, error } = await supabase_1.supabaseAdmin.auth.refreshSession({
+        const authClient = (0, supabase_1.createSupabaseServerClient)();
+        const { data, error } = await authClient.auth.refreshSession({
             refresh_token: refreshToken
         });
         if (error || !data.session) {
@@ -155,7 +187,8 @@ function createAuthRouter() {
             res.status(400).json({ error: 'Email válido é obrigatório.' });
             return;
         }
-        const { error } = await supabase_1.supabaseAdmin.auth.resetPasswordForEmail(email, {
+        const authClient = (0, supabase_1.createSupabaseServerClient)();
+        const { error } = await authClient.auth.resetPasswordForEmail(email, {
             redirectTo: `${env_1.env.webAppUrl}/reset-password`
         });
         if (error) {
@@ -174,7 +207,8 @@ function createAuthRouter() {
             res.status(400).json({ error: 'A nova senha deve ter pelo menos 6 caracteres.' });
             return;
         }
-        const { error } = await supabase_1.supabaseAdmin.auth.admin.updateUserById(uid, {
+        const authClient = (0, supabase_1.createSupabaseServerClient)();
+        const { error } = await authClient.auth.admin.updateUserById(uid, {
             password
         });
         if (error) {

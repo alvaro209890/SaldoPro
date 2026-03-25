@@ -1,8 +1,9 @@
 import { Router, type Request, type Response } from 'express';
 import type { Session, User } from '@supabase/supabase-js';
 import { env } from '../config/env';
-import { supabaseAdmin } from '../lib/supabase';
+import { bootstrapUserData } from '../lib/firestore';
 import { logger } from '../lib/logger';
+import { createSupabaseServerClient } from '../lib/supabase';
 import { requireSupabaseAuth, type AuthenticatedRequest } from '../middleware/supabase-auth';
 
 interface RegisterBody {
@@ -95,7 +96,8 @@ export function createAuthRouter(): Router {
       return;
     }
 
-    const { data, error } = await supabaseAdmin.auth.signInWithPassword({
+    const authClient = createSupabaseServerClient();
+    const { data, error } = await authClient.auth.signInWithPassword({
       email,
       password
     });
@@ -122,7 +124,8 @@ export function createAuthRouter(): Router {
       return;
     }
 
-    const created = await supabaseAdmin.auth.admin.createUser({
+    const authClient = createSupabaseServerClient();
+    const created = await authClient.auth.admin.createUser({
       email,
       password,
       email_confirm: true,
@@ -139,7 +142,37 @@ export function createAuthRouter(): Router {
       return;
     }
 
-    const signedIn = await supabaseAdmin.auth.signInWithPassword({
+    try {
+      await bootstrapUserData(created.data.user.id, {
+        email,
+        displayName,
+        phone
+      });
+    } catch (error) {
+      logger.error('Supabase register: bootstrap failed after account creation', {
+        email,
+        uid: created.data.user.id,
+        error: error instanceof Error ? error.message : 'unknown'
+      });
+
+      const cleanupClient = createSupabaseServerClient();
+      const { error: deleteError } = await cleanupClient.auth.admin.deleteUser(created.data.user.id);
+      if (deleteError) {
+        logger.error('Supabase register: failed to rollback account after bootstrap error', {
+          email,
+          uid: created.data.user.id,
+          error: deleteError.message
+        });
+      }
+
+      res.status(500).json({
+        error: 'Não foi possível preparar sua conta agora. Tente novamente em instantes.'
+      });
+      return;
+    }
+
+    const signInClient = createSupabaseServerClient();
+    const signedIn = await signInClient.auth.signInWithPassword({
       email,
       password
     });
@@ -167,7 +200,8 @@ export function createAuthRouter(): Router {
       return;
     }
 
-    const { data, error } = await supabaseAdmin.auth.refreshSession({
+    const authClient = createSupabaseServerClient();
+    const { data, error } = await authClient.auth.refreshSession({
       refresh_token: refreshToken
     });
 
@@ -205,7 +239,8 @@ export function createAuthRouter(): Router {
       return;
     }
 
-    const { error } = await supabaseAdmin.auth.resetPasswordForEmail(email, {
+    const authClient = createSupabaseServerClient();
+    const { error } = await authClient.auth.resetPasswordForEmail(email, {
       redirectTo: `${env.webAppUrl}/reset-password`
     });
 
@@ -229,7 +264,8 @@ export function createAuthRouter(): Router {
       return;
     }
 
-    const { error } = await supabaseAdmin.auth.admin.updateUserById(uid, {
+    const authClient = createSupabaseServerClient();
+    const { error } = await authClient.auth.admin.updateUserById(uid, {
       password
     });
 
