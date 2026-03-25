@@ -468,10 +468,17 @@ function createDataRouter(signupWelcomeDispatcher) {
                 res.status(404).json({ error: 'Imagem nao encontrada.' });
                 return;
             }
-            const [url] = await Promise.all([
-                (0, document_storage_1.createSignedDocumentUrl)(document.storagePath, USER_DOCUMENT_DOWNLOAD_TTL_SECONDS),
-                (0, firestore_1.touchUserDocumentAccess)(uid, document.id)
-            ]);
+            let url;
+            try {
+                [url] = await Promise.all([
+                    (0, document_storage_1.createSignedDocumentUrl)(document.storagePath, USER_DOCUMENT_DOWNLOAD_TTL_SECONDS),
+                    (0, firestore_1.touchUserDocumentAccess)(uid, document.id)
+                ]);
+            }
+            catch (err) {
+                res.status(404).json({ error: 'O arquivo fisico nao foi encontrado no armazenamento. Ele pode estar corrompido ou foi removido.' });
+                return;
+            }
             res.json({
                 url,
                 fileName: buildDocumentDownloadName(document)

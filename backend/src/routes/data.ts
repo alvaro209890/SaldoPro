@@ -616,10 +616,16 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
         return;
       }
 
-      const [url] = await Promise.all([
-        createSignedDocumentUrl(document.storagePath, USER_DOCUMENT_DOWNLOAD_TTL_SECONDS),
-        touchUserDocumentAccess(uid, document.id)
-      ]);
+      let url: string;
+      try {
+        [url] = await Promise.all([
+          createSignedDocumentUrl(document.storagePath, USER_DOCUMENT_DOWNLOAD_TTL_SECONDS),
+          touchUserDocumentAccess(uid, document.id)
+        ]);
+      } catch (err) {
+        res.status(404).json({ error: 'O arquivo fisico nao foi encontrado no armazenamento. Ele pode estar corrompido ou foi removido.' });
+        return;
+      }
 
       res.json({
         url,
