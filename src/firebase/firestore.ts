@@ -218,6 +218,22 @@ export async function updateSettings(
     notifyRefresh();
 }
 
+export async function updateDisplayName(
+    uid: string,
+    displayName: string
+): Promise<void> {
+    await apiRequest<{ ok: true; displayName: string }>('/api/data/profile', {
+        method: 'PATCH',
+        body: JSON.stringify({ displayName })
+    });
+    // Dispatch custom event so useAuth picks up the new name immediately
+    window.dispatchEvent(
+        new CustomEvent('saldopro:profile-updated', {
+            detail: { uid, displayName }
+        })
+    );
+}
+
 export function onChatSessionsSnapshot(
     _uid: string,
     callback: (sessions: ChatSession[]) => void,

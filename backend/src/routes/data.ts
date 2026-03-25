@@ -41,6 +41,7 @@ import {
   addUserGoal,
   updateUserGoal,
   deleteUserGoal,
+  updateUserDisplayName,
   DuplicateCategoryError,
 } from '../lib/firestore';
 import { generateFinancialGoals } from '../ai/groq';
@@ -244,6 +245,20 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
         displayName
       });
     }
+  });
+
+  router.patch('/profile', async (req: Request, res: Response) => {
+    const uid = getUid(req);
+    const body = (req.body ?? {}) as { displayName?: unknown };
+    const displayName = asString(body.displayName);
+
+    if (!displayName) {
+      res.status(400).json({ error: '`displayName` e obrigatorio.' });
+      return;
+    }
+
+    await updateUserDisplayName(uid, displayName);
+    res.json({ ok: true, displayName: displayName.trim() });
   });
 
   router.get('/settings', async (req: Request, res: Response) => {

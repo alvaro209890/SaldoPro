@@ -7,12 +7,13 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
-import { User, DollarSign, Calendar, Save, Phone, Plus, Trash2, BookOpen, Settings as SettingsIcon } from 'lucide-react';
+import { User, DollarSign, Calendar, Save, Phone, Plus, Trash2, BookOpen, Settings as SettingsIcon, Pencil } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { ManualTab } from '@/components/settings/ManualTab';
 import { toast } from 'sonner';
 import { normalizePhoneNumber } from '@/utils/whatsapp';
 import { WhatsAppOnboarding } from '@/components/settings/WhatsAppOnboarding';
+import { updateDisplayName } from '@/firebase/firestore';
 
 const settingsSchema = z.object({
     budget: z.number().min(0, 'O or\u00e7amento n\u00e3o pode ser negativo'),
@@ -35,6 +36,9 @@ export function Settings() {
     const [isSavingNumbers, setIsSavingNumbers] = useState(false);
     const [whatsappInput, setWhatsappInput] = useState('');
     const [whatsappAllowedNumbers, setWhatsappAllowedNumbers] = useState<string[]>([]);
+    const [editingName, setEditingName] = useState(false);
+    const [nameInput, setNameInput] = useState('');
+    const [isSavingName, setIsSavingName] = useState(false);
 
     const {
         register,
@@ -76,6 +80,12 @@ export function Settings() {
         }
     }, [settings, reset]);
 
+    useEffect(() => {
+        if (displayName && !editingName) {
+            setNameInput(displayName);
+        }
+    }, [displayName, editingName]);
+
     const onSubmit = async (data: SettingsFormData) => {
         setIsSaving(true);
         try {
@@ -83,6 +93,30 @@ export function Settings() {
             reset(data);
         } finally {
             setIsSaving(false);
+        }
+    };
+
+    const handleStartEditName = () => {
+        setNameInput(displayName || '');
+        setEditingName(true);
+    };
+
+    const handleCancelEditName = () => {
+        setNameInput(displayName || '');
+        setEditingName(false);
+    };
+
+    const handleSaveName = async () => {
+        if (!user || !nameInput.trim()) return;
+        setIsSavingName(true);
+        try {
+            await updateDisplayName(user.uid, nameInput.trim());
+            toast.success('Nome atualizado!');
+            setEditingName(false);
+        } catch {
+            toast.error('Erro ao atualizar o nome.');
+        } finally {
+            setIsSavingName(false);
         }
     };
 
@@ -166,14 +200,61 @@ export function Settings() {
                             <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6 mb-8 text-center sm:text-left">
                                 <div className="relative">
                                     <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-finance-primary to-purple-600 flex items-center justify-center text-4xl font-bold text-white uppercase shadow-xl shadow-finance-primary/20 ring-4 ring-[#0f1218] ring-offset-2 ring-offset-[#0f1218] z-10">
-                                        {displayName?.charAt(0) || user?.email?.charAt(0) || 'U'}
+                                        {(editingName ? nameInput : displayName)?.charAt(0) || user?.email?.charAt(0) || 'U'}
                                     </div>
                                     <div className="absolute inset-0 rounded-full bg-finance-primary blur-xl opacity-40 animate-pulse" />
                                 </div>
 
-                                <div className="mt-2 sm:mt-4">
-                                    <h2 className="text-2xl font-semibold text-white tracking-tight">{displayName || 'Usuário SaldoPro'}</h2>
-                                    <p className="text-finance-primary-light font-medium">{user?.email}</p>
+                                <div className="mt-2 sm:mt-4 flex-1 min-w-0">
+                                    {editingName ? (
+                                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                                            <input
+                                                id="profile-name-input"
+                                                type="text"
+                                                value={nameInput}
+                                                onChange={(e) => setNameInput(e.target.value)}
+                                                className="flex-1 min-w-0 rounded-xl border border-surface-700/50 bg-[#0c1016] px-4 py-2.5 text-lg font-semibold text-white placeholder:text-gray-600 focus:border-finance-primary/50 focus:outline-none focus:ring-1 focus:ring-finance-primary/30 transition-all"
+                                                placeholder="Seu nome"
+                                                autoFocus
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') void handleSaveName();
+                                                    if (e.key === 'Escape') handleCancelEditName();
+                                                }}
+                                            />
+                                            <div className="flex gap-2">
+                                                <Button
+                                                    type="button"
+                                                    onClick={() => void handleSaveName()}
+                                                    isLoading={isSavingName}
+                                                    disabled={!nameInput.trim() || nameInput.trim() === displayName}
+                                                    className="rounded-xl bg-finance-primary hover:bg-finance-primary-light text-white px-5 py-2.5 text-sm font-medium shadow-lg shadow-finance-primary/20"
+                                                >
+                                                    <Save className="w-4 h-4 mr-1.5" />
+                                                    Salvar
+                                                </Button>
+                                                <button
+                                                    type="button"
+                                                    onClick={handleCancelEditName}
+                                                    className="rounded-xl border border-surface-700/40 bg-transparent px-4 py-2.5 text-sm text-gray-400 hover:text-gray-200 hover:border-surface-600/60 transition-colors"
+                                                >
+                                                    Cancelar
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="flex items-center gap-3">
+                                            <h2 className="text-2xl font-semibold text-white tracking-tight">{displayName || 'Usuário SaldoPro'}</h2>
+                                            <button
+                                                type="button"
+                                                onClick={handleStartEditName}
+                                                className="rounded-lg p-1.5 text-gray-500 hover:text-finance-primary-light hover:bg-finance-primary/10 transition-all"
+                                                title="Editar nome"
+                                            >
+                                                <Pencil className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                    )}
+                                    <p className="text-finance-primary-light font-medium mt-1">{user?.email}</p>
                                 </div>
                             </div>
 
@@ -183,7 +264,7 @@ export function Settings() {
                                     <span className="font-medium text-gray-300">Detalhes da Conta</span>
                                 </div>
                                 <p className="mb-1">Conta criada em: <span className="text-gray-200">{user?.metadata.creationTime ? new Date(user.metadata.creationTime).toLocaleDateString('pt-BR') : 'Desconhecido'}</span></p>
-                                <p>Os dados de perfil (nome e email) são gerenciados com segurança pela sua conta Google/Firebase.</p>
+                                <p>Clique no ícone de lápis ao lado do nome para alterá-lo.</p>
                             </div>
                         </div>
                     </section>

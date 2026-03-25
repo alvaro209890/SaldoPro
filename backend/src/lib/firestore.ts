@@ -708,6 +708,17 @@ export async function getUserProfile(uid: string): Promise<UserProfileBackend> {
   return { displayName: data?.display_name ?? '' };
 }
 
+export async function updateUserDisplayName(uid: string, displayName: string): Promise<void> {
+  const trimmed = displayName.trim();
+  if (!trimmed) throw new Error('updateUserDisplayName: nome obrigatorio');
+
+  const { error } = await db
+    .from('app_users')
+    .update({ display_name: trimmed })
+    .eq('uid', uid);
+  assertNoError(error, 'updateUserDisplayName');
+}
+
 export async function listAdminUserSnapshots(): Promise<AdminUserSnapshot[]> {
   const [usersRes, settingsRes, transactionsRes, remindersRes, categoriesRes, messagesRes] = await Promise.all([
     db
