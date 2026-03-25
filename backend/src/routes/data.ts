@@ -70,7 +70,7 @@ interface ApiUserDocument {
   title: string;
   description: string | null;
   tags: string[];
-  previewUrl: string;
+  previewUrl: string | null;
   mimeType: string;
   sizeBytes: number;
   source: string;
@@ -169,7 +169,7 @@ function buildDocumentDownloadName(document: UserDocument): string {
   return `${baseName || `arquivo-${document.id.slice(0, 8)}`}.${getDocumentExtension(document.mimeType)}`;
 }
 
-function buildDocumentPayload(document: UserDocument, previewUrl: string): ApiUserDocument {
+function buildDocumentPayload(document: UserDocument, previewUrl: string | null): ApiUserDocument {
   return {
     id: document.id,
     title: document.title,
@@ -497,7 +497,17 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
       const documents = await listUserDocuments(uid);
       const items = await Promise.all(
         documents.map(async (document) => {
-          const previewUrl = await createSignedDocumentUrl(document.storagePath, USER_DOCUMENT_SIGNED_URL_TTL_SECONDS);
+          let previewUrl = null;
+          try {
+            previewUrl = await createSignedDocumentUrl(document.storagePath, USER_DOCUMENT_SIGNED_URL_TTL_SECONDS);
+          } catch (err) {
+            logger.warn('Failed to generate preview URL, returning null', {
+              uid,
+              documentId: document.id,
+              storagePath: document.storagePath,
+              error: err instanceof Error ? err.message : 'unknown'
+            });
+          }
           return buildDocumentPayload(document, previewUrl);
         })
       );

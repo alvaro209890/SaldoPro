@@ -357,7 +357,18 @@ function createDataRouter(signupWelcomeDispatcher) {
             const uid = getUid(req);
             const documents = await (0, firestore_1.listUserDocuments)(uid);
             const items = await Promise.all(documents.map(async (document) => {
-                const previewUrl = await (0, document_storage_1.createSignedDocumentUrl)(document.storagePath, USER_DOCUMENT_SIGNED_URL_TTL_SECONDS);
+                let previewUrl = null;
+                try {
+                    previewUrl = await (0, document_storage_1.createSignedDocumentUrl)(document.storagePath, USER_DOCUMENT_SIGNED_URL_TTL_SECONDS);
+                }
+                catch (err) {
+                    logger_1.logger.warn('Failed to generate preview URL, returning null', {
+                        uid,
+                        documentId: document.id,
+                        storagePath: document.storagePath,
+                        error: err instanceof Error ? err.message : 'unknown'
+                    });
+                }
                 return buildDocumentPayload(document, previewUrl);
             }));
             res.json(items);
