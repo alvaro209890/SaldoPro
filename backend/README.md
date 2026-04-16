@@ -4,8 +4,9 @@ Backend Node.js + TypeScript para WhatsApp/IA do SaldoPro.
 
 ## Arquitetura de dados
 
-- Firebase Auth: validacao do token JWT do frontend.
+- Supabase Auth: login, refresh de sessao e validacao do token do frontend.
 - Supabase: persistencia de dados de negocio e dados do WhatsApp.
+- Firebase Admin: usado apenas nas rotinas que ainda dependem do painel/admin.
 
 ## Requisitos
 
@@ -16,7 +17,9 @@ Backend Node.js + TypeScript para WhatsApp/IA do SaldoPro.
 ## Setup
 
 1. Copie `backend/.env.example` para `backend/.env`.
-2. Preencha variaveis obrigatorias (`SUPABASE_*`, `FIREBASE_*`, `WHATSAPP_API_TOKEN`, `GROQ_API_KEY` quando IA ativa).
+2. Preencha variaveis obrigatorias (`SUPABASE_*`, `WHATSAPP_API_TOKEN`, `MERCADO_PAGO_*`, `GROQ_API_KEY` quando IA ativa).
+   - Para Firebase Admin, use `FIREBASE_SERVICE_ACCOUNT_PATH` apontando para o JSON da service account, ou informe `FIREBASE_*` inline.
+   - Para operacao local segura atras do Cloudflare Tunnel, mantenha `HOST=127.0.0.1`.
 3. Instale dependencias:
 ```bash
 npm install
@@ -39,3 +42,7 @@ npm run dev
 ## Deploy (Render)
 
 Use o `render.yaml` e configure as variaveis de ambiente no service.
+
+## Operacao local no host
+
+Consulte [`docs/local-backend-cursar-space.md`](../docs/local-backend-cursar-space.md) para subir este backend localmente com `systemd --user` e publicar via `cursar.space` sem interferir no WMS nem nos outros servicos do host.

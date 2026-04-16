@@ -1,4 +1,4 @@
-import { supabaseAdmin as db } from './supabase';
+import { db, nowIso } from './local-db';
 
 const DEFAULT_LOCK_TTL_SECONDS = 90;
 
@@ -8,6 +8,14 @@ function assertSlotId(slotId: string): void {
   }
 }
 
+function expiresAtFromNow(ttlSeconds: number): string {
+  return new Date(Date.now() + ttlSeconds * 1000).toISOString();
+}
+
+function isExpired(expiresAt: string): boolean {
+  return Date.parse(expiresAt) <= Date.now();
+}
+
 export async function acquireWhatsAppConnectionLock(
   slotId: 'wa1',
   instanceId: string,
@@ -15,19 +23,28 @@ export async function acquireWhatsAppConnectionLock(
 ): Promise<boolean> {
   assertSlotId(slotId);
   const normalizedInstanceId = instanceId.trim();
-  if (!normalizedInstanceId) throw new Error('Invalid instance id for WhatsApp lock');
-
-  const { data, error } = await db.rpc('acquire_whatsapp_connection_lock', {
-    p_slot_id: slotId,
-    p_instance_id: normalizedInstanceId,
-    p_ttl_seconds: ttlSeconds
-  });
-
-  if (error) {
-    throw new Error(`acquireWhatsAppConnectionLock: ${error.message}`);
+  if (!normalizedInstanceId) {
+    throw new Error('Invalid instance id for WhatsApp lock');
   }
 
-  return data === true;
+  const current = db
+    .prepare('select instance_id as instanceId, expires_at as expiresAt from whatsapp_connection_locks where slot_id = ?')
+    .get(slotId) as { instanceId: string; expiresAt: string } | undefined;
+
+  if (current && !isExpired(current.expiresAt) && current.instanceId !== normalizedInstanceId) {
+    return false;
+  }
+
+  db.prepare(`
+    insert into whatsapp_connection_locks (slot_id, instance_id, expires_at, updated_at)
+    values (?, ?, ?, ?)
+    on conflict(slot_id) do update set
+      instance_id = excluded.instance_id,
+      expires_at = excluded.expires_at,
+      updated_at = excluded.updated_at
+  `).run(slotId, normalizedInstanceId, expiresAtFromNow(ttlSeconds), nowIso());
+
+  return true;
 }
 
 export async function releaseWhatsAppConnectionLock(
@@ -36,18 +53,15 @@ export async function releaseWhatsAppConnectionLock(
 ): Promise<boolean> {
   assertSlotId(slotId);
   const normalizedInstanceId = instanceId.trim();
-  if (!normalizedInstanceId) return false;
-
-  const { data, error } = await db.rpc('release_whatsapp_connection_lock', {
-    p_slot_id: slotId,
-    p_instance_id: normalizedInstanceId
-  });
-
-  if (error) {
-    throw new Error(`releaseWhatsAppConnectionLock: ${error.message}`);
+  if (!normalizedInstanceId) {
+    return false;
   }
 
-  return data === true;
+  const result = db
+    .prepare('delete from whatsapp_connection_locks where slot_id = ? and instance_id = ?')
+    .run(slotId, normalizedInstanceId);
+
+  return result.changes > 0;
 }
 
 export async function forceAcquireWhatsAppConnectionLock(
@@ -57,17 +71,18 @@ export async function forceAcquireWhatsAppConnectionLock(
 ): Promise<boolean> {
   assertSlotId(slotId);
   const normalizedInstanceId = instanceId.trim();
-  if (!normalizedInstanceId) throw new Error('Invalid instance id for WhatsApp lock');
-
-  const { data, error } = await db.rpc('force_acquire_whatsapp_connection_lock', {
-    p_slot_id: slotId,
-    p_instance_id: normalizedInstanceId,
-    p_ttl_seconds: ttlSeconds
-  });
-
-  if (error) {
-    throw new Error(`forceAcquireWhatsAppConnectionLock: ${error.message}`);
+  if (!normalizedInstanceId) {
+    throw new Error('Invalid instance id for WhatsApp lock');
   }
 
-  return data === true;
+  db.prepare(`
+    insert into whatsapp_connection_locks (slot_id, instance_id, expires_at, updated_at)
+    values (?, ?, ?, ?)
+    on conflict(slot_id) do update set
+      instance_id = excluded.instance_id,
+      expires_at = excluded.expires_at,
+      updated_at = excluded.updated_at
+  `).run(slotId, normalizedInstanceId, expiresAtFromNow(ttlSeconds), nowIso());
+
+  return true;
 }

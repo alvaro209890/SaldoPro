@@ -1,25 +1,10 @@
-import { supabaseAdmin as db } from './supabase';
+import { randomUUID } from 'node:crypto';
+import { db, nowIso, parseJsonArray, parseJsonObject, stringifyJson } from './local-db';
 import { logger } from './logger';
 import type { WhatsAppMessageRecord, WhatsAppSlotId } from '../types/whatsapp';
 import { brazilianPhoneVariants, normalizePhoneNumber } from '../whatsapp/events';
-import { getBrasiliaISOString } from './date-utils';
 
-const COLLECTION_NAME = 'whatsapp_messages';
-const BINDINGS_COLLECTION_NAME = 'whatsapp_bindings';
-const AUTH_STATE_COLLECTION_NAME = 'whatsapp_runtime';
-const AUTH_STATE_DOC_ID_LEGACY = 'authState';
-const AUTH_STATE_FILES_SUBCOLLECTION = 'whatsapp_runtime_files';
 const GLOBAL_CATEGORIES_UID = '__global__';
-const PROFILE_SCAN_CACHE_TTL_MS = 15_000;
-const BINDING_CACHE_TTL_MS = 5 * 60 * 1000;
-const LAST_ACTIVITY_CACHE_TTL_MS = 3 * 60 * 1000;
-const ALLOWED_NUMBERS_CACHE_TTL_MS = 2 * 60 * 1000;
-const WHATSAPP_GUEST_UID_PREFIX = 'wa_guest_';
-
-function assertNoError(error: { message: string } | null, context: string): void {
-  if (!error) return;
-  throw new Error(`${context}: ${error.message}`);
-}
 
 export class DuplicateCategoryError extends Error {
   constructor(message = 'Categoria ja existe.') {
@@ -28,198 +13,12 @@ export class DuplicateCategoryError extends Error {
   }
 }
 
-function toNumber(value: string | number | null | undefined): number {
-  if (typeof value === 'number') return value;
-  const parsed = Number(value ?? 0);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function sanitizeDocId(value: string): string {
-  return value.replace(/[^\w.-]/g, '_');
-}
-
-function authFileDocId(filename: string): string {
-  return Buffer.from(filename, 'utf8').toString('base64url');
-}
-
-function authStateDocId(slotId: WhatsAppSlotId): string {
-  return `authState_${slotId}`;
-}
-
-function getDocId(record: WhatsAppMessageRecord): string {
-  const prefix =
-    record.direction === 'inbound'
-      ? 'in'
-      : record.direction === 'outbound'
-        ? 'out'
-        : 'ar';
-  return `${record.clientId}_${prefix}_${sanitizeDocId(record.messageId)}`;
-}
-
-function monthKeyFromDate(date: string): string {
-  return date.slice(0, 7);
-}
-
-function normalizeDueTime(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(trimmed);
-  if (!match) return null;
-  return `${match[1]}:${match[2]}`;
-}
-
-function reminderDueAtFromDateAndTime(dueDate: string, dueTime: string | null): string | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return null;
-  const normalizedTime = normalizeDueTime(dueTime);
-  if (!normalizedTime) return null;
-
-  // Interpreta horários dos lembretes em BRT (UTC-03:00).
-  const parsed = new Date(`${dueDate}T${normalizedTime}:00-03:00`);
-  if (!Number.isFinite(parsed.getTime())) return null;
-  return parsed.toISOString();
-}
-
-function normalizeReminderKind(
-  reminderKind: unknown,
-  reminderType: unknown
-): 'general' | 'payable' | 'receivable' {
-  if (reminderKind === 'general' || reminderKind === 'payable' || reminderKind === 'receivable') {
-    return reminderKind;
+export class DuplicateUserEmailError extends Error {
+  constructor(message = 'Este email ja esta vinculado a outra conta.') {
+    super(message);
+    this.name = 'DuplicateUserEmailError';
   }
-  if (reminderType === 'payable' || reminderType === 'receivable') {
-    return reminderType;
-  }
-  return 'general';
 }
-
-interface DbTransactionRow {
-  id: string;
-  type: 'income' | 'expense';
-  amount: number | string;
-  date: string;
-  month_key: string;
-  category: string;
-  description: string;
-  payment_method: 'pix' | 'credit' | 'debit' | 'cash' | 'transfer' | 'boleto';
-  created_at: string;
-  updated_at: string;
-}
-
-interface DbRecurringRow {
-  id: string;
-  type: 'income' | 'expense';
-  amount: number | string;
-  category: string;
-  description: string;
-  payment_method: 'pix' | 'credit' | 'debit' | 'cash' | 'transfer' | 'boleto';
-  frequency: 'weekly' | 'monthly' | 'yearly';
-  start_date: string;
-  end_date: string | null;
-  next_due_date: string;
-  active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-interface DbReminderRow {
-  id: string;
-  title: string;
-  amount: number | string | null;
-  due_date: string;
-  due_time: string | null;
-  due_at: string | null;
-  notified_at: string | null;
-  notify_phone: string | null;
-  reminder_kind: 'general' | 'payable' | 'receivable';
-  type: 'payable' | 'receivable' | null;
-  status: 'pending' | 'paid';
-  created_at: string;
-  updated_at: string;
-}
-
-interface DbChatSessionRow {
-  id: string;
-  title: string;
-  created_at: string;
-  updated_at: string;
-}
-
-interface DbChatMessageRow {
-  id: string;
-  session_id: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  image_url: string | null;
-  created_at: string;
-}
-
-interface DbUserDocumentRow {
-  id: string;
-  uid: string;
-  source: string;
-  title: string;
-  description: string | null;
-  normalized_title: string;
-  normalized_description: string | null;
-  search_tokens: string[] | null;
-  storage_path: string;
-  mime_type: string;
-  size_bytes: number;
-  status: 'ready' | 'deleted';
-  created_at: string;
-  updated_at: string;
-  last_accessed_at: string | null;
-}
-
-interface DbPendingDocumentRow {
-  id: string;
-  uid: string;
-  source_phone: string;
-  storage_path: string;
-  mime_type: string;
-  size_bytes: number;
-  pending_reason: string;
-  expires_at: string;
-  created_at: string;
-}
-
-interface DbWhatsAppMessageRow {
-  id: string;
-  client_id: WhatsAppSlotId;
-  direction: 'inbound' | 'outbound' | 'auto_reply';
-  owner_uid: string | null;
-  status: 'received' | 'sent' | 'failed';
-  created_at: string;
-  text: string;
-  metadata: {
-    hasImage?: boolean;
-  } | null;
-}
-
-const DEFAULT_EXPENSE_CATEGORIES: Omit<UserCategory, 'id'>[] = [
-  { name: 'Alimentacao', type: 'expense', color: '#f97316', icon: 'UtensilsCrossed' },
-  { name: 'Combustivel', type: 'expense', color: '#eab308', icon: 'Fuel' },
-  { name: 'Moradia', type: 'expense', color: '#8b5cf6', icon: 'Home' },
-  { name: 'Internet', type: 'expense', color: '#06b6d4', icon: 'Wifi' },
-  { name: 'Lazer', type: 'expense', color: '#ec4899', icon: 'Gamepad2' },
-  { name: 'Saude', type: 'expense', color: '#10b981', icon: 'Heart' },
-  { name: 'Transporte', type: 'expense', color: '#3b82f6', icon: 'Car' },
-  { name: 'Educacao', type: 'expense', color: '#a855f7', icon: 'GraduationCap' },
-  { name: 'Outros', type: 'expense', color: '#6b7280', icon: 'MoreHorizontal' }
-];
-
-const DEFAULT_INCOME_CATEGORIES: Omit<UserCategory, 'id'>[] = [
-  { name: 'Salario', type: 'income', color: '#10b981', icon: 'Briefcase' },
-  { name: 'Freela', type: 'income', color: '#06b6d4', icon: 'Laptop' },
-  { name: 'Vendas', type: 'income', color: '#f97316', icon: 'ShoppingBag' },
-  { name: 'Investimentos', type: 'income', color: '#8b5cf6', icon: 'TrendingUp' },
-  { name: 'Outros', type: 'income', color: '#6b7280', icon: 'MoreHorizontal' }
-];
-
-const DEFAULT_GLOBAL_CATEGORIES: Omit<UserCategory, 'id'>[] = [
-  ...DEFAULT_EXPENSE_CATEGORIES,
-  ...DEFAULT_INCOME_CATEGORIES
-];
 
 export interface UserCategory {
   id: string;
@@ -227,6 +26,7 @@ export interface UserCategory {
   type: 'income' | 'expense';
   color: string;
   icon: string;
+  createdAt?: string;
 }
 
 export interface UserTransaction {
@@ -309,6 +109,13 @@ export interface AdminUserSnapshot {
   createdAt: string | null;
   settings: AdminUserSettingsSnapshot | null;
   metrics: AdminUserMetrics;
+}
+
+export interface LocalUserAccessSnapshot {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  createdAt: string | null;
 }
 
 export interface BootstrapUserInput {
@@ -417,933 +224,27 @@ export interface CreatePendingWhatsAppDocumentDraftInput {
   pendingReason?: string;
 }
 
-function normalizeStoredPhoneList(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-
-  const unique = new Set<string>();
-  for (const item of value) {
-    if (typeof item !== 'string') continue;
-    const normalized = normalizePhoneNumber(item);
-    if (normalized.length < 10) continue;
-    unique.add(normalized);
-  }
-  return [...unique];
-}
-
-function incrementCounter(counter: Map<string, number>, uid: string | null | undefined): void {
-  const normalizedUid = typeof uid === 'string' ? uid.trim() : '';
-  if (!normalizedUid || normalizedUid === GLOBAL_CATEGORIES_UID) return;
-  counter.set(normalizedUid, (counter.get(normalizedUid) ?? 0) + 1);
-}
-
-export async function saveWhatsAppMessage(record: WhatsAppMessageRecord): Promise<void> {
-  const docId = getDocId(record);
-  const { error } = await db.from(COLLECTION_NAME).upsert(
-    {
-      id: docId,
-      client_id: record.clientId,
-      message_id: record.messageId,
-      direction: record.direction,
-      owner_uid: record.ownerUid ?? null,
-      from_phone: record.from,
-      to_phone: record.to,
-      text: record.text,
-      timestamp: record.timestamp,
-      wa_timestamp: record.waTimestamp,
-      status: record.status,
-      raw_type: record.rawType,
-      created_at: record.createdAt,
-      metadata: record.metadata
-    },
-    { onConflict: 'id' }
-  );
-  assertNoError(error, 'saveWhatsAppMessage');
-}
-
-export async function inboundMessageExists(
-  messageId: string,
-  clientId: WhatsAppSlotId,
-  processedInMemory?: Set<string>
-): Promise<boolean> {
-  if (processedInMemory?.has(messageId)) return true;
-
-  const normalizedId = sanitizeDocId(messageId);
-  const docIds =
-    clientId === 'wa1'
-      ? [`wa1_in_${normalizedId}`, `in_${normalizedId}`]
-      : [`${clientId}_in_${normalizedId}`];
-
-  const { data, error } = await db.from(COLLECTION_NAME).select('id').in('id', docIds).limit(1);
-  assertNoError(error, 'inboundMessageExists');
-  return (data ?? []).length > 0;
-}
-
-export async function saveMessageSafe(record: WhatsAppMessageRecord): Promise<void> {
-  try {
-    await saveWhatsAppMessage(record);
-  } catch (error) {
-    logger.error('Failed to save WhatsApp message in Supabase', error);
-  }
-}
-
-async function ensureGlobalCategoriesSeed(): Promise<void> {
-  // app_categories.uid references app_users(uid), so the synthetic global owner
-  // must always exist before seeding shared categories.
-  const { error: ensureGlobalUserError } = await db
-    .from('app_users')
-    .upsert(
-      {
-        uid: GLOBAL_CATEGORIES_UID,
-        email: null,
-        display_name: 'Global Categories',
-        created_at: new Date().toISOString()
-      },
-      { onConflict: 'uid' }
-    );
-  assertNoError(ensureGlobalUserError, 'ensureGlobalCategoriesSeed.ensureGlobalUser');
-
-  const { count, error: countError } = await db
-    .from('app_categories')
-    .select('*', { count: 'exact', head: true })
-    .eq('uid', GLOBAL_CATEGORIES_UID);
-  assertNoError(countError, 'ensureGlobalCategoriesSeed.count');
-  if ((count ?? 0) > 0) return;
-
-  const now = new Date().toISOString();
-  const rows = DEFAULT_GLOBAL_CATEGORIES.map((item) => ({
-    uid: GLOBAL_CATEGORIES_UID,
-    name: item.name,
-    type: item.type,
-    color: item.color,
-    icon: item.icon,
-    created_at: now
-  }));
-
-  const { error: insertError } = await db.from('app_categories').insert(rows);
-  if (!insertError) return;
-
-  const code = (insertError as { code?: string }).code;
-  if (code === '23505') return;
-  throw new Error(`ensureGlobalCategoriesSeed.insert: ${insertError.message}`);
-}
-
-export async function bootstrapUserData(uid: string, input: BootstrapUserInput): Promise<BootstrapUserResult> {
-  const now = new Date().toISOString();
-
-  const { data: userData, error: userReadError } = await db
-    .from('app_users')
-    .select('uid')
-    .eq('uid', uid)
-    .maybeSingle();
-  assertNoError(userReadError, 'bootstrapUserData.userRead');
-  const isNewUser = !userData;
-
-  if (userData) {
-    const { error } = await db
-      .from('app_users')
-      .update({ email: input.email, display_name: input.displayName })
-      .eq('uid', uid);
-    assertNoError(error, 'bootstrapUserData.userUpdate');
-  } else {
-    const { error } = await db.from('app_users').insert({
-      uid,
-      email: input.email,
-      display_name: input.displayName,
-      created_at: now
-    });
-    assertNoError(error, 'bootstrapUserData.userInsert');
-  }
-
-  const normalizedPhone = normalizePhoneNumber(input.phone);
-  const { data: settingsData, error: settingsReadError } = await db
-    .from('app_user_settings')
-    .select('uid, whatsapp_allowed_numbers')
-    .eq('uid', uid)
-    .maybeSingle<{ uid: string; whatsapp_allowed_numbers: string[] | null }>();
-  assertNoError(settingsReadError, 'bootstrapUserData.settingsRead');
-
-  if (!settingsData) {
-    const numbers = normalizedPhone.length >= 10 ? [normalizedPhone] : [];
-    const { error } = await db.from('app_user_settings').insert({
-      uid,
-      budget: 0,
-      start_day: 1,
-      currency: 'BRL',
-      whatsapp_allowed_numbers: numbers,
-      updated_at: now
-    });
-    assertNoError(error, 'bootstrapUserData.settingsInsert');
-  } else if (normalizedPhone.length >= 10) {
-    const current = Array.isArray(settingsData.whatsapp_allowed_numbers)
-      ? settingsData.whatsapp_allowed_numbers
-      : [];
-    if (!current.includes(normalizedPhone)) {
-      const { error } = await db
-        .from('app_user_settings')
-        .update({
-          whatsapp_allowed_numbers: [...current, normalizedPhone],
-          updated_at: now
-        })
-        .eq('uid', uid);
-      assertNoError(error, 'bootstrapUserData.settingsUpdatePhone');
-    }
-  }
-
-  // Pre-create WhatsApp binding at signup/bootstrap time.
-  // This avoids relying on first inbound metadata resolution for new accounts.
-  if (normalizedPhone.length >= 10) {
-    try {
-      await savePhoneBinding(normalizedPhone, uid);
-    } catch (error) {
-      logger.warn('bootstrapUserData: failed to pre-bind WhatsApp phone', {
-        uid,
-        phone: normalizedPhone,
-        error: error instanceof Error ? error.message : 'unknown'
-      });
-    }
-  }
-  await ensureGlobalCategoriesSeed();
-
-  allowedNumbersCache.delete(uid);
-  profileScanCache = null;
-
-  return {
-    isNewUser,
-    normalizedPhone: normalizedPhone.length >= 10 ? normalizedPhone : null
-  };
-}
-
-export async function getUserSettings(uid: string): Promise<UserSettingsBackend> {
-  const { data, error } = await db
-    .from('app_user_settings')
-    .select('budget, start_day, currency, whatsapp_allowed_numbers, updated_at')
-    .eq('uid', uid)
-    .maybeSingle<{
-      budget: number | string;
-      start_day: number;
-      currency: string;
-      whatsapp_allowed_numbers: unknown;
-      updated_at: string;
-    }>();
-  assertNoError(error, 'getUserSettings');
-  if (!data) {
-    return {
-      budget: 0,
-      startDay: 1,
-      currency: 'BRL',
-      whatsappAllowedNumbers: [],
-      updatedAt: new Date().toISOString()
-    };
-  }
-
-  const whatsappAllowedNumbers = Array.isArray(data.whatsapp_allowed_numbers)
-    ? data.whatsapp_allowed_numbers
-      .filter((value): value is string => typeof value === 'string')
-      .map((value) => normalizePhoneNumber(value))
-      .filter((value) => value.length >= 10)
-    : [];
-
-  return {
-    budget: toNumber(data.budget),
-    startDay: data.start_day,
-    currency: data.currency ?? 'BRL',
-    whatsappAllowedNumbers,
-    updatedAt: data.updated_at
-  };
-}
-
-export async function updateUserSettings(
-  uid: string,
-  changes: Partial<UserSettingsBackend & { whatsappAllowedNumbers: string[] }>
-): Promise<void> {
-  const now = new Date().toISOString();
-  const updates: Record<string, unknown> = { updated_at: now };
-  if (typeof changes.budget === 'number') updates.budget = changes.budget;
-  if (typeof changes.startDay === 'number') updates.start_day = changes.startDay;
-  if (typeof changes.currency === 'string') updates.currency = changes.currency;
-  if (Array.isArray(changes.whatsappAllowedNumbers)) {
-    updates.whatsapp_allowed_numbers = [
-      ...new Set(
-        changes.whatsappAllowedNumbers
-          .map((value) => normalizePhoneNumber(value))
-          .filter((value) => value.length >= 10)
-      )
-    ];
-  }
-
-  const { data: existing, error: readError } = await db
-    .from('app_user_settings')
-    .select('uid')
-    .eq('uid', uid)
-    .maybeSingle();
-  assertNoError(readError, 'updateUserSettings.read');
-
-  if (existing) {
-    const { error } = await db.from('app_user_settings').update(updates).eq('uid', uid);
-    assertNoError(error, 'updateUserSettings.update');
-  } else {
-    const { error } = await db.from('app_user_settings').insert({
-      uid,
-      budget: typeof changes.budget === 'number' ? changes.budget : 0,
-      start_day: typeof changes.startDay === 'number' ? changes.startDay : 1,
-      currency: typeof changes.currency === 'string' ? changes.currency : 'BRL',
-      whatsapp_allowed_numbers: Array.isArray(updates.whatsapp_allowed_numbers)
-        ? updates.whatsapp_allowed_numbers
-        : [],
-      updated_at: now
-    });
-    assertNoError(error, 'updateUserSettings.insert');
-  }
-
-  allowedNumbersCache.delete(uid);
-  profileScanCache = null;
-}
-
-export async function getUserProfile(uid: string): Promise<UserProfileBackend> {
-  const { data, error } = await db
-    .from('app_users')
-    .select('display_name')
-    .eq('uid', uid)
-    .maybeSingle<{ display_name: string }>();
-  assertNoError(error, 'getUserProfile');
-  return { displayName: data?.display_name ?? '' };
-}
-
-export async function updateUserDisplayName(uid: string, displayName: string): Promise<void> {
-  const trimmed = displayName.trim();
-  if (!trimmed) throw new Error('updateUserDisplayName: nome obrigatorio');
-
-  const { error } = await db
-    .from('app_users')
-    .update({ display_name: trimmed })
-    .eq('uid', uid);
-  assertNoError(error, 'updateUserDisplayName');
-}
-
-export async function listAdminUserSnapshots(): Promise<AdminUserSnapshot[]> {
-  const [usersRes, settingsRes, transactionsRes, remindersRes, categoriesRes, messagesRes] = await Promise.all([
-    db
-      .from('app_users')
-      .select('uid, email, display_name, created_at')
-      .neq('uid', GLOBAL_CATEGORIES_UID)
-      .order('created_at', { ascending: false }),
-    db
-      .from('app_user_settings')
-      .select('uid, budget, start_day, currency, whatsapp_allowed_numbers, updated_at'),
-    db
-      .from('app_transactions')
-      .select('uid'),
-    db
-      .from('app_reminders')
-      .select('uid'),
-    db
-      .from('app_categories')
-      .select('uid')
-      .neq('uid', GLOBAL_CATEGORIES_UID),
-    db
-      .from(COLLECTION_NAME)
-      .select('owner_uid, created_at')
-  ]);
-
-  assertNoError(usersRes.error, 'listAdminUserSnapshots.users');
-  assertNoError(settingsRes.error, 'listAdminUserSnapshots.settings');
-  assertNoError(transactionsRes.error, 'listAdminUserSnapshots.transactions');
-  assertNoError(remindersRes.error, 'listAdminUserSnapshots.reminders');
-  assertNoError(categoriesRes.error, 'listAdminUserSnapshots.categories');
-  assertNoError(messagesRes.error, 'listAdminUserSnapshots.messages');
-
-  const settingsByUid = new Map<string, AdminUserSnapshot['settings']>();
-  for (const row of settingsRes.data ?? []) {
-    const uid = row.uid as string;
-    settingsByUid.set(uid, {
-      budget: toNumber(row.budget as number | string | null | undefined),
-      startDay: toNumber(row.start_day as number | string | null | undefined) || 1,
-      currency: typeof row.currency === 'string' && row.currency.trim() ? row.currency : 'BRL',
-      whatsappAllowedNumbers: normalizeStoredPhoneList(row.whatsapp_allowed_numbers),
-      updatedAt: typeof row.updated_at === 'string' ? row.updated_at : null
-    });
-  }
-
-  const transactionCounts = new Map<string, number>();
-  for (const row of transactionsRes.data ?? []) {
-    incrementCounter(transactionCounts, row.uid as string | null | undefined);
-  }
-
-  const reminderCounts = new Map<string, number>();
-  for (const row of remindersRes.data ?? []) {
-    incrementCounter(reminderCounts, row.uid as string | null | undefined);
-  }
-
-  const categoryCounts = new Map<string, number>();
-  for (const row of categoriesRes.data ?? []) {
-    incrementCounter(categoryCounts, row.uid as string | null | undefined);
-  }
-
-  const whatsappMessageCounts = new Map<string, number>();
-  const lastWhatsAppMessageAt = new Map<string, string>();
-  for (const row of messagesRes.data ?? []) {
-    const uid = typeof row.owner_uid === 'string' ? row.owner_uid.trim() : '';
-    if (!uid || uid === GLOBAL_CATEGORIES_UID) continue;
-    whatsappMessageCounts.set(uid, (whatsappMessageCounts.get(uid) ?? 0) + 1);
-
-    const createdAt = typeof row.created_at === 'string' ? row.created_at : '';
-    if (!createdAt) continue;
-    const current = lastWhatsAppMessageAt.get(uid);
-    if (!current || createdAt > current) {
-      lastWhatsAppMessageAt.set(uid, createdAt);
-    }
-  }
-
-  return (usersRes.data ?? []).map((row) => {
-    const uid = row.uid as string;
-    return {
-      uid,
-      email: typeof row.email === 'string' ? row.email : null,
-      displayName: typeof row.display_name === 'string' ? row.display_name : '',
-      createdAt: typeof row.created_at === 'string' ? row.created_at : null,
-      settings: settingsByUid.get(uid) ?? null,
-      metrics: {
-        transactions: transactionCounts.get(uid) ?? 0,
-        reminders: reminderCounts.get(uid) ?? 0,
-        categories: categoryCounts.get(uid) ?? 0,
-        whatsappMessages: whatsappMessageCounts.get(uid) ?? 0,
-        lastWhatsAppMessageAt: lastWhatsAppMessageAt.get(uid) ?? null
-      }
-    };
-  });
-}
-
-export async function getAdminUserSnapshot(uid: string): Promise<AdminUserSnapshot | null> {
-  const snapshots = await listAdminUserSnapshots();
-  return snapshots.find((entry) => entry.uid === uid) ?? null;
-}
-
-export async function getUserCategories(uid: string): Promise<UserCategory[]> {
-  await ensureGlobalCategoriesSeed();
-
-  const { data, error } = await db
-    .from('app_categories')
-    .select('id, uid, name, type, color, icon')
-    .in('uid', [GLOBAL_CATEGORIES_UID, uid])
-    .order('name', { ascending: true });
-  assertNoError(error, 'getUserCategories');
-
-  const rows = (data ?? []) as Array<{
-    id: string;
-    uid: string;
-    name: string;
-    type: 'income' | 'expense';
-    color: string;
-    icon: string;
-  }>;
-
-  const byKey = new Map<string, typeof rows[number]>();
-  for (const row of rows) {
-    const key = `${row.type}:${row.name.trim().toLowerCase()}`;
-    const current = byKey.get(key);
-    if (!current || row.uid === uid) {
-      byKey.set(key, row);
-    }
-  }
-
-  return [...byKey.values()]
-    .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
-    .map((row) => ({
-      id: row.id,
-      name: row.name,
-      type: row.type,
-      color: row.color,
-      icon: row.icon
-    }));
-}
-
-export async function addUserCategory(uid: string, input: Omit<UserCategory, 'id'>): Promise<string> {
-  const normalizedName = input.name.trim();
-  if (!normalizedName) throw new Error('addUserCategory: nome da categoria obrigatorio');
-
-  const { data: existing, error: existingError } = await db
-    .from('app_categories')
-    .select('id')
-    .in('uid', [GLOBAL_CATEGORIES_UID, uid])
-    .eq('type', input.type)
-    .ilike('name', normalizedName)
-    .limit(1);
-  assertNoError(existingError, 'addUserCategory.exists');
-  if ((existing ?? []).length > 0) {
-    throw new DuplicateCategoryError();
-  }
-
-  const { data, error } = await db
-    .from('app_categories')
-    .insert({
-      uid,
-      name: normalizedName,
-      type: input.type,
-      color: input.color,
-      icon: input.icon,
-      created_at: new Date().toISOString()
-    })
-    .select('id')
-    .single<{ id: string }>();
-  assertNoError(error, 'addUserCategory');
-  if (!data?.id) throw new Error('addUserCategory: response sem id');
-  return data.id;
-}
-
-export async function updateUserCategory(
-  uid: string,
-  categoryId: string,
-  changes: Partial<Omit<UserCategory, 'id'>>
-): Promise<void> {
-  const { data: current, error: currentError } = await db
-    .from('app_categories')
-    .select('name, type')
-    .eq('uid', uid)
-    .eq('id', categoryId)
-    .maybeSingle<{ name: string; type: 'income' | 'expense' }>();
-  assertNoError(currentError, 'updateUserCategory.current');
-  if (!current) return;
-
-  const targetName = typeof changes.name === 'string' ? changes.name.trim() : current.name;
-  const targetType = typeof changes.type === 'string' ? changes.type : current.type;
-  if (!targetName) {
-    throw new Error('updateUserCategory: nome da categoria obrigatorio');
-  }
-
-  if (targetName.toLowerCase() !== current.name.toLowerCase() || targetType !== current.type) {
-    const { data: existing, error: existingError } = await db
-      .from('app_categories')
-      .select('id')
-      .in('uid', [GLOBAL_CATEGORIES_UID, uid])
-      .eq('type', targetType)
-      .ilike('name', targetName)
-      .neq('id', categoryId)
-      .limit(1);
-    assertNoError(existingError, 'updateUserCategory.exists');
-    if ((existing ?? []).length > 0) {
-      throw new DuplicateCategoryError();
-    }
-  }
-
-  const updates: Record<string, unknown> = {};
-  if (typeof changes.name === 'string') updates.name = targetName;
-  if (typeof changes.type === 'string') updates.type = changes.type;
-  if (typeof changes.color === 'string') updates.color = changes.color;
-  if (typeof changes.icon === 'string') updates.icon = changes.icon;
-  if (Object.keys(updates).length === 0) return;
-
-  const { error } = await db
-    .from('app_categories')
-    .update(updates)
-    .eq('uid', uid)
-    .eq('id', categoryId);
-  assertNoError(error, 'updateUserCategory');
-}
-
-export async function deleteUserCategory(uid: string, categoryId: string): Promise<void> {
-  const { error } = await db
-    .from('app_categories')
-    .delete()
-    .eq('uid', uid)
-    .eq('id', categoryId);
-  assertNoError(error, 'deleteUserCategory');
-}
-
-function mapTransaction(row: DbTransactionRow): UserTransaction {
-  return {
-    id: row.id,
-    type: row.type,
-    amount: toNumber(row.amount),
-    date: row.date,
-    monthKey: row.month_key,
-    category: row.category,
-    description: row.description,
-    paymentMethod: row.payment_method,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  };
-}
-
-export async function getRecentTransactions(uid: string, limitCount = 50): Promise<UserTransaction[]> {
-  const { data, error } = await db
-    .from('app_transactions')
-    .select('id, type, amount, date, month_key, category, description, payment_method, created_at, updated_at')
-    .eq('uid', uid)
-    .order('created_at', { ascending: false })
-    .limit(limitCount);
-  assertNoError(error, 'getRecentTransactions');
-  return ((data ?? []) as DbTransactionRow[]).map(mapTransaction);
-}
-
-export async function getTransactionsByMonth(uid: string, monthKey: string): Promise<UserTransaction[]> {
-  const { data, error } = await db
-    .from('app_transactions')
-    .select('id, type, amount, date, month_key, category, description, payment_method, created_at, updated_at')
-    .eq('uid', uid)
-    .eq('month_key', monthKey)
-    .order('date', { ascending: false });
-  assertNoError(error, 'getTransactionsByMonth');
-  return ((data ?? []) as DbTransactionRow[]).map(mapTransaction);
-}
-
-export async function addUserTransaction(uid: string, input: CreateTransactionInput): Promise<string> {
-  const monthKey = monthKeyFromDate(input.date);
-  const now = new Date().toISOString();
-  const { data, error } = await db
-    .from('app_transactions')
-    .insert({
-      uid,
-      type: input.type,
-      amount: input.amount,
-      date: input.date,
-      month_key: monthKey,
-      category: input.category,
-      description: input.description,
-      payment_method: input.paymentMethod,
-      created_at: now,
-      updated_at: now
-    })
-    .select('id')
-    .single<{ id: string }>();
-  assertNoError(error, 'addUserTransaction');
-  if (!data?.id) throw new Error('addUserTransaction: response sem id');
-  return data.id;
-}
-
-export async function updateUserTransaction(
-  uid: string,
-  transactionId: string,
-  changes: Partial<Omit<UserTransaction, 'id' | 'createdAt'>>
-): Promise<void> {
-  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  if (typeof changes.type === 'string') updates.type = changes.type;
-  if (typeof changes.amount === 'number') updates.amount = changes.amount;
-  if (typeof changes.date === 'string') {
-    updates.date = changes.date;
-    updates.month_key = monthKeyFromDate(changes.date);
-  }
-  if (typeof changes.monthKey === 'string') updates.month_key = changes.monthKey;
-  if (typeof changes.category === 'string') updates.category = changes.category;
-  if (typeof changes.description === 'string') {
-    updates.description = changes.description.slice(0, 500);
-  }
-  if (changes.paymentMethod) updates.payment_method = changes.paymentMethod;
-
-  if (Object.keys(updates).length <= 1) return; // Only updated_at
-
-  const { error } = await db
-    .from('app_transactions')
-    .update(updates)
-    .eq('uid', uid)
-    .eq('id', transactionId);
-  assertNoError(error, 'updateUserTransaction');
-}
-
-export async function deleteUserTransaction(uid: string, transactionId: string): Promise<void> {
-  const { error } = await db
-    .from('app_transactions')
-    .delete()
-    .eq('uid', uid)
-    .eq('id', transactionId);
-  assertNoError(error, 'deleteUserTransaction');
-}
-
-export async function getUserTransactionById(uid: string, transactionId: string): Promise<UserTransaction | null> {
-  const { data, error } = await db
-    .from('app_transactions')
-    .select('id, type, amount, date, month_key, category, description, payment_method, created_at, updated_at')
-    .eq('uid', uid)
-    .eq('id', transactionId)
-    .maybeSingle<{
-      id: string;
-      type: 'income' | 'expense';
-      amount: number;
-      date: string;
-      month_key: string;
-      category: string;
-      description: string;
-      payment_method: 'pix' | 'credit' | 'debit' | 'cash' | 'transfer' | 'boleto';
-      created_at: string;
-      updated_at: string;
-    }>();
-  assertNoError(error, 'getUserTransactionById');
-  return data ? mapTransaction(data) : null;
-}
-
-export async function restoreUserTransaction(
-  uid: string,
-  transactionId: string,
-  transaction: Omit<UserTransaction, 'id'>
-): Promise<void> {
-  const { error } = await db
-    .from('app_transactions')
-    .upsert(
-      {
-        id: transactionId,
-        uid,
-        type: transaction.type,
-        amount: transaction.amount,
-        date: transaction.date,
-        month_key: monthKeyFromDate(transaction.date),
-        category: transaction.category,
-        description: transaction.description,
-        payment_method: transaction.paymentMethod,
-        created_at: transaction.createdAt,
-        updated_at: new Date().toISOString()
-      },
-      { onConflict: 'id' }
-    );
-  assertNoError(error, 'restoreUserTransaction');
-}
-
-function mapReminder(row: DbReminderRow): UserReminder {
-  return {
-    id: row.id,
-    reminderKind: row.reminder_kind,
-    title: row.title,
-    amount: row.amount == null ? null : toNumber(row.amount),
-    dueDate: row.due_date,
-    dueTime: row.due_time,
-    dueAt: row.due_at,
-    notifiedAt: row.notified_at,
-    notifyPhone: row.notify_phone,
-    type: row.type,
-    status: row.status,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  };
-}
-
-export async function addUserReminder(uid: string, input: CreateReminderInput): Promise<string> {
-  const now = new Date().toISOString();
-  const reminderKind = normalizeReminderKind(input.reminderKind, input.type);
-  const financialType = reminderKind === 'general' ? null : reminderKind;
-  const rawAmount = input.amount;
-  const amount = reminderKind === 'general'
-    ? null
-    : (typeof rawAmount === 'number' && Number.isFinite(rawAmount) && rawAmount > 0 ? rawAmount : null);
-  if (reminderKind !== 'general' && (amount == null || financialType == null)) {
-    throw new Error('addUserReminder: financial reminder requires amount and type');
-  }
-
-  const normalizedDueTime = normalizeDueTime(input.dueTime ?? null);
-  const dueAt = reminderDueAtFromDateAndTime(input.dueDate, normalizedDueTime);
-  const normalizedNotifyPhone = input.notifyPhone ? normalizePhoneNumber(input.notifyPhone) : '';
-  const { data, error } = await db
-    .from('app_reminders')
-    .insert({
-      uid,
-      reminder_kind: reminderKind,
-      title: input.title,
-      amount,
-      due_date: input.dueDate,
-      due_time: normalizedDueTime,
-      due_at: dueAt,
-      notify_phone: normalizedNotifyPhone.length >= 10 ? normalizedNotifyPhone : null,
-      type: financialType,
-      status: input.status ?? 'pending',
-      created_at: now,
-      updated_at: now
-    })
-    .select('id')
-    .single<{ id: string }>();
-  assertNoError(error, 'addUserReminder');
-  if (!data?.id) throw new Error('addUserReminder: response sem id');
-  return data.id;
-}
-
-export async function getUserReminders(uid: string): Promise<UserReminder[]> {
-  const { data, error } = await db
-    .from('app_reminders')
-    .select('id, reminder_kind, title, amount, due_date, due_time, due_at, notified_at, notify_phone, type, status, created_at, updated_at')
-    .eq('uid', uid)
-    .order('due_date', { ascending: true })
-    .order('due_time', { ascending: true });
-  assertNoError(error, 'getUserReminders');
-  return ((data ?? []) as DbReminderRow[]).map(mapReminder);
-}
-
-export async function getUserReminderById(uid: string, reminderId: string): Promise<UserReminder | null> {
-  const { data, error } = await db
-    .from('app_reminders')
-    .select('id, reminder_kind, title, amount, due_date, due_time, due_at, notified_at, notify_phone, type, status, created_at, updated_at')
-    .eq('uid', uid)
-    .eq('id', reminderId)
-    .maybeSingle<DbReminderRow>();
-  assertNoError(error, 'getUserReminderById');
-  return data ? mapReminder(data) : null;
-}
-
-export async function updateUserReminder(
-  uid: string,
-  reminderId: string,
-  changes: Partial<Omit<UserReminder, 'id' | 'createdAt'>>
-): Promise<void> {
-  const { data: currentData, error: currentError } = await db
-    .from('app_reminders')
-    .select('reminder_kind, amount, due_date, due_time, type')
-    .eq('uid', uid)
-    .eq('id', reminderId)
-    .maybeSingle<{
-      reminder_kind: 'general' | 'payable' | 'receivable';
-      amount: number | string | null;
-      due_date: string;
-      due_time: string | null;
-      type: 'payable' | 'receivable' | null;
-    }>();
-  assertNoError(currentError, 'updateUserReminder.loadCurrent');
-  if (!currentData) return;
-
-  const nextKind = 'reminderKind' in changes
-    ? normalizeReminderKind(changes.reminderKind, changes.type)
-    : currentData.reminder_kind;
-
-  const nextDueDate = typeof changes.dueDate === 'string'
-    ? changes.dueDate
-    : currentData.due_date;
-  const nextDueTime = 'dueTime' in changes
-    ? normalizeDueTime(changes.dueTime ?? null)
-    : currentData.due_time;
-
-  const nextAmount: number | null = nextKind === 'general'
-    ? null
-    : (typeof changes.amount === 'number'
-      ? (Number.isFinite(changes.amount) && changes.amount > 0 ? changes.amount : null)
-      : (currentData.amount == null ? null : toNumber(currentData.amount)));
-  const nextType: 'payable' | 'receivable' | null = nextKind === 'general'
-    ? null
-    : nextKind;
-  if (nextKind !== 'general' && (nextAmount == null || nextType == null)) {
-    throw new Error('updateUserReminder: financial reminder requires amount and type');
-  }
-
-  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  if (typeof changes.title === 'string') updates.title = changes.title;
-  updates.reminder_kind = nextKind;
-  updates.amount = nextAmount;
-  updates.type = nextType;
-  if (typeof changes.dueDate === 'string') updates.due_date = changes.dueDate;
-  if ('dueTime' in changes) updates.due_time = nextDueTime;
-  if (typeof changes.status === 'string') {
-    updates.status = changes.status;
-    if (changes.status === 'pending') {
-      updates.notified_at = null;
-    }
-  }
-
-  if ('dueDate' in changes || 'dueTime' in changes) {
-    updates.due_at = reminderDueAtFromDateAndTime(nextDueDate, nextDueTime);
-    updates.notified_at = null;
-  }
-
-  const { error } = await db
-    .from('app_reminders')
-    .update(updates)
-    .eq('uid', uid)
-    .eq('id', reminderId);
-  assertNoError(error, 'updateUserReminder');
-}
-
-export async function deleteUserReminder(uid: string, reminderId: string): Promise<void> {
-  const { error } = await db
-    .from('app_reminders')
-    .delete()
-    .eq('uid', uid)
-    .eq('id', reminderId);
-  assertNoError(error, 'deleteUserReminder');
-}
-
 export interface DueWhatsAppReminder {
   id: string;
   uid: string;
-  reminderKind: 'general' | 'payable' | 'receivable';
   title: string;
   amount: number | null;
   dueDate: string;
-  dueTime: string;
-  type: 'payable' | 'receivable' | null;
+  dueTime: string | null;
   notifyPhone: string;
-}
-
-interface DbDueWhatsAppReminderRow {
-  id: string;
-  uid: string;
-  reminder_kind: 'general' | 'payable' | 'receivable';
-  title: string;
-  amount: number | string | null;
-  due_date: string;
-  due_time: string | null;
+  reminderKind: 'general' | 'payable' | 'receivable';
   type: 'payable' | 'receivable' | null;
-  notify_phone: string | null;
-}
-
-export async function getDueWhatsAppReminders(
-  nowIso: string,
-  limitCount: number
-): Promise<DueWhatsAppReminder[]> {
-  const safeLimit = Math.max(1, Math.min(limitCount, 200));
-  const { data, error } = await db
-    .from('app_reminders')
-    .select('id, uid, reminder_kind, title, amount, due_date, due_time, type, notify_phone')
-    .eq('status', 'pending')
-    .is('notified_at', null)
-    .not('due_at', 'is', null)
-    .not('notify_phone', 'is', null)
-    .lte('due_at', nowIso)
-    .order('due_at', { ascending: true })
-    .limit(safeLimit);
-  assertNoError(error, 'getDueWhatsAppReminders');
-
-  const rows = (data ?? []) as DbDueWhatsAppReminderRow[];
-  return rows
-    .map((row) => {
-      const dueTime = normalizeDueTime(row.due_time);
-      const notifyPhone = row.notify_phone ? normalizePhoneNumber(row.notify_phone) : '';
-      if (!dueTime || notifyPhone.length < 10) return null;
-      return {
-        id: row.id,
-        uid: row.uid,
-        reminderKind: row.reminder_kind,
-        title: row.title,
-        amount: row.amount == null ? null : toNumber(row.amount),
-        dueDate: row.due_date,
-        dueTime,
-        type: row.type,
-        notifyPhone
-      } as DueWhatsAppReminder;
-    })
-    .filter((entry): entry is DueWhatsAppReminder => Boolean(entry));
-}
-
-export async function markReminderAsNotified(
-  uid: string,
-  reminderId: string,
-  notifiedAtIso: string
-): Promise<boolean> {
-  const { data, error } = await db
-    .from('app_reminders')
-    .update({
-      notified_at: notifiedAtIso,
-      updated_at: notifiedAtIso
-    })
-    .eq('uid', uid)
-    .eq('id', reminderId)
-    .is('notified_at', null)
-    .select('id')
-    .maybeSingle<{ id: string }>();
-  assertNoError(error, 'markReminderAsNotified');
-  return Boolean(data?.id);
 }
 
 export interface CreateRecurringTransactionInput {
   type: 'income' | 'expense';
   amount: number;
-  description: string;
   category: string;
+  description: string;
   paymentMethod: 'pix' | 'credit' | 'debit' | 'cash' | 'transfer' | 'boleto';
   frequency: 'weekly' | 'monthly' | 'yearly';
   startDate: string;
-  endDate: string | null;
+  endDate?: string | null;
 }
 
 export interface UserRecurringTransaction {
@@ -1362,1130 +263,9 @@ export interface UserRecurringTransaction {
   updatedAt: string;
 }
 
-function mapRecurring(row: DbRecurringRow): UserRecurringTransaction {
-  return {
-    id: row.id,
-    type: row.type,
-    amount: toNumber(row.amount),
-    category: row.category,
-    description: row.description,
-    paymentMethod: row.payment_method,
-    frequency: row.frequency,
-    startDate: row.start_date,
-    endDate: row.end_date,
-    nextDueDate: row.next_due_date,
-    active: row.active,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  };
-}
-
-function advanceDateBackend(dateStr: string, frequency: 'weekly' | 'monthly' | 'yearly'): string {
-  const [year, month, day] = dateStr.split('-').map(Number);
-  const d = new Date(year, month - 1, day);
-  if (frequency === 'weekly') d.setDate(d.getDate() + 7);
-  else if (frequency === 'monthly') d.setMonth(d.getMonth() + 1);
-  else if (frequency === 'yearly') d.setFullYear(d.getFullYear() + 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-export async function addRecurringTransaction(
-  uid: string,
-  input: CreateRecurringTransactionInput
-): Promise<string> {
-  const now = new Date().toISOString();
-  const { data, error } = await db
-    .from('app_recurring_transactions')
-    .insert({
-      uid,
-      type: input.type,
-      amount: input.amount,
-      category: input.category,
-      description: input.description,
-      payment_method: input.paymentMethod,
-      frequency: input.frequency,
-      start_date: input.startDate,
-      end_date: input.endDate,
-      next_due_date: input.startDate,
-      active: true,
-      created_at: now,
-      updated_at: now
-    })
-    .select('id')
-    .single<{ id: string }>();
-  assertNoError(error, 'addRecurringTransaction');
-  if (!data?.id) throw new Error('addRecurringTransaction: response sem id');
-  return data.id;
-}
-
-export async function getActiveRecurringTransactions(uid: string): Promise<UserRecurringTransaction[]> {
-  const { data, error } = await db
-    .from('app_recurring_transactions')
-    .select('id, type, amount, category, description, payment_method, frequency, start_date, end_date, next_due_date, active, created_at, updated_at')
-    .eq('uid', uid)
-    .eq('active', true);
-  assertNoError(error, 'getActiveRecurringTransactions');
-  return ((data ?? []) as DbRecurringRow[]).map(mapRecurring);
-}
-
-export async function getRecurringTransactions(uid: string): Promise<UserRecurringTransaction[]> {
-  const { data, error } = await db
-    .from('app_recurring_transactions')
-    .select('id, type, amount, category, description, payment_method, frequency, start_date, end_date, next_due_date, active, created_at, updated_at')
-    .eq('uid', uid)
-    .order('next_due_date', { ascending: true });
-  assertNoError(error, 'getRecurringTransactions');
-  return ((data ?? []) as DbRecurringRow[]).map(mapRecurring);
-}
-
-export async function deleteRecurringTransaction(uid: string, recurringId: string): Promise<void> {
-  const { error } = await db
-    .from('app_recurring_transactions')
-    .delete()
-    .eq('uid', uid)
-    .eq('id', recurringId);
-  assertNoError(error, 'deleteRecurringTransaction');
-}
-
-export async function updateRecurringTransactionBackend(
-  uid: string,
-  recurringId: string,
-  changes: Partial<Omit<UserRecurringTransaction, 'id' | 'createdAt'>>
-): Promise<void> {
-  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  if (typeof changes.type === 'string') updates.type = changes.type;
-  if (typeof changes.amount === 'number') updates.amount = changes.amount;
-  if (typeof changes.category === 'string') updates.category = changes.category;
-  if (typeof changes.description === 'string') updates.description = changes.description;
-  if (typeof changes.paymentMethod === 'string') updates.payment_method = changes.paymentMethod;
-  if (typeof changes.frequency === 'string') updates.frequency = changes.frequency;
-  if (typeof changes.startDate === 'string') updates.start_date = changes.startDate;
-  if (typeof changes.endDate === 'string' || changes.endDate === null) updates.end_date = changes.endDate;
-  if (typeof changes.nextDueDate === 'string') updates.next_due_date = changes.nextDueDate;
-  if (typeof changes.active === 'boolean') updates.active = changes.active;
-
-  const { error } = await db
-    .from('app_recurring_transactions')
-    .update(updates)
-    .eq('uid', uid)
-    .eq('id', recurringId);
-  assertNoError(error, 'updateRecurringTransactionBackend');
-}
-
-export async function generateOverdueRecurringTransactions(uid: string): Promise<number> {
-  const today = getBrasiliaISOString().split('T')[0];
-  const active = await getActiveRecurringTransactions(uid);
-  let generated = 0;
-
-  for (const rt of active) {
-    let nextDate = rt.nextDueDate;
-    while (nextDate <= today) {
-      await addUserTransaction(uid, {
-        type: rt.type,
-        amount: rt.amount,
-        date: nextDate,
-        category: rt.category,
-        description: rt.description,
-        paymentMethod: rt.paymentMethod
-      });
-      generated++;
-      nextDate = advanceDateBackend(nextDate, rt.frequency);
-    }
-    const updates: Partial<Omit<UserRecurringTransaction, 'id' | 'createdAt'>> = { nextDueDate: nextDate };
-    if (rt.endDate && nextDate > rt.endDate) updates.active = false;
-    await updateRecurringTransactionBackend(uid, rt.id, updates);
-  }
-
-  return generated;
-}
-
-const allowedNumbersCache = new Map<string, { numbers: string[]; cachedAt: number }>();
-
-function invalidateAllowedNumbersCache(uid: string): void {
-  allowedNumbersCache.delete(uid);
-}
-
-export async function getAllowedWhatsAppNumbers(uid: string): Promise<string[]> {
-  const cached = allowedNumbersCache.get(uid);
-  if (cached && Date.now() - cached.cachedAt <= ALLOWED_NUMBERS_CACHE_TTL_MS) {
-    return cached.numbers;
-  }
-
-  const { data, error } = await db
-    .from('app_user_settings')
-    .select('whatsapp_allowed_numbers')
-    .eq('uid', uid)
-    .maybeSingle<{ whatsapp_allowed_numbers: unknown }>();
-  assertNoError(error, 'getAllowedWhatsAppNumbers');
-
-  const numbers = normalizeAllowedNumbers(data?.whatsapp_allowed_numbers);
-  allowedNumbersCache.set(uid, { numbers, cachedAt: Date.now() });
-  return numbers;
-}
-
-export function invalidateAllowedNumbersCacheForUid(uid: string): void {
-  invalidateAllowedNumbersCache(uid);
-}
-
-interface ProfileSettingsData {
-  whatsappAllowedNumbers?: unknown;
-}
-
-interface ProfileSettingsEntry {
-  uid: string;
-  data: ProfileSettingsData;
-}
-
-interface ProfileScanCache {
-  fetchedAt: number;
-  entries: ProfileSettingsEntry[];
-}
-
-let profileScanCache: ProfileScanCache | null = null;
-
-function isWhatsAppGuestUid(uid: string): boolean {
-  return uid.startsWith(WHATSAPP_GUEST_UID_PREFIX);
-}
-
-function normalizeAllowedNumbers(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-
-  const allVariants = new Set<string>();
-  for (const item of value) {
-    if (typeof item !== 'string') continue;
-    const digits = normalizePhoneNumber(item);
-    if (digits.length < 10) continue;
-    for (const variant of brazilianPhoneVariants(digits)) {
-      allVariants.add(variant);
-    }
-  }
-  return [...allVariants];
-}
-
-async function scanAllProfileSettings(forceRefresh = false): Promise<ProfileSettingsEntry[]> {
-  if (!forceRefresh && profileScanCache) {
-    const ageMs = Date.now() - profileScanCache.fetchedAt;
-    if (ageMs <= PROFILE_SCAN_CACHE_TTL_MS) return profileScanCache.entries;
-  }
-
-  const { data, error } = await db.from('app_user_settings').select('uid, whatsapp_allowed_numbers');
-  assertNoError(error, 'scanAllProfileSettings');
-
-  const entries: ProfileSettingsEntry[] = (data ?? []).map((row) => ({
-    uid: row.uid as string,
-    data: { whatsappAllowedNumbers: row.whatsapp_allowed_numbers }
-  }));
-  profileScanCache = { fetchedAt: Date.now(), entries };
-  return entries;
-}
-
-async function fallbackIsPhoneAllowedForAnyAccount(variants: string[]): Promise<boolean> {
-  const profiles = await scanAllProfileSettings();
-  return profiles.some((entry) => {
-    const allowed = normalizeAllowedNumbers(entry.data.whatsappAllowedNumbers);
-    return variants.some((variant) => allowed.includes(variant));
-  });
-}
-
-async function fallbackResolveUidFromPhone(variants: string[]): Promise<string | null> {
-  const pickBestMatch = (profiles: ProfileSettingsEntry[], logMatches: boolean): string | null => {
-    const matches: Array<{ uid: string; matchedVariant: string | undefined }> = [];
-
-    for (const entry of profiles) {
-      const rawValue = entry.data.whatsappAllowedNumbers;
-      const allowed = normalizeAllowedNumbers(rawValue);
-      if (logMatches) {
-        logger.info('RESOLVE_SCAN_DEBUG: checking profile', {
-          uid: entry.uid,
-          rawType: typeof rawValue,
-          isArray: Array.isArray(rawValue),
-          rawPreview: JSON.stringify(rawValue).slice(0, 200),
-          allowedVariants: allowed.slice(0, 10),
-          searchingFor: variants
-        });
-      }
-
-      const matchedVariant = variants.find((variant) => allowed.includes(variant));
-      if (matchedVariant) {
-        matches.push({ uid: entry.uid, matchedVariant });
-      }
-    }
-
-    if (matches.length === 0) return null;
-
-    const realMatches = matches.filter((match) => !isWhatsAppGuestUid(match.uid));
-    if (realMatches.length === 0) {
-      if (logMatches) {
-        logger.info('RESOLVE_SCAN_MATCH_GUEST_ONLY: ignoring guest-only WhatsApp match', {
-          candidateUids: matches.map((match) => match.uid),
-          searchedVariants: variants
-        });
-      }
-      return null;
-    }
-
-    const preferred = realMatches[0];
-    if (logMatches) {
-      logger.info('RESOLVE_SCAN_MATCH: phone matched to account', {
-        uid: preferred.uid,
-        matchedVariant: preferred.matchedVariant,
-        candidateUids: matches.map((match) => match.uid)
-      });
-    }
-    return preferred.uid;
-  };
-
-  let profiles = await scanAllProfileSettings();
-  let resolvedUid = pickBestMatch(profiles, false);
-  if (resolvedUid) return resolvedUid;
-
-  profiles = await scanAllProfileSettings(true);
-  resolvedUid = pickBestMatch(profiles, true);
-  return resolvedUid;
-}
-
-export async function isPhoneAllowedForUid(uid: string, phone: string): Promise<boolean> {
-  const normalizedPhone = normalizePhoneNumber(phone);
-  if (normalizedPhone.length < 10) return false;
-  const allowed = await getAllowedWhatsAppNumbers(uid);
-  const phoneVariants = brazilianPhoneVariants(normalizedPhone);
-  return phoneVariants.some((v) => allowed.includes(v));
-}
-
-export async function isPhoneAllowedForAnyAccount(phone: string): Promise<boolean> {
-  const normalizedPhone = normalizePhoneNumber(phone);
-  if (normalizedPhone.length < 10) return false;
-
-  const variants = brazilianPhoneVariants(normalizedPhone);
-  try {
-    const results = await Promise.all(
-      variants.map(async (v) => {
-        const { data, error } = await db
-          .from('app_user_settings')
-          .select('uid')
-          .contains('whatsapp_allowed_numbers', [v])
-          .limit(1);
-        assertNoError(error, 'isPhoneAllowedForAnyAccount.query');
-        return (data ?? []).length > 0;
-      })
-    );
-    return results.some(Boolean);
-  } catch (error) {
-    logger.warn('isPhoneAllowedForAnyAccount direct query failed, fallback scan', error);
-    try {
-      return await fallbackIsPhoneAllowedForAnyAccount(variants);
-    } catch (fallbackError) {
-      logger.error('isPhoneAllowedForAnyAccount fallback failed', fallbackError);
-      return false;
-    }
-  }
-}
-
-export async function resolveUidFromPhone(phone: string): Promise<string | null> {
-  const normalizedPhone = normalizePhoneNumber(phone);
-  if (normalizedPhone.length < 10) return null;
-
-  const variants = brazilianPhoneVariants(normalizedPhone);
-  try {
-    const result = await fallbackResolveUidFromPhone(variants);
-    if (!result) {
-      const profiles = await scanAllProfileSettings();
-      const allNumbers = profiles.flatMap((p) => normalizeAllowedNumbers(p.data.whatsappAllowedNumbers));
-      logger.info('MSG_RESOLVE_DEBUG: phone not found in any account', {
-        incomingPhone: normalizedPhone,
-        variantsTried: variants,
-        registeredNumbers: allNumbers.slice(0, 20),
-        totalUsers: profiles.length
-      });
-    }
-    return result;
-  } catch (error) {
-    logger.error('resolveUidFromPhone: failed to scan profiles', error);
-    return null;
-  }
-}
-
-const bindingCache = new Map<string, { binding: WhatsAppPhoneBinding | null; cachedAt: number }>();
-
-function getCachedBinding(phone: string): WhatsAppPhoneBinding | null | undefined {
-  const entry = bindingCache.get(phone);
-  if (!entry) return undefined;
-  if (Date.now() - entry.cachedAt > BINDING_CACHE_TTL_MS) {
-    bindingCache.delete(phone);
-    return undefined;
-  }
-  return entry.binding;
-}
-
-function setCachedBinding(phone: string, binding: WhatsAppPhoneBinding | null): void {
-  bindingCache.set(phone, { binding, cachedAt: Date.now() });
-}
-
-export async function getPhoneBinding(phone: string): Promise<WhatsAppPhoneBinding | null> {
-  const normalizedPhone = normalizePhoneNumber(phone);
-  if (normalizedPhone.length < 10) return null;
-
-  const cached = getCachedBinding(normalizedPhone);
-  if (cached !== undefined) return cached;
-
-  const variants = brazilianPhoneVariants(normalizedPhone);
-  const { data, error } = await db
-    .from(BINDINGS_COLLECTION_NAME)
-    .select('variant_phone, phone, uid, linked_at, updated_at')
-    .in('variant_phone', variants);
-  assertNoError(error, 'getPhoneBinding');
-
-  const rows = (data ?? []) as Array<{
-    variant_phone: string;
-    phone: string;
-    uid: string;
-    linked_at: string;
-    updated_at: string;
-  }>;
-  const byVariant = new Map(rows.map((row) => [row.variant_phone, row]));
-
-  for (const variant of variants) {
-    const row = byVariant.get(variant);
-    if (!row) continue;
-    const result: WhatsAppPhoneBinding = {
-      phone: row.phone,
-      uid: row.uid,
-      linkedAt: row.linked_at,
-      updatedAt: row.updated_at
-    };
-    setCachedBinding(normalizedPhone, result);
-    return result;
-  }
-
-  setCachedBinding(normalizedPhone, null);
-  return null;
-}
-
-export async function savePhoneBinding(phone: string, uid: string): Promise<void> {
-  const normalizedPhone = normalizePhoneNumber(phone);
-  if (normalizedPhone.length < 10) throw new Error('Invalid phone for binding');
-  if (!uid || uid.trim().length === 0) throw new Error('Invalid uid for binding');
-
-  const now = new Date().toISOString();
-  const variants = brazilianPhoneVariants(normalizedPhone);
-  const canonicalPhone = variants[0] || normalizedPhone;
-
-  const { data: existingRows, error: existingError } = await db
-    .from(BINDINGS_COLLECTION_NAME)
-    .select('variant_phone, linked_at')
-    .in('variant_phone', variants);
-  assertNoError(existingError, 'savePhoneBinding.existing');
-
-  const firstLinkedAt = (existingRows ?? [])
-    .map((row) => row.linked_at as string | undefined)
-    .find((value) => typeof value === 'string' && value.length > 0);
-  const linkedAt = firstLinkedAt ?? now;
-
-  const rows = variants.map((variant) => ({
-    variant_phone: variant,
-    phone: canonicalPhone,
-    uid,
-    linked_at: linkedAt,
-    updated_at: now
-  }));
-
-  const { error } = await db.from(BINDINGS_COLLECTION_NAME).upsert(rows, { onConflict: 'variant_phone' });
-  assertNoError(error, 'savePhoneBinding.upsert');
-
-  for (const variant of variants) bindingCache.delete(variant);
-  bindingCache.delete(normalizedPhone);
-}
-
-export async function deletePhoneBinding(phone: string): Promise<void> {
-  const normalizedPhone = normalizePhoneNumber(phone);
-  if (normalizedPhone.length < 10) return;
-
-  const variants = brazilianPhoneVariants(normalizedPhone);
-  const { error } = await db.from(BINDINGS_COLLECTION_NAME).delete().in('variant_phone', variants);
-  assertNoError(error, 'deletePhoneBinding.delete');
-
-  for (const variant of variants) bindingCache.delete(variant);
-  bindingCache.delete(normalizedPhone);
-}
-
 export interface WhatsAppAuthSnapshotFile {
   filename: string;
   contentBase64: string;
-}
-
-async function loadAuthSnapshotByDocId(docId: string): Promise<WhatsAppAuthSnapshotFile[]> {
-  try {
-    const { data, error } = await db
-      .from(AUTH_STATE_FILES_SUBCOLLECTION)
-      .select('filename, content_base64')
-      .eq('runtime_doc_id', docId)
-      .order('filename', { ascending: true });
-    assertNoError(error, 'loadAuthSnapshotByDocId');
-
-    return (data ?? [])
-      .map((row) => {
-        const filename = typeof row.filename === 'string' ? row.filename.trim() : '';
-        const contentBase64 = typeof row.content_base64 === 'string' ? row.content_base64.trim() : '';
-        if (!filename || !contentBase64) return null;
-        return { filename, contentBase64 };
-      })
-      .filter((entry): entry is WhatsAppAuthSnapshotFile => Boolean(entry));
-  } catch (error) {
-    logger.error('Failed to load WhatsApp auth snapshot from Supabase', { docId, error });
-    return [];
-  }
-}
-
-export async function loadWhatsAppAuthSnapshot(slotId: WhatsAppSlotId): Promise<WhatsAppAuthSnapshotFile[]> {
-  const slotDocId = authStateDocId(slotId);
-  const slotSnapshot = await loadAuthSnapshotByDocId(slotDocId);
-  if (slotSnapshot.length > 0) return slotSnapshot;
-  if (slotId !== 'wa1') return [];
-
-  const legacySnapshot = await loadAuthSnapshotByDocId(AUTH_STATE_DOC_ID_LEGACY);
-  if (legacySnapshot.length > 0) {
-    logger.info('Using legacy WhatsApp auth snapshot for wa1 fallback', {
-      legacyDocId: AUTH_STATE_DOC_ID_LEGACY,
-      fileCount: legacySnapshot.length
-    });
-  }
-  return legacySnapshot;
-}
-
-export async function saveWhatsAppAuthSnapshot(
-  slotId: WhatsAppSlotId,
-  files: WhatsAppAuthSnapshotFile[]
-): Promise<void> {
-  const now = new Date().toISOString();
-  const normalized = files
-    .map((file) => ({
-      filename: file.filename.trim(),
-      contentBase64: file.contentBase64.trim()
-    }))
-    .filter((file) => file.filename.length > 0 && file.contentBase64.length > 0);
-
-  const docId = authStateDocId(slotId);
-  // Ensure parent row exists before touching child rows to satisfy FK.
-  const { error: ensureRootError } = await db
-    .from(AUTH_STATE_COLLECTION_NAME)
-    .upsert({ doc_id: docId, file_count: normalized.length, updated_at: now }, { onConflict: 'doc_id' });
-  assertNoError(ensureRootError, 'saveWhatsAppAuthSnapshot.ensureRoot');
-
-  const { data: existingRows, error: existingError } = await db
-    .from(AUTH_STATE_FILES_SUBCOLLECTION)
-    .select('file_doc_id')
-    .eq('runtime_doc_id', docId);
-  assertNoError(existingError, 'saveWhatsAppAuthSnapshot.existing');
-
-  const keepIds = new Set<string>();
-  const upsertRows = normalized.map((file) => {
-    const fileDocId = authFileDocId(file.filename);
-    keepIds.add(fileDocId);
-    return {
-      runtime_doc_id: docId,
-      file_doc_id: fileDocId,
-      filename: file.filename,
-      content_base64: file.contentBase64,
-      updated_at: now
-    };
-  });
-
-  if (upsertRows.length > 0) {
-    const { error } = await db
-      .from(AUTH_STATE_FILES_SUBCOLLECTION)
-      .upsert(upsertRows, { onConflict: 'runtime_doc_id,file_doc_id' });
-    assertNoError(error, 'saveWhatsAppAuthSnapshot.upsertFiles');
-  }
-
-  const deleteIds = (existingRows ?? [])
-    .map((row) => row.file_doc_id as string)
-    .filter((id) => !keepIds.has(id));
-  if (deleteIds.length > 0) {
-    const { error } = await db
-      .from(AUTH_STATE_FILES_SUBCOLLECTION)
-      .delete()
-      .eq('runtime_doc_id', docId)
-      .in('file_doc_id', deleteIds);
-    assertNoError(error, 'saveWhatsAppAuthSnapshot.deleteOld');
-  }
-
-  const { error: rootError } = await db
-    .from(AUTH_STATE_COLLECTION_NAME)
-    .upsert({ doc_id: docId, file_count: normalized.length, updated_at: now }, { onConflict: 'doc_id' });
-  assertNoError(rootError, 'saveWhatsAppAuthSnapshot.rootUpsert');
-}
-
-export async function clearWhatsAppAuthSnapshot(slotId: WhatsAppSlotId): Promise<void> {
-  const docId = authStateDocId(slotId);
-  const { error: deleteError } = await db
-    .from(AUTH_STATE_FILES_SUBCOLLECTION)
-    .delete()
-    .eq('runtime_doc_id', docId);
-  assertNoError(deleteError, 'clearWhatsAppAuthSnapshot.delete');
-
-  const { error: rootError } = await db
-    .from(AUTH_STATE_COLLECTION_NAME)
-    .upsert({ doc_id: docId, file_count: 0, updated_at: new Date().toISOString() }, { onConflict: 'doc_id' });
-  assertNoError(rootError, 'clearWhatsAppAuthSnapshot.root');
-}
-
-export async function getRecentConversationByPhone(
-  uid: string,
-  phone: string,
-  limitCount: number,
-  _clientId?: WhatsAppSlotId
-): Promise<WhatsAppConversationMessage[]> {
-  if (!uid || uid.trim().length === 0) return [];
-  const normalizedPhone = normalizePhoneNumber(phone);
-  if (normalizedPhone.length < 10) return [];
-
-  const [inboundRes, outboundRes] = await Promise.all([
-    db
-      .from(COLLECTION_NAME)
-      .select('id, direction, owner_uid, status, created_at, text, metadata')
-      .eq('owner_uid', uid)
-      .eq('from_phone', normalizedPhone)
-      .order('created_at', { ascending: false })
-      .limit(limitCount),
-    db
-      .from(COLLECTION_NAME)
-      .select('id, direction, owner_uid, status, created_at, text, metadata')
-      .eq('owner_uid', uid)
-      .eq('to_phone', normalizedPhone)
-      .order('created_at', { ascending: false })
-      .limit(limitCount)
-  ]);
-  assertNoError(inboundRes.error, 'getRecentConversationByPhone.inbound');
-  assertNoError(outboundRes.error, 'getRecentConversationByPhone.outbound');
-
-  return mapWhatsAppRowsToConversation(
-    [
-      ...((inboundRes.data ?? []) as DbWhatsAppMessageRow[]),
-      ...((outboundRes.data ?? []) as DbWhatsAppMessageRow[])
-    ],
-    uid,
-    limitCount
-  );
-}
-
-function mapWhatsAppRowsToConversation(
-  rows: DbWhatsAppMessageRow[],
-  uid: string,
-  limitCount: number
-): WhatsAppConversationMessage[] {
-  const docsById = new Map<string, { createdAt: string; role: 'user' | 'assistant'; content: string }>();
-  const pushRows = (rows: DbWhatsAppMessageRow[]): void => {
-    for (const row of rows) {
-      if (row.status === 'failed') continue;
-      if (!row.created_at) continue;
-      if (row.owner_uid !== uid) continue;
-      const text = typeof row.text === 'string' ? row.text.trim() : '';
-      const content = text || (row.metadata?.hasImage ? 'Imagem enviada no WhatsApp.' : '');
-      if (!content) continue;
-      docsById.set(row.id, {
-        createdAt: row.created_at,
-        role: row.direction === 'inbound' ? 'user' : 'assistant',
-        content: content.slice(0, 800)
-      });
-    }
-  };
-
-  pushRows(rows);
-
-  return [...docsById.values()]
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-    .slice(-limitCount)
-    .map((entry) => ({ role: entry.role, content: entry.content }));
-}
-
-export async function getRecentConversationByOwnerUid(
-  uid: string,
-  limitCount: number
-): Promise<WhatsAppConversationMessage[]> {
-  if (!uid || uid.trim().length === 0) return [];
-
-  const { data, error } = await db
-    .from(COLLECTION_NAME)
-    .select('id, direction, owner_uid, status, created_at, text, metadata')
-    .eq('owner_uid', uid)
-    .order('created_at', { ascending: false })
-    .limit(Math.max(1, limitCount * 2));
-  assertNoError(error, 'getRecentConversationByOwnerUid');
-
-  return mapWhatsAppRowsToConversation((data ?? []) as DbWhatsAppMessageRow[], uid, limitCount);
-}
-
-const lastActivityCache = new Map<string, { activity: string | null; cachedAt: number }>();
-
-function lastActivityCacheKey(uid: string, phone: string): string {
-  return `${uid}:${phone}`;
-}
-
-export async function getLastConversationActivityByPhone(
-  uid: string,
-  phone: string,
-  _clientId?: WhatsAppSlotId
-): Promise<string | null> {
-  if (!uid || uid.trim().length === 0) return null;
-  const normalizedPhone = normalizePhoneNumber(phone);
-  if (normalizedPhone.length < 10) return null;
-
-  const cacheKey = lastActivityCacheKey(uid, normalizedPhone);
-  const cached = lastActivityCache.get(cacheKey);
-  if (cached && Date.now() - cached.cachedAt <= LAST_ACTIVITY_CACHE_TTL_MS) return cached.activity;
-
-  try {
-    const [inboundRes, outboundRes] = await Promise.all([
-      db
-        .from(COLLECTION_NAME)
-        .select('created_at')
-        .eq('owner_uid', uid)
-        .eq('from_phone', normalizedPhone)
-        .order('created_at', { ascending: false })
-        .limit(1),
-      db
-        .from(COLLECTION_NAME)
-        .select('created_at')
-        .eq('owner_uid', uid)
-        .eq('to_phone', normalizedPhone)
-        .order('created_at', { ascending: false })
-        .limit(1)
-    ]);
-    assertNoError(inboundRes.error, 'getLastConversationActivityByPhone.inbound');
-    assertNoError(outboundRes.error, 'getLastConversationActivityByPhone.outbound');
-
-    const inboundIso = (inboundRes.data?.[0] as { created_at?: string } | undefined)?.created_at ?? null;
-    const outboundIso = (outboundRes.data?.[0] as { created_at?: string } | undefined)?.created_at ?? null;
-
-    let result: string | null = null;
-    if (!inboundIso && !outboundIso) result = null;
-    else if (!inboundIso) result = outboundIso;
-    else if (!outboundIso) result = inboundIso;
-    else result = inboundIso > outboundIso ? inboundIso : outboundIso;
-
-    lastActivityCache.set(cacheKey, { activity: result, cachedAt: Date.now() });
-    return result;
-  } catch (error) {
-    logger.warn('getLastConversationActivityByPhone failed', error);
-    return null;
-  }
-}
-
-function asSlotId(value: unknown): WhatsAppSlotId | null {
-  return value === 'wa1' ? value : null;
-}
-
-export async function getLastConversationClientIdByPhone(
-  uid: string,
-  phone: string
-): Promise<WhatsAppSlotId | null> {
-  if (!uid || uid.trim().length === 0) return null;
-  const normalizedPhone = normalizePhoneNumber(phone);
-  if (normalizedPhone.length < 10) return null;
-
-  try {
-    const [inboundRes, outboundRes] = await Promise.all([
-      db
-        .from(COLLECTION_NAME)
-        .select('created_at, status, client_id')
-        .eq('owner_uid', uid)
-        .eq('from_phone', normalizedPhone)
-        .order('created_at', { ascending: false })
-        .limit(5),
-      db
-        .from(COLLECTION_NAME)
-        .select('created_at, status, client_id')
-        .eq('owner_uid', uid)
-        .eq('to_phone', normalizedPhone)
-        .order('created_at', { ascending: false })
-        .limit(5)
-    ]);
-    assertNoError(inboundRes.error, 'getLastConversationClientIdByPhone.inbound');
-    assertNoError(outboundRes.error, 'getLastConversationClientIdByPhone.outbound');
-
-    let latestTimestamp = '';
-    let latestSlot: WhatsAppSlotId | null = null;
-    const inspect = (rows: Array<{ created_at?: string; status?: string; client_id?: string }>): void => {
-      for (const row of rows) {
-        if (row.status === 'failed') continue;
-        if (typeof row.created_at !== 'string' || row.created_at.length === 0) continue;
-        const slotId = asSlotId(row.client_id);
-        if (!slotId) continue;
-        if (row.created_at > latestTimestamp) {
-          latestTimestamp = row.created_at;
-          latestSlot = slotId;
-        }
-      }
-    };
-    inspect((inboundRes.data ?? []) as Array<{ created_at?: string; status?: string; client_id?: string }>);
-    inspect((outboundRes.data ?? []) as Array<{ created_at?: string; status?: string; client_id?: string }>);
-    return latestSlot;
-  } catch (error) {
-    logger.warn('getLastConversationClientIdByPhone failed', error);
-    return null;
-  }
-}
-
-function mapChatSession(row: DbChatSessionRow): UserChatSession {
-  return {
-    id: row.id,
-    title: row.title,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  };
-}
-
-function mapChatMessage(row: DbChatMessageRow): UserChatMessage {
-  return {
-    id: row.id,
-    sessionId: row.session_id,
-    role: row.role,
-    content: row.content,
-    ...(row.image_url ? { imageUrl: row.image_url } : {}),
-    createdAt: row.created_at
-  };
-}
-
-export async function getUserChatSessions(uid: string): Promise<UserChatSession[]> {
-  const { data, error } = await db
-    .from('app_chat_sessions')
-    .select('id, title, created_at, updated_at')
-    .eq('uid', uid)
-    .order('updated_at', { ascending: false });
-  assertNoError(error, 'getUserChatSessions');
-  return ((data ?? []) as DbChatSessionRow[]).map(mapChatSession);
-}
-
-export async function createUserChatSession(uid: string, title: string): Promise<string> {
-  const now = new Date().toISOString();
-  const { data, error } = await db
-    .from('app_chat_sessions')
-    .insert({ uid, title, created_at: now, updated_at: now })
-    .select('id')
-    .single<{ id: string }>();
-  assertNoError(error, 'createUserChatSession');
-  if (!data?.id) throw new Error('createUserChatSession: response sem id');
-  return data.id;
-}
-
-export async function updateUserChatSessionTitle(uid: string, sessionId: string, title: string): Promise<void> {
-  const { error } = await db
-    .from('app_chat_sessions')
-    .update({ title, updated_at: new Date().toISOString() })
-    .eq('uid', uid)
-    .eq('id', sessionId);
-  assertNoError(error, 'updateUserChatSessionTitle');
-}
-
-export async function deleteUserChatSession(uid: string, sessionId: string): Promise<void> {
-  const { error } = await db
-    .from('app_chat_sessions')
-    .delete()
-    .eq('uid', uid)
-    .eq('id', sessionId);
-  assertNoError(error, 'deleteUserChatSession');
-}
-
-export async function getUserChatMessages(uid: string, sessionId: string): Promise<UserChatMessage[]> {
-  const { data, error } = await db
-    .from('app_chat_messages')
-    .select('id, session_id, role, content, image_url, created_at')
-    .eq('uid', uid)
-    .eq('session_id', sessionId)
-    .order('created_at', { ascending: true });
-  assertNoError(error, 'getUserChatMessages');
-  return ((data ?? []) as DbChatMessageRow[]).map(mapChatMessage);
-}
-
-export async function addUserChatMessage(
-  uid: string,
-  sessionId: string,
-  input: { role: 'user' | 'assistant' | 'system'; content: string; imageUrl?: string }
-): Promise<string> {
-  const now = new Date().toISOString();
-  const normalizedContent = input.content.normalize('NFC');
-  const { data, error } = await db
-    .from('app_chat_messages')
-    .insert({
-      uid,
-      session_id: sessionId,
-      role: input.role,
-      content: normalizedContent,
-      image_url: input.imageUrl ?? null,
-      created_at: now
-    })
-    .select('id')
-    .single<{ id: string }>();
-  assertNoError(error, 'addUserChatMessage.insert');
-
-  const { error: sessionError } = await db
-    .from('app_chat_sessions')
-    .update({ updated_at: now })
-    .eq('uid', uid)
-    .eq('id', sessionId);
-  assertNoError(sessionError, 'addUserChatMessage.sessionUpdate');
-
-  if (!data?.id) throw new Error('addUserChatMessage: response sem id');
-  return data.id;
-}
-
-function mapUserDocument(row: DbUserDocumentRow): UserDocument {
-  return {
-    id: row.id,
-    uid: row.uid,
-    source: row.source,
-    title: row.title,
-    description: row.description,
-    normalizedTitle: row.normalized_title,
-    normalizedDescription: row.normalized_description,
-    searchTokens: Array.isArray(row.search_tokens) ? row.search_tokens.filter((token): token is string => typeof token === 'string') : [],
-    storagePath: row.storage_path,
-    mimeType: row.mime_type,
-    sizeBytes: row.size_bytes,
-    status: row.status,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    lastAccessedAt: row.last_accessed_at
-  };
-}
-
-function mapPendingDocument(row: DbPendingDocumentRow): PendingWhatsAppDocumentDraft {
-  return {
-    id: row.id,
-    uid: row.uid,
-    sourcePhone: row.source_phone,
-    storagePath: row.storage_path,
-    mimeType: row.mime_type,
-    sizeBytes: row.size_bytes,
-    pendingReason: row.pending_reason,
-    expiresAt: row.expires_at,
-    createdAt: row.created_at
-  };
-}
-
-export async function createPendingWhatsAppDocumentDraft(
-  uid: string,
-  sourcePhone: string,
-  input: CreatePendingWhatsAppDocumentDraftInput
-): Promise<string> {
-  const now = new Date().toISOString();
-  const normalizedPhone = normalizePhoneNumber(sourcePhone);
-  const { data, error } = await db
-    .from('app_whatsapp_pending_documents')
-    .insert({
-      id: input.id,
-      uid,
-      source_phone: normalizedPhone,
-      storage_path: input.storagePath,
-      mime_type: input.mimeType,
-      size_bytes: input.sizeBytes,
-      pending_reason: input.pendingReason ?? 'missing_title',
-      expires_at: input.expiresAt,
-      created_at: now
-    })
-    .select('id')
-    .single<{ id: string }>();
-  assertNoError(error, 'createPendingWhatsAppDocumentDraft');
-  if (!data?.id) throw new Error('createPendingWhatsAppDocumentDraft: response sem id');
-  return data.id;
-}
-
-export async function getActivePendingWhatsAppDocumentDraft(
-  uid: string,
-  sourcePhone: string
-): Promise<PendingWhatsAppDocumentDraft | null> {
-  const normalizedPhone = normalizePhoneNumber(sourcePhone);
-  const { data, error } = await db
-    .from('app_whatsapp_pending_documents')
-    .select('id, uid, source_phone, storage_path, mime_type, size_bytes, pending_reason, expires_at, created_at')
-    .eq('uid', uid)
-    .eq('source_phone', normalizedPhone)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle<DbPendingDocumentRow>();
-  assertNoError(error, 'getActivePendingWhatsAppDocumentDraft');
-  return data ? mapPendingDocument(data) : null;
-}
-
-export async function deletePendingWhatsAppDocumentDraft(id: string): Promise<void> {
-  const { error } = await db
-    .from('app_whatsapp_pending_documents')
-    .delete()
-    .eq('id', id);
-  assertNoError(error, 'deletePendingWhatsAppDocumentDraft');
-}
-
-export async function deleteExpiredPendingWhatsAppDocumentDrafts(uid: string, sourcePhone: string): Promise<void> {
-  const normalizedPhone = normalizePhoneNumber(sourcePhone);
-  const nowIso = new Date().toISOString();
-  const { error } = await db
-    .from('app_whatsapp_pending_documents')
-    .delete()
-    .eq('uid', uid)
-    .eq('source_phone', normalizedPhone)
-    .lt('expires_at', nowIso);
-  assertNoError(error, 'deleteExpiredPendingWhatsAppDocumentDrafts');
-}
-
-export async function createUserDocument(uid: string, input: CreateUserDocumentInput): Promise<string> {
-  const now = new Date().toISOString();
-  const { data, error } = await db
-    .from('app_user_documents')
-    .insert({
-      ...(input.id ? { id: input.id } : {}),
-      uid,
-      source: input.source ?? 'whatsapp',
-      title: input.title,
-      description: input.description ?? null,
-      normalized_title: input.normalizedTitle,
-      normalized_description: input.normalizedDescription ?? null,
-      search_tokens: Array.isArray(input.searchTokens) ? input.searchTokens : [],
-      storage_path: input.storagePath,
-      mime_type: input.mimeType,
-      size_bytes: input.sizeBytes,
-      status: input.status ?? 'ready',
-      created_at: now,
-      updated_at: now,
-      last_accessed_at: null
-    })
-    .select('id')
-    .single<{ id: string }>();
-  assertNoError(error, 'createUserDocument');
-  if (!data?.id) throw new Error('createUserDocument: response sem id');
-  return data.id;
-}
-
-export async function getUserDocument(uid: string, documentId: string): Promise<UserDocument | null> {
-  const { data, error } = await db
-    .from('app_user_documents')
-    .select('id, uid, source, title, description, normalized_title, normalized_description, search_tokens, storage_path, mime_type, size_bytes, status, created_at, updated_at, last_accessed_at')
-    .eq('uid', uid)
-    .eq('id', documentId)
-    .eq('status', 'ready')
-    .maybeSingle<DbUserDocumentRow>();
-  assertNoError(error, 'getUserDocument');
-  return data ? mapUserDocument(data) : null;
-}
-
-export async function updateUserDocument(
-  uid: string,
-  documentId: string,
-  input: UpdateUserDocumentInput
-): Promise<void> {
-  const updates: Record<string, unknown> = {
-    updated_at: new Date().toISOString()
-  };
-
-  if (typeof input.title === 'string') {
-    updates.title = input.title;
-  }
-  if (input.description === null || typeof input.description === 'string') {
-    updates.description = input.description;
-  }
-  if (typeof input.normalizedTitle === 'string') {
-    updates.normalized_title = input.normalizedTitle;
-  }
-  if (input.normalizedDescription === null || typeof input.normalizedDescription === 'string') {
-    updates.normalized_description = input.normalizedDescription;
-  }
-  if (Array.isArray(input.searchTokens)) {
-    updates.search_tokens = input.searchTokens;
-  }
-  if (typeof input.storagePath === 'string') {
-    updates.storage_path = input.storagePath;
-  }
-  if (input.status === 'ready' || input.status === 'deleted') {
-    updates.status = input.status;
-  }
-
-  const { error } = await db
-    .from('app_user_documents')
-    .update(updates)
-    .eq('uid', uid)
-    .eq('id', documentId)
-    .eq('status', 'ready');
-  assertNoError(error, 'updateUserDocument');
-}
-
-export async function markUserDocumentDeleted(uid: string, documentId: string): Promise<void> {
-  const { error } = await db
-    .from('app_user_documents')
-    .update({
-      status: 'deleted',
-      updated_at: new Date().toISOString()
-    })
-    .eq('uid', uid)
-    .eq('id', documentId)
-    .eq('status', 'ready');
-  assertNoError(error, 'markUserDocumentDeleted');
-}
-
-export async function touchUserDocumentAccess(uid: string, documentId: string): Promise<void> {
-  const now = new Date().toISOString();
-  const { error } = await db
-    .from('app_user_documents')
-    .update({
-      last_accessed_at: now,
-      updated_at: now
-    })
-    .eq('uid', uid)
-    .eq('id', documentId);
-  assertNoError(error, 'touchUserDocumentAccess');
-}
-
-export async function listRecentUserDocuments(uid: string, limitCount: number): Promise<UserDocument[]> {
-  const safeLimit = Math.max(1, Math.min(limitCount, 50));
-  const { data, error } = await db
-    .from('app_user_documents')
-    .select('id, uid, source, title, description, normalized_title, normalized_description, search_tokens, storage_path, mime_type, size_bytes, status, created_at, updated_at, last_accessed_at')
-    .eq('uid', uid)
-    .eq('status', 'ready')
-    .order('created_at', { ascending: false })
-    .limit(safeLimit);
-  assertNoError(error, 'listRecentUserDocuments');
-  return ((data ?? []) as DbUserDocumentRow[]).map(mapUserDocument);
-}
-
-export async function listUserDocuments(uid: string, limitCount = 200): Promise<UserDocument[]> {
-  const safeLimit = Math.max(1, Math.min(limitCount, 500));
-  const { data, error } = await db
-    .from('app_user_documents')
-    .select('id, uid, source, title, description, normalized_title, normalized_description, search_tokens, storage_path, mime_type, size_bytes, status, created_at, updated_at, last_accessed_at')
-    .eq('uid', uid)
-    .eq('status', 'ready')
-    .order('created_at', { ascending: false })
-    .limit(safeLimit);
-  assertNoError(error, 'listUserDocuments');
-  return ((data ?? []) as DbUserDocumentRow[]).map(mapUserDocument);
-}
-
-// ─── Financial Profiles & Goals ──────────────────────────────────────────────
-
-interface DbFinancialProfileRow {
-  uid: string;
-  monthly_income: number | string;
-  fixed_expenses: number | string;
-  variable_expenses: number | string;
-  savings_target_pct: number | string;
-  financial_goals_text: string | null;
-  completed_at: string;
-  created_at: string;
-  updated_at: string;
-}
-
-interface DbGoalRow {
-  id: string;
-  uid: string;
-  title: string;
-  description: string | null;
-  target_amount: number | string | null;
-  current_amount: number | string;
-  deadline: string | null;
-  source: string;
-  status: string;
-  priority: string;
-  created_at: string;
-  updated_at: string;
 }
 
 export interface UserFinancialProfile {
@@ -2504,7 +284,7 @@ export interface UpsertFinancialProfileInput {
   fixedExpenses: number;
   variableExpenses: number;
   savingsTargetPct: number;
-  financialGoalsText?: string | null;
+  financialGoalsText: string | null;
 }
 
 export interface UserGoal {
@@ -2527,130 +307,1511 @@ export interface CreateGoalInput {
   targetAmount?: number | null;
   currentAmount?: number;
   deadline?: string | null;
-  source?: 'ai' | 'manual';
+  source: 'ai' | 'manual';
   priority?: 'low' | 'medium' | 'high';
+  status?: 'active' | 'completed' | 'cancelled';
 }
 
-function mapFinancialProfile(row: DbFinancialProfileRow): UserFinancialProfile {
+type SqlRow = Record<string, unknown>;
+
+const DEFAULT_EXPENSE_CATEGORIES: Omit<UserCategory, 'id'>[] = [
+  { name: 'Alimentacao', type: 'expense', color: '#f97316', icon: 'UtensilsCrossed' },
+  { name: 'Combustivel', type: 'expense', color: '#eab308', icon: 'Fuel' },
+  { name: 'Moradia', type: 'expense', color: '#8b5cf6', icon: 'Home' },
+  { name: 'Internet', type: 'expense', color: '#06b6d4', icon: 'Wifi' },
+  { name: 'Lazer', type: 'expense', color: '#ec4899', icon: 'Gamepad2' },
+  { name: 'Saude', type: 'expense', color: '#10b981', icon: 'Heart' },
+  { name: 'Transporte', type: 'expense', color: '#3b82f6', icon: 'Car' },
+  { name: 'Educacao', type: 'expense', color: '#a855f7', icon: 'GraduationCap' },
+  { name: 'Outros', type: 'expense', color: '#6b7280', icon: 'MoreHorizontal' }
+];
+
+const DEFAULT_INCOME_CATEGORIES: Omit<UserCategory, 'id'>[] = [
+  { name: 'Salario', type: 'income', color: '#10b981', icon: 'Briefcase' },
+  { name: 'Freela', type: 'income', color: '#06b6d4', icon: 'Laptop' },
+  { name: 'Vendas', type: 'income', color: '#f97316', icon: 'ShoppingBag' },
+  { name: 'Investimentos', type: 'income', color: '#8b5cf6', icon: 'TrendingUp' },
+  { name: 'Outros', type: 'income', color: '#6b7280', icon: 'MoreHorizontal' }
+];
+
+const DEFAULT_GLOBAL_CATEGORIES: Omit<UserCategory, 'id'>[] = [
+  ...DEFAULT_EXPENSE_CATEGORIES,
+  ...DEFAULT_INCOME_CATEGORIES
+];
+
+const allowedNumbersCache = new Map<string, { numbers: string[]; cachedAt: number }>();
+const bindingCache = new Map<string, { binding: WhatsAppPhoneBinding | null; cachedAt: number }>();
+const lastActivityCache = new Map<string, { value: string | null; cachedAt: number }>();
+const CACHE_TTL_MS = 2 * 60 * 1000;
+
+function cacheValid(cachedAt: number): boolean {
+  return Date.now() - cachedAt <= CACHE_TTL_MS;
+}
+
+function normalizeNameForKey(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function toNumber(value: unknown): number {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function toBoolean(value: unknown): boolean {
+  return value === true || value === 1 || value === '1';
+}
+
+function monthKeyFromDate(date: string): string {
+  return date.slice(0, 7);
+}
+
+function normalizeDueTime(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(trimmed);
+  if (!match) return null;
+  return `${match[1]}:${match[2]}`;
+}
+
+function reminderDueAtFromDateAndTime(dueDate: string, dueTime: string | null): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return null;
+  const normalizedTime = normalizeDueTime(dueTime);
+  if (!normalizedTime) return null;
+  const parsed = new Date(`${dueDate}T${normalizedTime}:00-03:00`);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
+}
+
+function normalizeReminderKind(
+  reminderKind: unknown,
+  reminderType: unknown
+): 'general' | 'payable' | 'receivable' {
+  if (reminderKind === 'general' || reminderKind === 'payable' || reminderKind === 'receivable') {
+    return reminderKind;
+  }
+  if (reminderType === 'payable' || reminderType === 'receivable') {
+    return reminderType;
+  }
+  return 'general';
+}
+
+function mapCategoryRow(row: SqlRow): UserCategory {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    type: row.type === 'income' ? 'income' : 'expense',
+    color: String(row.color),
+    icon: String(row.icon),
+    createdAt: String(row.created_at ?? '')
+  };
+}
+
+function mapTransactionRow(row: SqlRow): UserTransaction {
+  return {
+    id: String(row.id),
+    type: row.type === 'income' ? 'income' : 'expense',
+    amount: toNumber(row.amount),
+    date: String(row.date),
+    monthKey: String(row.month_key),
+    category: String(row.category),
+    description: String(row.description),
+    paymentMethod: row.payment_method as UserTransaction['paymentMethod'],
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+}
+
+function mapReminderRow(row: SqlRow): UserReminder {
+  return {
+    id: String(row.id),
+    reminderKind: normalizeReminderKind(row.reminder_kind, row.type),
+    title: String(row.title),
+    amount: row.amount == null ? null : toNumber(row.amount),
+    dueDate: String(row.due_date),
+    dueTime: typeof row.due_time === 'string' ? row.due_time : null,
+    dueAt: typeof row.due_at === 'string' ? row.due_at : null,
+    notifiedAt: typeof row.notified_at === 'string' ? row.notified_at : null,
+    notifyPhone: typeof row.notify_phone === 'string' ? row.notify_phone : null,
+    type: row.type === 'payable' || row.type === 'receivable' ? row.type : null,
+    status: row.status === 'paid' ? 'paid' : 'pending',
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+}
+
+function mapRecurringRow(row: SqlRow): UserRecurringTransaction {
+  return {
+    id: String(row.id),
+    type: row.type === 'income' ? 'income' : 'expense',
+    amount: toNumber(row.amount),
+    category: String(row.category),
+    description: String(row.description),
+    paymentMethod: row.payment_method as UserRecurringTransaction['paymentMethod'],
+    frequency: row.frequency as UserRecurringTransaction['frequency'],
+    startDate: String(row.start_date),
+    endDate: typeof row.end_date === 'string' ? row.end_date : null,
+    nextDueDate: String(row.next_due_date),
+    active: toBoolean(row.active),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+}
+
+function mapChatSessionRow(row: SqlRow): UserChatSession {
+  return {
+    id: String(row.id),
+    title: String(row.title),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+}
+
+function mapChatMessageRow(row: SqlRow): UserChatMessage {
+  return {
+    id: String(row.id),
+    sessionId: String(row.session_id),
+    role: row.role as UserChatMessage['role'],
+    content: String(row.content),
+    ...(typeof row.image_url === 'string' ? { imageUrl: row.image_url } : {}),
+    createdAt: String(row.created_at)
+  };
+}
+
+function mapDocumentRow(row: SqlRow): UserDocument {
+  return {
+    id: String(row.id),
+    uid: String(row.uid),
+    source: String(row.source),
+    title: String(row.title),
+    description: typeof row.description === 'string' ? row.description : null,
+    normalizedTitle: String(row.normalized_title),
+    normalizedDescription: typeof row.normalized_description === 'string' ? row.normalized_description : null,
+    searchTokens: parseJsonArray(row.search_tokens),
+    storagePath: String(row.storage_path),
+    mimeType: String(row.mime_type),
+    sizeBytes: toNumber(row.size_bytes),
+    status: row.status === 'deleted' ? 'deleted' : 'ready',
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    lastAccessedAt: typeof row.last_accessed_at === 'string' ? row.last_accessed_at : null
+  };
+}
+
+function mapPendingDocumentRow(row: SqlRow): PendingWhatsAppDocumentDraft {
+  return {
+    id: String(row.id),
+    uid: String(row.uid),
+    sourcePhone: String(row.source_phone),
+    storagePath: String(row.storage_path),
+    mimeType: String(row.mime_type),
+    sizeBytes: toNumber(row.size_bytes),
+    pendingReason: String(row.pending_reason),
+    expiresAt: String(row.expires_at),
+    createdAt: String(row.created_at)
+  };
+}
+
+function mapGoalRow(row: SqlRow): UserGoal {
+  return {
+    id: String(row.id),
+    title: String(row.title),
+    description: typeof row.description === 'string' ? row.description : null,
+    targetAmount: row.target_amount == null ? null : toNumber(row.target_amount),
+    currentAmount: toNumber(row.current_amount),
+    deadline: typeof row.deadline === 'string' ? row.deadline : null,
+    source: row.source === 'ai' ? 'ai' : 'manual',
+    status: row.status === 'completed' || row.status === 'cancelled' ? row.status : 'active',
+    priority: row.priority === 'low' || row.priority === 'high' ? row.priority : 'medium',
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+}
+
+function mapUserSettingsRow(row: SqlRow | undefined): UserSettingsBackend {
+  if (!row) {
+    return {
+      budget: 0,
+      startDay: 1,
+      currency: 'BRL',
+      whatsappAllowedNumbers: [],
+      updatedAt: nowIso()
+    };
+  }
+
+  return {
+    budget: toNumber(row.budget),
+    startDay: toNumber(row.start_day) || 1,
+    currency: typeof row.currency === 'string' ? row.currency : 'BRL',
+    whatsappAllowedNumbers: parseJsonArray(row.whatsapp_allowed_numbers),
+    updatedAt: typeof row.updated_at === 'string' ? row.updated_at : nowIso()
+  };
+}
+
+function normalizeStoredPhoneList(value: unknown): string[] {
+  const source = parseJsonArray(value);
+  const unique = new Set<string>();
+  for (const item of source) {
+    const normalized = normalizePhoneNumber(item);
+    if (normalized.length >= 10) {
+      unique.add(normalized);
+    }
+  }
+  return [...unique];
+}
+
+function seedDefaultCategories(uid: string): void {
+  const insert = db.prepare(`
+    insert or ignore into app_categories (
+      id, uid, name, normalized_name, type, color, icon, created_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const now = nowIso();
+  for (const category of DEFAULT_GLOBAL_CATEGORIES) {
+    insert.run(
+      randomUUID(),
+      uid,
+      category.name,
+      normalizeNameForKey(category.name),
+      category.type,
+      category.color,
+      category.icon,
+      now
+    );
+  }
+}
+
+function ensureUserRecord(uid: string, email: string, displayName: string): void {
+  const normalizedEmail = email.trim().toLowerCase();
+  if (normalizedEmail) {
+    const conflict = db.prepare(`
+      select uid
+      from app_users
+      where lower(email) = ?
+        and uid <> ?
+      limit 1
+    `).get(normalizedEmail, uid) as SqlRow | undefined;
+
+    if (conflict) {
+      throw new DuplicateUserEmailError();
+    }
+  }
+
+  const now = nowIso();
+  db.prepare(`
+    insert into app_users (uid, email, display_name, created_at)
+    values (?, ?, ?, ?)
+    on conflict(uid) do update set
+      email = excluded.email,
+      display_name = excluded.display_name
+  `).run(uid, normalizedEmail || null, displayName, now);
+}
+
+function ensureUserSettings(uid: string, allowedNumbers: string[]): void {
+  const now = nowIso();
+  const existing = db.prepare('select whatsapp_allowed_numbers from app_user_settings where uid = ?').get(uid) as SqlRow | undefined;
+  const mergedNumbers = new Set<string>([
+    ...normalizeStoredPhoneList(existing?.whatsapp_allowed_numbers),
+    ...allowedNumbers
+  ]);
+
+  db.prepare(`
+    insert into app_user_settings (uid, budget, start_day, currency, whatsapp_allowed_numbers, updated_at)
+    values (?, 0, 1, 'BRL', ?, ?)
+    on conflict(uid) do update set
+      whatsapp_allowed_numbers = excluded.whatsapp_allowed_numbers,
+      updated_at = excluded.updated_at
+  `).run(uid, stringifyJson([...mergedNumbers]), now);
+
+  invalidateAllowedNumbersCacheForUid(uid);
+}
+
+function addDays(date: string, amount: number): string {
+  const parsed = new Date(`${date}T12:00:00Z`);
+  parsed.setUTCDate(parsed.getUTCDate() + amount);
+  return parsed.toISOString().slice(0, 10);
+}
+
+function addMonths(date: string, amount: number): string {
+  const parsed = new Date(`${date}T12:00:00Z`);
+  parsed.setUTCMonth(parsed.getUTCMonth() + amount);
+  return parsed.toISOString().slice(0, 10);
+}
+
+function nextRecurringDate(date: string, frequency: UserRecurringTransaction['frequency']): string {
+  switch (frequency) {
+    case 'weekly':
+      return addDays(date, 7);
+    case 'yearly':
+      return addMonths(date, 12);
+    case 'monthly':
+    default:
+      return addMonths(date, 1);
+  }
+}
+
+function getDocId(record: WhatsAppMessageRecord): string {
+  const prefix =
+    record.direction === 'inbound'
+      ? 'in'
+      : record.direction === 'outbound'
+        ? 'out'
+        : 'ar';
+  const safeMessageId = record.messageId.replace(/[^\w.-]/g, '_');
+  return `${record.clientId}_${prefix}_${safeMessageId}`;
+}
+
+function authStateDocId(slotId: WhatsAppSlotId): string {
+  return `authState_${slotId}`;
+}
+
+function authFileDocId(filename: string): string {
+  return Buffer.from(filename, 'utf8').toString('base64url');
+}
+
+export async function saveWhatsAppMessage(record: WhatsAppMessageRecord): Promise<void> {
+  db.prepare(`
+    insert into whatsapp_messages (
+      id, client_id, message_id, direction, owner_uid, from_phone, to_phone,
+      text, timestamp, wa_timestamp, status, raw_type, created_at, metadata
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    on conflict(id) do update set
+      status = excluded.status,
+      text = excluded.text,
+      metadata = excluded.metadata,
+      owner_uid = excluded.owner_uid
+  `).run(
+    getDocId(record),
+    record.clientId,
+    record.messageId,
+    record.direction,
+    record.ownerUid ?? null,
+    record.from,
+    record.to,
+    record.text,
+    record.timestamp,
+    record.waTimestamp,
+    record.status,
+    record.rawType,
+    record.createdAt,
+    stringifyJson(record.metadata)
+  );
+}
+
+export async function inboundMessageExists(
+  messageId: string,
+  clientId: string,
+  _processedInboundIds?: Set<string>
+): Promise<boolean> {
+  const safeMessageId = messageId.replace(/[^\w.-]/g, '_');
+  const id = `${clientId}_in_${safeMessageId}`;
+  const row = db.prepare('select id from whatsapp_messages where id = ? limit 1').get(id) as SqlRow | undefined;
+  return Boolean(row);
+}
+
+export async function saveMessageSafe(record: WhatsAppMessageRecord): Promise<void> {
+  const exists = record.direction === 'inbound'
+    ? await inboundMessageExists(record.clientId, record.messageId)
+    : false;
+  if (exists) return;
+  await saveWhatsAppMessage(record);
+}
+
+export async function bootstrapUserData(uid: string, input: BootstrapUserInput): Promise<BootstrapUserResult> {
+  const normalizedPhone = normalizePhoneNumber(input.phone);
+  const existing = db.prepare('select uid from app_users where uid = ? limit 1').get(uid) as SqlRow | undefined;
+
+  ensureUserRecord(uid, input.email, input.displayName);
+  ensureUserSettings(uid, normalizedPhone.length >= 10 ? [normalizedPhone] : []);
+
+  const categoryCount = db.prepare('select count(*) as total from app_categories where uid = ?').get(uid) as { total: number };
+  if (Number(categoryCount.total ?? 0) === 0) {
+    seedDefaultCategories(uid);
+  }
+
+  if (normalizedPhone.length >= 10) {
+    await savePhoneBinding(normalizedPhone, uid);
+  }
+
+  return {
+    isNewUser: !existing,
+    normalizedPhone: normalizedPhone.length >= 10 ? normalizedPhone : null
+  };
+}
+
+export async function getUserSettings(uid: string): Promise<UserSettingsBackend> {
+  const row = db.prepare('select * from app_user_settings where uid = ? limit 1').get(uid) as SqlRow | undefined;
+  return mapUserSettingsRow(row);
+}
+
+export async function updateUserSettings(
+  uid: string,
+  input: Partial<UserSettingsBackend>
+): Promise<void> {
+  const current = await getUserSettings(uid);
+  const merged = {
+    budget: typeof input.budget === 'number' ? input.budget : current.budget,
+    startDay: typeof input.startDay === 'number' ? input.startDay : current.startDay,
+    currency: typeof input.currency === 'string' ? input.currency : current.currency,
+    whatsappAllowedNumbers: Array.isArray(input.whatsappAllowedNumbers)
+      ? input.whatsappAllowedNumbers.map((value) => normalizePhoneNumber(value)).filter((value) => value.length >= 10)
+      : current.whatsappAllowedNumbers ?? []
+  };
+
+  db.prepare(`
+    insert into app_user_settings (uid, budget, start_day, currency, whatsapp_allowed_numbers, updated_at)
+    values (?, ?, ?, ?, ?, ?)
+    on conflict(uid) do update set
+      budget = excluded.budget,
+      start_day = excluded.start_day,
+      currency = excluded.currency,
+      whatsapp_allowed_numbers = excluded.whatsapp_allowed_numbers,
+      updated_at = excluded.updated_at
+  `).run(uid, merged.budget, merged.startDay, merged.currency, stringifyJson(merged.whatsappAllowedNumbers), nowIso());
+
+  invalidateAllowedNumbersCacheForUid(uid);
+}
+
+export async function getUserProfile(uid: string): Promise<UserProfileBackend> {
+  const row = db.prepare('select display_name from app_users where uid = ? limit 1').get(uid) as SqlRow | undefined;
+  return {
+    displayName: typeof row?.display_name === 'string' ? row.display_name : ''
+  };
+}
+
+export async function updateUserDisplayName(uid: string, displayName: string): Promise<void> {
+  db.prepare('update app_users set display_name = ? where uid = ?').run(displayName.trim(), uid);
+}
+
+function getUserMetrics(uid: string): AdminUserMetrics {
+  const tx = db.prepare('select count(*) as total from app_transactions where uid = ?').get(uid) as { total: number };
+  const reminders = db.prepare('select count(*) as total from app_reminders where uid = ?').get(uid) as { total: number };
+  const categories = db.prepare('select count(*) as total from app_categories where uid = ?').get(uid) as { total: number };
+  const whatsapp = db.prepare('select count(*) as total, max(created_at) as lastAt from whatsapp_messages where owner_uid = ?').get(uid) as {
+    total: number;
+    lastAt: string | null;
+  };
+
+  return {
+    transactions: Number(tx.total ?? 0),
+    reminders: Number(reminders.total ?? 0),
+    categories: Number(categories.total ?? 0),
+    whatsappMessages: Number(whatsapp.total ?? 0),
+    lastWhatsAppMessageAt: whatsapp.lastAt ?? null
+  };
+}
+
+export async function listAdminUserSnapshots(): Promise<AdminUserSnapshot[]> {
+  const rows = db.prepare(`
+    select u.uid, u.email, u.display_name, u.created_at,
+           s.budget, s.start_day, s.currency, s.whatsapp_allowed_numbers, s.updated_at as settings_updated_at
+    from app_users u
+    left join app_user_settings s on s.uid = u.uid
+    order by u.created_at desc
+  `).all() as SqlRow[];
+
+  return rows.map((row) => ({
+    uid: String(row.uid),
+    email: typeof row.email === 'string' ? row.email : null,
+    displayName: String(row.display_name ?? ''),
+    createdAt: typeof row.created_at === 'string' ? row.created_at : null,
+    settings: row.budget == null
+      ? null
+      : {
+          budget: toNumber(row.budget),
+          startDay: toNumber(row.start_day) || 1,
+          currency: typeof row.currency === 'string' ? row.currency : 'BRL',
+          whatsappAllowedNumbers: normalizeStoredPhoneList(row.whatsapp_allowed_numbers),
+          updatedAt: typeof row.settings_updated_at === 'string' ? row.settings_updated_at : null
+        },
+    metrics: getUserMetrics(String(row.uid))
+  }));
+}
+
+export async function getAdminUserSnapshot(uid: string): Promise<AdminUserSnapshot | null> {
+  const snapshots = await listAdminUserSnapshots();
+  return snapshots.find((item) => item.uid === uid) ?? null;
+}
+
+export async function getLocalUserAccessSnapshot(uid: string): Promise<LocalUserAccessSnapshot | null> {
+  const row = db.prepare(`
+    select uid, email, display_name, created_at
+    from app_users
+    where uid = ?
+    limit 1
+  `).get(uid) as SqlRow | undefined;
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    uid: String(row.uid),
+    email: typeof row.email === 'string' ? row.email : null,
+    displayName: typeof row.display_name === 'string' ? row.display_name : null,
+    createdAt: typeof row.created_at === 'string' ? row.created_at : null
+  };
+}
+
+export async function listLocalUserAccessSnapshots(): Promise<LocalUserAccessSnapshot[]> {
+  const rows = db.prepare(`
+    select uid, email, display_name, created_at
+    from app_users
+    order by created_at desc
+  `).all() as SqlRow[];
+
+  return rows.map((row) => ({
+    uid: String(row.uid),
+    email: typeof row.email === 'string' ? row.email : null,
+    displayName: typeof row.display_name === 'string' ? row.display_name : null,
+    createdAt: typeof row.created_at === 'string' ? row.created_at : null
+  }));
+}
+
+export async function getUserCategories(uid: string): Promise<UserCategory[]> {
+  const rows = db.prepare(`
+    select * from app_categories
+    where uid = ?
+    order by type asc, name asc
+  `).all(uid) as SqlRow[];
+  return rows.map(mapCategoryRow);
+}
+
+export async function addUserCategory(uid: string, input: Omit<UserCategory, 'id'>): Promise<string> {
+  const normalizedName = normalizeNameForKey(input.name);
+  const existing = db.prepare(`
+    select id from app_categories where uid = ? and type = ? and normalized_name = ? limit 1
+  `).get(uid, input.type, normalizedName) as SqlRow | undefined;
+  if (existing) {
+    throw new DuplicateCategoryError();
+  }
+
+  const id = randomUUID();
+  db.prepare(`
+    insert into app_categories (id, uid, name, normalized_name, type, color, icon, created_at)
+    values (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, uid, input.name.trim(), normalizedName, input.type, input.color, input.icon, nowIso());
+  return id;
+}
+
+export async function updateUserCategory(
+  uid: string,
+  categoryId: string,
+  input: Partial<Omit<UserCategory, 'id'>>
+): Promise<void> {
+  const current = db.prepare('select * from app_categories where uid = ? and id = ? limit 1').get(uid, categoryId) as SqlRow | undefined;
+  if (!current) {
+    return;
+  }
+
+  const name = typeof input.name === 'string' ? input.name.trim() : String(current.name);
+  const type = input.type ?? (current.type as UserCategory['type']);
+  const normalizedName = normalizeNameForKey(name);
+  const duplicate = db.prepare(`
+    select id from app_categories where uid = ? and type = ? and normalized_name = ? and id <> ? limit 1
+  `).get(uid, type, normalizedName, categoryId) as SqlRow | undefined;
+  if (duplicate) {
+    throw new DuplicateCategoryError();
+  }
+
+  db.prepare(`
+    update app_categories
+    set name = ?, normalized_name = ?, type = ?, color = ?, icon = ?
+    where uid = ? and id = ?
+  `).run(
+    name,
+    normalizedName,
+    type,
+    typeof input.color === 'string' ? input.color : String(current.color),
+    typeof input.icon === 'string' ? input.icon : String(current.icon),
+    uid,
+    categoryId
+  );
+}
+
+export async function deleteUserCategory(uid: string, categoryId: string): Promise<void> {
+  db.prepare('delete from app_categories where uid = ? and id = ?').run(uid, categoryId);
+}
+
+export async function getRecentTransactions(uid: string, limitCount = 50): Promise<UserTransaction[]> {
+  const rows = db.prepare(`
+    select * from app_transactions where uid = ? order by date desc, created_at desc limit ?
+  `).all(uid, limitCount) as SqlRow[];
+  return rows.map(mapTransactionRow);
+}
+
+export async function getTransactionsByMonth(uid: string, monthKey: string): Promise<UserTransaction[]> {
+  const rows = db.prepare(`
+    select * from app_transactions
+    where uid = ? and month_key = ?
+    order by date desc, created_at desc
+  `).all(uid, monthKey) as SqlRow[];
+  return rows.map(mapTransactionRow);
+}
+
+export async function addUserTransaction(uid: string, input: CreateTransactionInput): Promise<string> {
+  const id = randomUUID();
+  const now = nowIso();
+  db.prepare(`
+    insert into app_transactions (
+      id, uid, type, amount, date, month_key, category, description, payment_method, created_at, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    uid,
+    input.type,
+    input.amount,
+    input.date,
+    monthKeyFromDate(input.date),
+    input.category,
+    input.description,
+    input.paymentMethod,
+    now,
+    now
+  );
+  return id;
+}
+
+export async function updateUserTransaction(
+  uid: string,
+  transactionId: string,
+  input: Partial<CreateTransactionInput>
+): Promise<void> {
+  const current = await getUserTransactionById(uid, transactionId);
+  if (!current) {
+    return;
+  }
+
+  const date = input.date ?? current.date;
+  db.prepare(`
+    update app_transactions
+    set type = ?, amount = ?, date = ?, month_key = ?, category = ?, description = ?, payment_method = ?, updated_at = ?
+    where uid = ? and id = ?
+  `).run(
+    input.type ?? current.type,
+    typeof input.amount === 'number' ? input.amount : current.amount,
+    date,
+    monthKeyFromDate(date),
+    input.category ?? current.category,
+    input.description ?? current.description,
+    input.paymentMethod ?? current.paymentMethod,
+    nowIso(),
+    uid,
+    transactionId
+  );
+}
+
+export async function deleteUserTransaction(uid: string, transactionId: string): Promise<void> {
+  db.prepare('delete from app_transactions where uid = ? and id = ?').run(uid, transactionId);
+}
+
+export async function getUserTransactionById(uid: string, transactionId: string): Promise<UserTransaction | null> {
+  const row = db.prepare('select * from app_transactions where uid = ? and id = ? limit 1').get(uid, transactionId) as SqlRow | undefined;
+  return row ? mapTransactionRow(row) : null;
+}
+
+export async function restoreUserTransaction(
+  uid: string,
+  transactionId: string,
+  input: Omit<UserTransaction, 'id'>
+): Promise<void> {
+  db.prepare(`
+    insert into app_transactions (
+      id, uid, type, amount, date, month_key, category, description, payment_method, created_at, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    transactionId,
+    uid,
+    input.type,
+    input.amount,
+    input.date,
+    input.monthKey,
+    input.category,
+    input.description,
+    input.paymentMethod,
+    input.createdAt,
+    input.updatedAt
+  );
+}
+
+export async function addUserReminder(uid: string, input: CreateReminderInput): Promise<string> {
+  const id = randomUUID();
+  const now = nowIso();
+  const reminderKind = normalizeReminderKind(input.reminderKind, input.type);
+  const type = reminderKind === 'general' ? null : reminderKind;
+  const dueTime = input.dueTime ?? null;
+  const dueAt = reminderDueAtFromDateAndTime(input.dueDate, dueTime);
+  const notifyPhone = input.notifyPhone ? normalizePhoneNumber(input.notifyPhone) : null;
+
+  db.prepare(`
+    insert into app_reminders (
+      id, uid, title, amount, due_date, due_time, due_at, notified_at, notify_phone, reminder_kind, type, status, created_at, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, null, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    uid,
+    input.title,
+    input.amount ?? null,
+    input.dueDate,
+    dueTime,
+    dueAt,
+    notifyPhone,
+    reminderKind,
+    type,
+    input.status ?? 'pending',
+    now,
+    now
+  );
+  return id;
+}
+
+export async function getUserReminders(uid: string): Promise<UserReminder[]> {
+  const rows = db.prepare(`
+    select * from app_reminders where uid = ? order by due_date asc, created_at desc
+  `).all(uid) as SqlRow[];
+  return rows.map(mapReminderRow);
+}
+
+export async function getUserReminderById(uid: string, reminderId: string): Promise<UserReminder | null> {
+  const row = db.prepare('select * from app_reminders where uid = ? and id = ? limit 1').get(uid, reminderId) as SqlRow | undefined;
+  return row ? mapReminderRow(row) : null;
+}
+
+export async function updateUserReminder(
+  uid: string,
+  reminderId: string,
+  input: Partial<CreateReminderInput>
+): Promise<void> {
+  const current = await getUserReminderById(uid, reminderId);
+  if (!current) {
+    return;
+  }
+
+  const reminderKind = normalizeReminderKind(input.reminderKind ?? current.reminderKind, input.type ?? current.type);
+  const type = reminderKind === 'general' ? null : reminderKind;
+  const dueDate = input.dueDate ?? current.dueDate;
+  const dueTime = input.dueTime !== undefined ? input.dueTime : (current.dueTime ?? null);
+  const dueAt = reminderDueAtFromDateAndTime(dueDate, dueTime ?? null);
+  const notifyPhone = input.notifyPhone !== undefined
+    ? (input.notifyPhone ? normalizePhoneNumber(input.notifyPhone) : null)
+    : (current.notifyPhone ?? null);
+
+  db.prepare(`
+    update app_reminders
+    set title = ?, amount = ?, due_date = ?, due_time = ?, due_at = ?, notify_phone = ?, reminder_kind = ?, type = ?, status = ?, updated_at = ?
+    where uid = ? and id = ?
+  `).run(
+    input.title ?? current.title,
+    input.amount !== undefined ? input.amount : current.amount,
+    dueDate,
+    dueTime ?? null,
+    dueAt,
+    notifyPhone,
+    reminderKind,
+    type,
+    input.status ?? current.status,
+    nowIso(),
+    uid,
+    reminderId
+  );
+}
+
+export async function deleteUserReminder(uid: string, reminderId: string): Promise<void> {
+  db.prepare('delete from app_reminders where uid = ? and id = ?').run(uid, reminderId);
+}
+
+export async function getDueWhatsAppReminders(
+  nowValue: string,
+  limitCount = 50
+): Promise<DueWhatsAppReminder[]> {
+  const rows = db.prepare(`
+    select * from app_reminders
+    where notify_phone is not null
+      and due_at is not null
+      and notified_at is null
+      and status = 'pending'
+      and due_at <= ?
+    order by due_at asc
+    limit ?
+  `).all(nowValue, limitCount) as SqlRow[];
+
+  return rows.map((row) => ({
+    id: String(row.id),
+    uid: String(row.uid),
+    title: String(row.title),
+    amount: row.amount == null ? null : toNumber(row.amount),
+    dueDate: String(row.due_date),
+    dueTime: typeof row.due_time === 'string' ? row.due_time : null,
+    notifyPhone: String(row.notify_phone),
+    reminderKind: normalizeReminderKind(row.reminder_kind, row.type),
+    type: row.type === 'payable' || row.type === 'receivable' ? row.type : null
+  }));
+}
+
+export async function markReminderAsNotified(
+  uid: string,
+  reminderId: string,
+  notifiedAt: string
+): Promise<boolean> {
+  const result = db.prepare(`
+    update app_reminders
+    set notified_at = ?, updated_at = ?
+    where uid = ? and id = ? and notified_at is null
+  `).run(notifiedAt, nowIso(), uid, reminderId);
+  return result.changes > 0;
+}
+
+export async function addRecurringTransaction(
+  uid: string,
+  input: CreateRecurringTransactionInput
+): Promise<string> {
+  const id = randomUUID();
+  const now = nowIso();
+  db.prepare(`
+    insert into app_recurring_transactions (
+      id, uid, type, amount, category, description, payment_method, frequency, start_date, end_date, next_due_date, active, created_at, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+  `).run(
+    id,
+    uid,
+    input.type,
+    input.amount,
+    input.category,
+    input.description,
+    input.paymentMethod,
+    input.frequency,
+    input.startDate,
+    input.endDate ?? null,
+    input.startDate,
+    now,
+    now
+  );
+  return id;
+}
+
+export async function getActiveRecurringTransactions(uid: string): Promise<UserRecurringTransaction[]> {
+  const rows = db.prepare(`
+    select * from app_recurring_transactions where uid = ? and active = 1 order by next_due_date asc
+  `).all(uid) as SqlRow[];
+  return rows.map(mapRecurringRow);
+}
+
+export async function getRecurringTransactions(uid: string): Promise<UserRecurringTransaction[]> {
+  const rows = db.prepare(`
+    select * from app_recurring_transactions where uid = ? order by created_at desc
+  `).all(uid) as SqlRow[];
+  return rows.map(mapRecurringRow);
+}
+
+export async function deleteRecurringTransaction(uid: string, recurringId: string): Promise<void> {
+  db.prepare('delete from app_recurring_transactions where uid = ? and id = ?').run(uid, recurringId);
+}
+
+export async function updateRecurringTransactionBackend(
+  uid: string,
+  recurringId: string,
+  input: Partial<UserRecurringTransaction>
+): Promise<void> {
+  const current = db.prepare('select * from app_recurring_transactions where uid = ? and id = ? limit 1').get(uid, recurringId) as SqlRow | undefined;
+  if (!current) {
+    return;
+  }
+
+  db.prepare(`
+    update app_recurring_transactions
+    set type = ?, amount = ?, category = ?, description = ?, payment_method = ?, frequency = ?, start_date = ?, end_date = ?, next_due_date = ?, active = ?, updated_at = ?
+    where uid = ? and id = ?
+  `).run(
+    input.type ?? (current.type as string),
+    typeof input.amount === 'number' ? input.amount : toNumber(current.amount),
+    input.category ?? String(current.category),
+    input.description ?? String(current.description),
+    input.paymentMethod ?? String(current.payment_method),
+    input.frequency ?? String(current.frequency),
+    input.startDate ?? String(current.start_date),
+    input.endDate !== undefined ? input.endDate : (typeof current.end_date === 'string' ? current.end_date : null),
+    input.nextDueDate ?? String(current.next_due_date),
+    input.active !== undefined ? (input.active ? 1 : 0) : Number(current.active ?? 1),
+    nowIso(),
+    uid,
+    recurringId
+  );
+}
+
+export async function generateOverdueRecurringTransactions(uid: string): Promise<number> {
+  const today = new Date().toISOString().slice(0, 10);
+  const items = await getActiveRecurringTransactions(uid);
+  let generated = 0;
+
+  for (const item of items) {
+    let nextDue = item.nextDueDate;
+    let active = item.active;
+
+    while (active && nextDue <= today) {
+      await addUserTransaction(uid, {
+        type: item.type,
+        amount: item.amount,
+        date: nextDue,
+        category: item.category,
+        description: item.description,
+        paymentMethod: item.paymentMethod
+      });
+      generated += 1;
+
+      const advanced = nextRecurringDate(nextDue, item.frequency);
+      if (item.endDate && advanced > item.endDate) {
+        active = false;
+        nextDue = advanced;
+        break;
+      }
+      nextDue = advanced;
+    }
+
+    await updateRecurringTransactionBackend(uid, item.id, {
+      nextDueDate: nextDue,
+      active
+    });
+  }
+
+  return generated;
+}
+
+export async function getAllowedWhatsAppNumbers(uid: string): Promise<string[]> {
+  const cached = allowedNumbersCache.get(uid);
+  if (cached && cacheValid(cached.cachedAt)) {
+    return cached.numbers;
+  }
+
+  const settings = await getUserSettings(uid);
+  const numbers = settings.whatsappAllowedNumbers ?? [];
+  allowedNumbersCache.set(uid, { numbers, cachedAt: Date.now() });
+  return numbers;
+}
+
+export function invalidateAllowedNumbersCacheForUid(uid: string): void {
+  allowedNumbersCache.delete(uid);
+}
+
+export async function isPhoneAllowedForUid(uid: string, phone: string): Promise<boolean> {
+  const normalized = normalizePhoneNumber(phone);
+  const variants = new Set(brazilianPhoneVariants(normalized));
+  const allowed = await getAllowedWhatsAppNumbers(uid);
+  return allowed.some((item) => variants.has(item));
+}
+
+export async function isPhoneAllowedForAnyAccount(phone: string): Promise<boolean> {
+  const normalized = normalizePhoneNumber(phone);
+  const variants = brazilianPhoneVariants(normalized);
+  const rows = db.prepare('select uid, whatsapp_allowed_numbers from app_user_settings').all() as SqlRow[];
+  return rows.some((row) => {
+    const allowed = normalizeStoredPhoneList(row.whatsapp_allowed_numbers);
+    return allowed.some((item) => variants.includes(item));
+  });
+}
+
+export async function resolveUidFromPhone(phone: string): Promise<string | null> {
+  const binding = await getPhoneBinding(phone);
+  return binding?.uid ?? null;
+}
+
+export async function getPhoneBinding(phone: string): Promise<WhatsAppPhoneBinding | null> {
+  const normalized = normalizePhoneNumber(phone);
+  const cached = bindingCache.get(normalized);
+  if (cached && cacheValid(cached.cachedAt)) {
+    return cached.binding;
+  }
+
+  const variants = brazilianPhoneVariants(normalized);
+  for (const variant of variants) {
+    const row = db.prepare(`
+      select phone, uid, linked_at, updated_at
+      from whatsapp_bindings
+      where variant_phone = ?
+      limit 1
+    `).get(variant) as SqlRow | undefined;
+    if (row) {
+      const binding: WhatsAppPhoneBinding = {
+        phone: String(row.phone),
+        uid: String(row.uid),
+        linkedAt: String(row.linked_at),
+        updatedAt: String(row.updated_at)
+      };
+      bindingCache.set(normalized, { binding, cachedAt: Date.now() });
+      return binding;
+    }
+  }
+
+  bindingCache.set(normalized, { binding: null, cachedAt: Date.now() });
+  return null;
+}
+
+export async function savePhoneBinding(phone: string, uid: string): Promise<void> {
+  const normalized = normalizePhoneNumber(phone);
+  if (normalized.length < 10) return;
+
+  const now = nowIso();
+  const insert = db.prepare(`
+    insert into whatsapp_bindings (variant_phone, phone, uid, linked_at, updated_at)
+    values (?, ?, ?, ?, ?)
+    on conflict(variant_phone) do update set
+      phone = excluded.phone,
+      uid = excluded.uid,
+      updated_at = excluded.updated_at
+  `);
+
+  for (const variant of brazilianPhoneVariants(normalized)) {
+    insert.run(variant, normalized, uid, now, now);
+  }
+
+  bindingCache.delete(normalized);
+}
+
+export async function deletePhoneBinding(phone: string): Promise<void> {
+  const normalized = normalizePhoneNumber(phone);
+  const variants = brazilianPhoneVariants(normalized);
+  const placeholders = variants.map(() => '?').join(', ');
+  db.prepare(`delete from whatsapp_bindings where variant_phone in (${placeholders})`).run(...variants);
+  bindingCache.delete(normalized);
+}
+
+export async function loadWhatsAppAuthSnapshot(slotId: WhatsAppSlotId): Promise<WhatsAppAuthSnapshotFile[]> {
+  const runtimeDocId = authStateDocId(slotId);
+  const rows = db.prepare(`
+    select filename, content_base64
+    from whatsapp_runtime_files
+    where runtime_doc_id = ?
+    order by filename asc
+  `).all(runtimeDocId) as SqlRow[];
+
+  return rows.map((row) => ({
+    filename: String(row.filename),
+    contentBase64: String(row.content_base64)
+  }));
+}
+
+export async function saveWhatsAppAuthSnapshot(
+  slotId: WhatsAppSlotId,
+  files: WhatsAppAuthSnapshotFile[]
+): Promise<void> {
+  const runtimeDocId = authStateDocId(slotId);
+  const now = nowIso();
+  db.prepare(`
+    insert into whatsapp_runtime (doc_id, file_count, updated_at)
+    values (?, ?, ?)
+    on conflict(doc_id) do update set
+      file_count = excluded.file_count,
+      updated_at = excluded.updated_at
+  `).run(runtimeDocId, files.length, now);
+  db.prepare('delete from whatsapp_runtime_files where runtime_doc_id = ?').run(runtimeDocId);
+
+  const insert = db.prepare(`
+    insert into whatsapp_runtime_files (runtime_doc_id, file_doc_id, filename, content_base64, updated_at)
+    values (?, ?, ?, ?, ?)
+  `);
+  for (const file of files) {
+    insert.run(runtimeDocId, authFileDocId(file.filename), file.filename, file.contentBase64, now);
+  }
+}
+
+export async function clearWhatsAppAuthSnapshot(slotId: WhatsAppSlotId): Promise<void> {
+  db.prepare('delete from whatsapp_runtime where doc_id = ?').run(authStateDocId(slotId));
+}
+
+export async function getRecentConversationByPhone(
+  uidOrPhone: string,
+  phoneOrLimit?: string | number,
+  maybeLimit?: number
+): Promise<WhatsAppConversationMessage[]> {
+  const phone = typeof phoneOrLimit === 'string' ? phoneOrLimit : uidOrPhone;
+  const limitCount = typeof phoneOrLimit === 'number' ? phoneOrLimit : maybeLimit ?? 20;
+  const variants = brazilianPhoneVariants(phone);
+  const placeholders = variants.map(() => '?').join(', ');
+  const rows = db.prepare(`
+    select direction, text
+    from whatsapp_messages
+    where from_phone in (${placeholders}) or to_phone in (${placeholders})
+    order by created_at desc
+    limit ?
+  `).all(...variants, ...variants, limitCount) as SqlRow[];
+
+  return rows
+    .reverse()
+    .map((row): WhatsAppConversationMessage => ({
+      role: row.direction === 'inbound' ? 'user' : 'assistant',
+      content: String(row.text ?? '')
+    }))
+    .filter((item) => item.content.trim().length > 0);
+}
+
+export async function getRecentConversationByOwnerUid(
+  uid: string,
+  limitCount = 20
+): Promise<WhatsAppConversationMessage[]> {
+  const rows = db.prepare(`
+    select direction, text
+    from whatsapp_messages
+    where owner_uid = ?
+    order by created_at desc
+    limit ?
+  `).all(uid, limitCount) as SqlRow[];
+
+  return rows
+    .reverse()
+    .map((row): WhatsAppConversationMessage => ({
+      role: row.direction === 'inbound' ? 'user' : 'assistant',
+      content: String(row.text ?? '')
+    }))
+    .filter((item) => item.content.trim().length > 0);
+}
+
+export async function getLastConversationActivityByPhone(
+  uidOrPhone: string,
+  maybePhone?: string
+): Promise<string | null> {
+  const phone = maybePhone ?? uidOrPhone;
+  const normalized = normalizePhoneNumber(phone);
+  const cached = lastActivityCache.get(normalized);
+  if (cached && cacheValid(cached.cachedAt)) {
+    return cached.value;
+  }
+
+  const variants = brazilianPhoneVariants(normalized);
+  const placeholders = variants.map(() => '?').join(', ');
+  const row = db.prepare(`
+    select max(created_at) as lastAt
+    from whatsapp_messages
+    where from_phone in (${placeholders}) or to_phone in (${placeholders})
+  `).get(...variants, ...variants) as { lastAt: string | null };
+  const value = row?.lastAt ?? null;
+  lastActivityCache.set(normalized, { value, cachedAt: Date.now() });
+  return value;
+}
+
+export async function getLastConversationClientIdByPhone(
+  phone: string
+): Promise<WhatsAppSlotId | null> {
+  const variants = brazilianPhoneVariants(phone);
+  const placeholders = variants.map(() => '?').join(', ');
+  const row = db.prepare(`
+    select client_id
+    from whatsapp_messages
+    where from_phone in (${placeholders}) or to_phone in (${placeholders})
+    order by created_at desc
+    limit 1
+  `).get(...variants, ...variants) as SqlRow | undefined;
+  return row?.client_id === 'wa1' ? 'wa1' : null;
+}
+
+export async function getUserChatSessions(uid: string): Promise<UserChatSession[]> {
+  const rows = db.prepare(`
+    select * from app_chat_sessions where uid = ? order by updated_at desc
+  `).all(uid) as SqlRow[];
+  return rows.map(mapChatSessionRow);
+}
+
+export async function createUserChatSession(uid: string, title: string): Promise<string> {
+  const id = randomUUID();
+  const now = nowIso();
+  db.prepare(`
+    insert into app_chat_sessions (id, uid, title, created_at, updated_at)
+    values (?, ?, ?, ?, ?)
+  `).run(id, uid, title, now, now);
+  return id;
+}
+
+export async function updateUserChatSessionTitle(uid: string, sessionId: string, title: string): Promise<void> {
+  db.prepare(`
+    update app_chat_sessions set title = ?, updated_at = ? where uid = ? and id = ?
+  `).run(title, nowIso(), uid, sessionId);
+}
+
+export async function deleteUserChatSession(uid: string, sessionId: string): Promise<void> {
+  db.prepare('delete from app_chat_sessions where uid = ? and id = ?').run(uid, sessionId);
+}
+
+export async function getUserChatMessages(uid: string, sessionId: string): Promise<UserChatMessage[]> {
+  const rows = db.prepare(`
+    select m.*
+    from app_chat_messages m
+    inner join app_chat_sessions s on s.id = m.session_id
+    where s.uid = ? and m.session_id = ?
+    order by m.created_at asc
+  `).all(uid, sessionId) as SqlRow[];
+  return rows.map(mapChatMessageRow);
+}
+
+export async function addUserChatMessage(
+  uid: string,
+  sessionId: string,
+  input: { role: UserChatMessage['role']; content: string; imageUrl?: string }
+): Promise<string> {
+  const session = db.prepare('select id from app_chat_sessions where uid = ? and id = ? limit 1').get(uid, sessionId) as SqlRow | undefined;
+  if (!session) {
+    throw new Error('Sessao de chat nao encontrada.');
+  }
+
+  const id = randomUUID();
+  const now = nowIso();
+  db.prepare(`
+    insert into app_chat_messages (id, uid, session_id, role, content, image_url, created_at)
+    values (?, ?, ?, ?, ?, ?, ?)
+  `).run(id, uid, sessionId, input.role, input.content, input.imageUrl ?? null, now);
+  db.prepare('update app_chat_sessions set updated_at = ? where id = ?').run(now, sessionId);
+  return id;
+}
+
+export async function createPendingWhatsAppDocumentDraft(
+  uid: string,
+  sourcePhone: string,
+  input: CreatePendingWhatsAppDocumentDraftInput
+): Promise<void> {
+  db.prepare(`
+    insert into app_whatsapp_pending_documents (
+      id, uid, source_phone, storage_path, mime_type, size_bytes, pending_reason, expires_at, created_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    on conflict(uid, source_phone) do update set
+      id = excluded.id,
+      storage_path = excluded.storage_path,
+      mime_type = excluded.mime_type,
+      size_bytes = excluded.size_bytes,
+      pending_reason = excluded.pending_reason,
+      expires_at = excluded.expires_at
+  `).run(
+    input.id,
+    uid,
+    normalizePhoneNumber(sourcePhone),
+    input.storagePath,
+    input.mimeType,
+    input.sizeBytes,
+    input.pendingReason ?? 'missing_title',
+    input.expiresAt,
+    nowIso()
+  );
+}
+
+export async function getActivePendingWhatsAppDocumentDraft(
+  uid: string,
+  sourcePhone: string
+): Promise<PendingWhatsAppDocumentDraft | null> {
+  const row = db.prepare(`
+    select * from app_whatsapp_pending_documents
+    where uid = ? and source_phone = ? and expires_at > ?
+    limit 1
+  `).get(uid, normalizePhoneNumber(sourcePhone), nowIso()) as SqlRow | undefined;
+  return row ? mapPendingDocumentRow(row) : null;
+}
+
+export async function deletePendingWhatsAppDocumentDraft(id: string): Promise<void> {
+  db.prepare('delete from app_whatsapp_pending_documents where id = ?').run(id);
+}
+
+export async function deleteExpiredPendingWhatsAppDocumentDrafts(uid: string, sourcePhone: string): Promise<void> {
+  db.prepare(`
+    delete from app_whatsapp_pending_documents
+    where uid = ? and source_phone = ? and expires_at <= ?
+  `).run(uid, normalizePhoneNumber(sourcePhone), nowIso());
+}
+
+export async function createUserDocument(uid: string, input: CreateUserDocumentInput): Promise<string> {
+  const id = input.id ?? randomUUID();
+  const now = nowIso();
+  db.prepare(`
+    insert into app_user_documents (
+      id, uid, source, title, description, normalized_title, normalized_description,
+      search_tokens, storage_path, mime_type, size_bytes, status, created_at, updated_at, last_accessed_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null)
+  `).run(
+    id,
+    uid,
+    input.source ?? 'whatsapp',
+    input.title,
+    input.description ?? null,
+    input.normalizedTitle,
+    input.normalizedDescription ?? null,
+    stringifyJson(input.searchTokens ?? []),
+    input.storagePath,
+    input.mimeType,
+    input.sizeBytes,
+    input.status ?? 'ready',
+    now,
+    now
+  );
+  return id;
+}
+
+export async function getUserDocument(uid: string, documentId: string): Promise<UserDocument | null> {
+  const row = db.prepare(`
+    select * from app_user_documents where uid = ? and id = ? limit 1
+  `).get(uid, documentId) as SqlRow | undefined;
+  return row ? mapDocumentRow(row) : null;
+}
+
+export async function updateUserDocument(
+  uid: string,
+  documentId: string,
+  input: UpdateUserDocumentInput
+): Promise<void> {
+  const current = await getUserDocument(uid, documentId);
+  if (!current) {
+    return;
+  }
+
+  db.prepare(`
+    update app_user_documents
+    set title = ?, description = ?, normalized_title = ?, normalized_description = ?, search_tokens = ?, storage_path = ?, status = ?, updated_at = ?
+    where uid = ? and id = ?
+  `).run(
+    input.title ?? current.title,
+    input.description !== undefined ? input.description : (current.description ?? null),
+    input.normalizedTitle ?? current.normalizedTitle,
+    input.normalizedDescription !== undefined ? input.normalizedDescription : (current.normalizedDescription ?? null),
+    stringifyJson(input.searchTokens ?? current.searchTokens),
+    input.storagePath ?? current.storagePath,
+    input.status ?? current.status,
+    nowIso(),
+    uid,
+    documentId
+  );
+}
+
+export async function markUserDocumentDeleted(uid: string, documentId: string): Promise<void> {
+  db.prepare(`
+    update app_user_documents set status = 'deleted', updated_at = ? where uid = ? and id = ?
+  `).run(nowIso(), uid, documentId);
+}
+
+export async function touchUserDocumentAccess(uid: string, documentId: string): Promise<void> {
+  db.prepare(`
+    update app_user_documents set last_accessed_at = ? where uid = ? and id = ?
+  `).run(nowIso(), uid, documentId);
+}
+
+export async function listRecentUserDocuments(uid: string, limitCount: number): Promise<UserDocument[]> {
+  const rows = db.prepare(`
+    select * from app_user_documents
+    where uid = ? and status = 'ready'
+    order by created_at desc
+    limit ?
+  `).all(uid, limitCount) as SqlRow[];
+  return rows.map(mapDocumentRow);
+}
+
+export async function listUserDocuments(uid: string, limitCount = 200): Promise<UserDocument[]> {
+  const rows = db.prepare(`
+    select * from app_user_documents
+    where uid = ? and status = 'ready'
+    order by updated_at desc, created_at desc
+    limit ?
+  `).all(uid, limitCount) as SqlRow[];
+  return rows.map(mapDocumentRow);
+}
+
+export async function getUserFinancialProfile(uid: string): Promise<UserFinancialProfile | null> {
+  const row = db.prepare('select * from app_financial_profiles where uid = ? limit 1').get(uid) as SqlRow | undefined;
+  if (!row) return null;
   return {
     monthlyIncome: toNumber(row.monthly_income),
     fixedExpenses: toNumber(row.fixed_expenses),
     variableExpenses: toNumber(row.variable_expenses),
     savingsTargetPct: toNumber(row.savings_target_pct),
-    financialGoalsText: row.financial_goals_text,
-    completedAt: row.completed_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    financialGoalsText: typeof row.financial_goals_text === 'string' ? row.financial_goals_text : null,
+    completedAt: String(row.completed_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
   };
-}
-
-function mapGoal(row: DbGoalRow): UserGoal {
-  return {
-    id: row.id,
-    title: row.title,
-    description: row.description,
-    targetAmount: row.target_amount != null ? toNumber(row.target_amount) : null,
-    currentAmount: toNumber(row.current_amount),
-    deadline: row.deadline,
-    source: row.source === 'ai' ? 'ai' : 'manual',
-    status: row.status === 'completed' ? 'completed' : row.status === 'cancelled' ? 'cancelled' : 'active',
-    priority: row.priority === 'high' ? 'high' : row.priority === 'low' ? 'low' : 'medium',
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-export async function getUserFinancialProfile(uid: string): Promise<UserFinancialProfile | null> {
-  const { data, error } = await db
-    .from('app_financial_profiles')
-    .select('uid, monthly_income, fixed_expenses, variable_expenses, savings_target_pct, financial_goals_text, completed_at, created_at, updated_at')
-    .eq('uid', uid)
-    .maybeSingle<DbFinancialProfileRow>();
-  assertNoError(error, 'getUserFinancialProfile');
-  return data ? mapFinancialProfile(data) : null;
 }
 
 export async function upsertUserFinancialProfile(uid: string, input: UpsertFinancialProfileInput): Promise<void> {
-  const now = new Date().toISOString();
-  const { error } = await db
-    .from('app_financial_profiles')
-    .upsert({
-      uid,
-      monthly_income: input.monthlyIncome,
-      fixed_expenses: input.fixedExpenses,
-      variable_expenses: input.variableExpenses,
-      savings_target_pct: input.savingsTargetPct,
-      financial_goals_text: input.financialGoalsText ?? null,
-      completed_at: now,
-      created_at: now,
-      updated_at: now,
-    }, { onConflict: 'uid' });
-  assertNoError(error, 'upsertUserFinancialProfile');
+  const existing = await getUserFinancialProfile(uid);
+  const now = nowIso();
+  db.prepare(`
+    insert into app_financial_profiles (
+      uid, monthly_income, fixed_expenses, variable_expenses, savings_target_pct,
+      financial_goals_text, completed_at, created_at, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    on conflict(uid) do update set
+      monthly_income = excluded.monthly_income,
+      fixed_expenses = excluded.fixed_expenses,
+      variable_expenses = excluded.variable_expenses,
+      savings_target_pct = excluded.savings_target_pct,
+      financial_goals_text = excluded.financial_goals_text,
+      completed_at = excluded.completed_at,
+      updated_at = excluded.updated_at
+  `).run(
+    uid,
+    input.monthlyIncome,
+    input.fixedExpenses,
+    input.variableExpenses,
+    input.savingsTargetPct,
+    input.financialGoalsText,
+    now,
+    existing?.createdAt ?? now,
+    now
+  );
 }
 
 export async function getUserGoals(uid: string): Promise<UserGoal[]> {
-  const { data, error } = await db
-    .from('app_goals')
-    .select('id, uid, title, description, target_amount, current_amount, deadline, source, status, priority, created_at, updated_at')
-    .eq('uid', uid)
-    .order('created_at', { ascending: false });
-  assertNoError(error, 'getUserGoals');
-  return ((data ?? []) as DbGoalRow[]).map(mapGoal);
+  const rows = db.prepare(`
+    select * from app_goals where uid = ? order by created_at desc
+  `).all(uid) as SqlRow[];
+  return rows.map(mapGoalRow);
 }
 
 export async function addUserGoal(uid: string, input: CreateGoalInput): Promise<string> {
-  const now = new Date().toISOString();
-  const { data, error } = await db
-    .from('app_goals')
-    .insert({
-      uid,
-      title: input.title,
-      description: input.description ?? null,
-      target_amount: input.targetAmount ?? null,
-      current_amount: input.currentAmount ?? 0,
-      deadline: input.deadline ?? null,
-      source: input.source ?? 'manual',
-      status: 'active',
-      priority: input.priority ?? 'medium',
-      created_at: now,
-      updated_at: now,
-    })
-    .select('id')
-    .single<{ id: string }>();
-  assertNoError(error, 'addUserGoal');
-  if (!data?.id) throw new Error('addUserGoal: response sem id');
-  return data.id;
+  const id = randomUUID();
+  const now = nowIso();
+  db.prepare(`
+    insert into app_goals (
+      id, uid, title, description, target_amount, current_amount, deadline, source, status, priority, created_at, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    uid,
+    input.title,
+    input.description ?? null,
+    input.targetAmount ?? null,
+    input.currentAmount ?? 0,
+    input.deadline ?? null,
+    input.source,
+    input.status ?? 'active',
+    input.priority ?? 'medium',
+    now,
+    now
+  );
+  return id;
 }
 
 export async function updateUserGoal(
   uid: string,
   goalId: string,
-  input: Partial<Omit<UserGoal, 'id' | 'createdAt'>>
+  input: Partial<CreateGoalInput & Pick<UserGoal, 'currentAmount' | 'status'>>
 ): Promise<void> {
-  const updates: Record<string, unknown> = {
-    updated_at: new Date().toISOString(),
-  };
-  if (typeof input.title === 'string') updates.title = input.title;
-  if (input.description === null || typeof input.description === 'string') updates.description = input.description;
-  if (typeof input.targetAmount === 'number' || input.targetAmount === null) updates.target_amount = input.targetAmount;
-  if (typeof input.currentAmount === 'number') updates.current_amount = input.currentAmount;
-  if (typeof input.deadline === 'string' || input.deadline === null) updates.deadline = input.deadline;
-  if (input.status === 'active' || input.status === 'completed' || input.status === 'cancelled') updates.status = input.status;
-  if (input.priority === 'low' || input.priority === 'medium' || input.priority === 'high') updates.priority = input.priority;
+  const current = db.prepare('select * from app_goals where uid = ? and id = ? limit 1').get(uid, goalId) as SqlRow | undefined;
+  if (!current) {
+    return;
+  }
 
-  const { error } = await db
-    .from('app_goals')
-    .update(updates)
-    .eq('uid', uid)
-    .eq('id', goalId);
-  assertNoError(error, 'updateUserGoal');
+  db.prepare(`
+    update app_goals
+    set title = ?, description = ?, target_amount = ?, current_amount = ?, deadline = ?, source = ?, status = ?, priority = ?, updated_at = ?
+    where uid = ? and id = ?
+  `).run(
+    input.title ?? String(current.title),
+    input.description !== undefined ? input.description : (typeof current.description === 'string' ? current.description : null),
+    input.targetAmount !== undefined ? input.targetAmount : (current.target_amount == null ? null : toNumber(current.target_amount)),
+    input.currentAmount !== undefined ? input.currentAmount : toNumber(current.current_amount),
+    input.deadline !== undefined ? input.deadline : (typeof current.deadline === 'string' ? current.deadline : null),
+    input.source ?? (current.source === 'ai' ? 'ai' : 'manual'),
+    input.status ?? (current.status as UserGoal['status']),
+    input.priority ?? (current.priority as UserGoal['priority']),
+    nowIso(),
+    uid,
+    goalId
+  );
 }
 
 export async function deleteUserGoal(uid: string, goalId: string): Promise<void> {
-  const { error } = await db
-    .from('app_goals')
-    .delete()
-    .eq('uid', uid)
-    .eq('id', goalId);
-  assertNoError(error, 'deleteUserGoal');
+  db.prepare('delete from app_goals where uid = ? and id = ?').run(uid, goalId);
 }

@@ -10,6 +10,7 @@ const logger_1 = require("./lib/logger");
 const health_1 = require("./routes/health");
 const auth_1 = require("./routes/auth");
 const qr_page_1 = require("./routes/qr-page");
+const storage_1 = require("./routes/storage");
 const whatsapp_1 = require("./routes/whatsapp");
 const admin_1 = require("./routes/admin");
 const billing_1 = require("./routes/billing");
@@ -20,8 +21,16 @@ const reminder_notifier_1 = require("./whatsapp/reminder-notifier");
 const signup_welcome_dispatcher_1 = require("./whatsapp/signup-welcome-dispatcher");
 const app = (0, express_1.default)();
 const whatsappManager = new manager_1.WhatsAppClientsManager();
-const stopReminderNotifier = (0, reminder_notifier_1.startWhatsAppReminderNotifier)(whatsappManager);
-const signupWelcomeDispatcher = (0, signup_welcome_dispatcher_1.startSignupWelcomeDispatcher)(whatsappManager);
+const disabledSignupWelcomeDispatcher = {
+    enqueue() { },
+    stop() { }
+};
+const stopReminderNotifier = env_1.env.whatsappEnabled
+    ? (0, reminder_notifier_1.startWhatsAppReminderNotifier)(whatsappManager)
+    : () => { };
+const signupWelcomeDispatcher = env_1.env.whatsappEnabled
+    ? (0, signup_welcome_dispatcher_1.startSignupWelcomeDispatcher)(whatsappManager)
+    : disabledSignupWelcomeDispatcher;
 app.use((0, cors_1.default)());
 app.use(express_1.default.json({
     limit: '10mb',
@@ -33,6 +42,7 @@ app.use(express_1.default.json({
 }));
 app.use(health_1.healthRouter);
 app.use('/api/auth', (0, auth_1.createAuthRouter)(signupWelcomeDispatcher));
+app.use((0, storage_1.createStorageRouter)());
 app.use((0, qr_page_1.createQrPageRouter)(whatsappManager));
 app.use('/api/whatsapp', (0, whatsapp_1.createWhatsAppRouter)(whatsappManager));
 app.use('/api/admin', (0, admin_1.createAdminRouter)(whatsappManager));
@@ -44,12 +54,22 @@ app.use((error, _req, res, _next) => {
     const message = error instanceof Error ? error.message : 'Internal server error';
     res.status(500).json({ error: message });
 });
-const server = app.listen(env_1.env.port, () => {
-    logger_1.logger.info('Backend server started', { port: env_1.env.port, nodeEnv: env_1.env.nodeEnv });
+const server = app.listen(env_1.env.port, env_1.env.host, () => {
+    logger_1.logger.info('Backend server started', {
+        host: env_1.env.host,
+        port: env_1.env.port,
+        nodeEnv: env_1.env.nodeEnv,
+        firebaseConfigured: Boolean(env_1.env.firebaseCredentials)
+    });
 });
-void whatsappManager.startAll().catch((error) => {
-    logger_1.logger.error('Failed to start WhatsApp clients manager', error);
-});
+if (env_1.env.whatsappEnabled) {
+    void whatsappManager.startAll().catch((error) => {
+        logger_1.logger.error('Failed to start WhatsApp clients manager', error);
+    });
+}
+else {
+    logger_1.logger.info('WhatsApp background services disabled by configuration');
+}
 // Keep-alive: pings own /healthz every 5 minutes to prevent Render free-tier spin-down
 if (env_1.env.backendUrl) {
     const KEEP_ALIVE_MS = 5 * 60 * 1000;

@@ -1,0 +1,15 @@
+[Unit]
+Description=SaldoPro Backend (local)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/saldopro/backend.env
+WorkingDirectory=/media/server/HD Backup/Servidores_NAO_MEXA/SaldoPro
+ExecStart=%h/.config/saldopro/run-backend.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

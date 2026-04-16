@@ -1,8 +1,21 @@
 import { Router, type Request, type Response } from 'express';
+import { createAdminSessionToken, isValidAdminPassword } from '../lib/admin-session';
+import { getDocumentStorageUsageSummary } from '../lib/document-storage';
 import {
-  createAdminSessionToken,
-  isValidAdminPassword
-} from '../lib/admin-session';
+  getFirebaseUserAccessState,
+  listAllFirebaseUserAccessStates,
+  setFirebaseUserDisabled
+} from '../lib/firebase-user-access';
+import {
+  getAdminUserSnapshot,
+  getRecentConversationByOwnerUid,
+  getRecentTransactions,
+  getUserReminders,
+  listAdminUserSnapshots,
+  type AdminUserSnapshot
+} from '../lib/firestore';
+import { getRecentOperationalLogs, type OperationalLogEntry, logger } from '../lib/logger';
+import { db } from '../lib/local-db';
 import {
   adminGrantSubscription,
   clearUserPlanOverride,
@@ -11,26 +24,9 @@ import {
   setUserPlanOverride,
   type UserPlanAccessSummary
 } from '../lib/subscription-access';
-import {
-  listAllFirebaseUserAccessStates,
-  getFirebaseUserAccessState,
-  setFirebaseUserDisabled
-} from '../lib/firebase-user-access';
-import {
-  getAdminUserSnapshot,
-  getRecentTransactions,
-  listAdminUserSnapshots,
-  getUserReminders,
-  type AdminUserSnapshot,
-  getRecentConversationByOwnerUid
-} from '../lib/firestore';
-import { getDocumentStorageUsageSummary } from '../lib/document-storage';
-import { getRecentOperationalLogs, logger, type OperationalLogEntry } from '../lib/logger';
 import { requireAdminAuth } from '../middleware/admin-auth';
 import type { WhatsAppClientsManager } from '../whatsapp/manager';
-import { supabaseAdmin } from '../lib/supabase';
 
-/* ───── DB Cleanup Types & History ───── */
 type CleanupCategory = 'whatsapp_messages' | 'chat_sessions' | 'old_reminders' | 'expired_pending_docs' | 'ai_quotas' | 'billing_events';
 
 interface CleanupHistoryEntry {
@@ -40,49 +36,6 @@ interface CleanupHistoryEntry {
   categories: CleanupCategory[];
   counts: Record<CleanupCategory, number>;
   totalDeleted: number;
-}
-
-const cleanupHistory: CleanupHistoryEntry[] = [];
-const MAX_CLEANUP_HISTORY = 50;
-const DEFAULT_INSIGHTS_CUTOFF_MONTHS = 6;
-const INSIGHTS_SAMPLE_SIZE = 150;
-const CLEANUP_ORDER: CleanupCategory[] = [
-  'chat_sessions',
-  'whatsapp_messages',
-  'old_reminders',
-  'expired_pending_docs',
-  'ai_quotas',
-  'billing_events'
-];
-
-type CleanupRiskLevel = 'low' | 'warning' | 'critical';
-type CleanupEstimationMethod = 'sample_json' | 'size_column_sample';
-
-interface CleanupCategoryInsight {
-  category: CleanupCategory;
-  totalCount: number;
-  eligibleCount: number;
-  eligiblePct: number;
-  estimatedTotalBytes: number;
-  estimatedRecoverableBytes: number;
-  avgBytesPerRecord: number;
-  oldestAt: string | null;
-  newestAt: string | null;
-  riskLevel: CleanupRiskLevel;
-  estimationMethod: CleanupEstimationMethod;
-  note?: string;
-}
-
-interface CleanupInsightsResponse {
-  cutoffDate: string;
-  totals: {
-    totalRecords: number;
-    eligibleRecords: number;
-    estimatedTotalBytes: number;
-    estimatedRecoverableBytes: number;
-  };
-  categories: CleanupCategoryInsight[];
-  generatedAt: string;
 }
 
 interface AdminApiUser {
@@ -108,16 +61,30 @@ interface AdminApiUser {
   };
 }
 
-interface AdminUserDetailsResponse {
-  user: AdminApiUser | null;
-  recentTransactions: ReturnType<typeof getRecentTransactions> extends Promise<infer T> ? T : never;
-  recentReminders: Awaited<ReturnType<typeof getUserReminders>>;
-  missing?: boolean;
+interface CleanupCategoryInsight {
+  category: CleanupCategory;
+  totalCount: number;
+  eligibleCount: number;
+  eligiblePct: number;
+  estimatedTotalBytes: number;
+  estimatedRecoverableBytes: number;
+  avgBytesPerRecord: number;
+  oldestAt: string | null;
+  newestAt: string | null;
+  riskLevel: 'low' | 'warning' | 'critical';
+  estimationMethod: 'sample_json' | 'size_column_sample';
+  note?: string;
 }
 
-interface AdminStorageUsageResponse {
-  storage: Awaited<ReturnType<typeof getDocumentStorageUsageSummary>>;
-}
+const cleanupHistory: CleanupHistoryEntry[] = [];
+const CLEANUP_ORDER: CleanupCategory[] = [
+  'chat_sessions',
+  'whatsapp_messages',
+  'old_reminders',
+  'expired_pending_docs',
+  'ai_quotas',
+  'billing_events'
+];
 
 function isWhatsAppLog(entry: OperationalLogEntry): boolean {
   if (entry.message.includes('WhatsApp')) return true;
@@ -185,12 +152,7 @@ function mergeAdminUsers(
     };
   });
 
-  merged.sort((a, b) => {
-    const aTime = a.createdAt ?? '';
-    const bTime = b.createdAt ?? '';
-    return bTime.localeCompare(aTime);
-  });
-
+  merged.sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
   return merged;
 }
 
@@ -199,10 +161,7 @@ async function loadMergedAdminUsers(): Promise<AdminApiUser[]> {
     listAdminUserSnapshots(),
     listAllFirebaseUserAccessStates()
   ]);
-  const uids = [
-    ...snapshots.map((item) => item.uid),
-    ...firebaseStates.keys()
-  ];
+  const uids = [...new Set([...snapshots.map((item) => item.uid), ...firebaseStates.keys()])];
   const planAccess = await getUserPlanAccessSummaryMap(uids);
   return mergeAdminUsers(snapshots, firebaseStates, planAccess);
 }
@@ -212,420 +171,196 @@ async function loadSingleAdminUser(uid: string): Promise<AdminApiUser | null> {
     getAdminUserSnapshot(uid),
     getFirebaseUserAccessState(uid, true)
   ]);
-
   if (!snapshot && !firebase.exists) {
     return null;
   }
-
   const planAccess = await getUserPlanAccessSummaryMap([uid]);
   return mergeAdminUsers(snapshot ? [snapshot] : [], new Map([[uid, firebase]]), planAccess)[0] ?? null;
 }
 
-interface CleanupFilterContext {
-  cutoffDate: string;
-  nowIso: string;
+function defaultInsightsCutoffDate(): string {
+  const cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - 6);
+  return cutoff.toISOString();
 }
-
-interface CleanupCategoryConfig {
-  table: string;
-  timestampColumn: string;
-  sampleColumns: string;
-  estimationMethod: CleanupEstimationMethod;
-  sizeColumn?: string;
-  applyTotalFilters: (query: any, context: CleanupFilterContext) => any;
-  applyEligibleFilters: (query: any, context: CleanupFilterContext) => any;
-}
-
-const CLEANUP_CATEGORY_CONFIG: Record<CleanupCategory, CleanupCategoryConfig> = {
-  whatsapp_messages: {
-    table: 'whatsapp_messages',
-    timestampColumn: 'created_at',
-    sampleColumns: 'id, owner_uid, direction, status, text, metadata, created_at, from_phone, to_phone',
-    estimationMethod: 'sample_json',
-    applyTotalFilters: (query) => query,
-    applyEligibleFilters: (query, context) => query.lt('created_at', context.cutoffDate)
-  },
-  chat_sessions: {
-    table: 'app_chat_sessions',
-    timestampColumn: 'updated_at',
-    sampleColumns: 'id, uid, title, created_at, updated_at',
-    estimationMethod: 'sample_json',
-    applyTotalFilters: (query) => query,
-    applyEligibleFilters: (query, context) => query.lt('updated_at', context.cutoffDate)
-  },
-  old_reminders: {
-    table: 'app_reminders',
-    timestampColumn: 'due_date',
-    sampleColumns: 'id, uid, reminder_kind, title, amount, due_date, status, type, created_at, updated_at',
-    estimationMethod: 'sample_json',
-    applyTotalFilters: (query) => query.eq('status', 'paid'),
-    applyEligibleFilters: (query, context) => query.eq('status', 'paid').lt('due_date', context.cutoffDate)
-  },
-  expired_pending_docs: {
-    table: 'app_whatsapp_pending_documents',
-    timestampColumn: 'expires_at',
-    sampleColumns: 'id, uid, source_phone, size_bytes, pending_reason, expires_at, created_at',
-    estimationMethod: 'size_column_sample',
-    sizeColumn: 'size_bytes',
-    applyTotalFilters: (query) => query,
-    applyEligibleFilters: (query, context) => query.lt('expires_at', context.nowIso)
-  },
-  ai_quotas: {
-    table: 'app_daily_ai_quotas',
-    timestampColumn: 'quota_date',
-    sampleColumns: 'uid, quota_date, channel, used_count, created_at, updated_at',
-    estimationMethod: 'sample_json',
-    applyTotalFilters: (query) => query,
-    applyEligibleFilters: (query, context) => query.lt('quota_date', context.cutoffDate)
-  },
-  billing_events: {
-    table: 'app_billing_events',
-    timestampColumn: 'created_at',
-    sampleColumns: 'id, provider, event_type, provider_event_id, processed, created_at, raw_payload',
-    estimationMethod: 'sample_json',
-    applyTotalFilters: (query) => query,
-    applyEligibleFilters: (query, context) => query.lt('created_at', context.cutoffDate)
-  }
-};
 
 function toIsoString(value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim()) return null;
   const parsed = new Date(value);
-  if (!Number.isFinite(parsed.getTime())) return null;
-  return parsed.toISOString();
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
 }
 
-function defaultInsightsCutoffDate(): string {
-  const cutoff = new Date();
-  cutoff.setMonth(cutoff.getMonth() - DEFAULT_INSIGHTS_CUTOFF_MONTHS);
-  return cutoff.toISOString();
-}
-
-function resolveInsightsCutoffDate(rawValue: unknown): { cutoffDate: string } | { error: string } {
-  if (rawValue == null || rawValue === '') {
-    return { cutoffDate: defaultInsightsCutoffDate() };
-  }
-  const cutoffDate = toIsoString(rawValue);
-  if (!cutoffDate) {
-    return { error: 'cutoffDate invalida. Use uma data ISO valida.' };
-  }
-  return { cutoffDate };
-}
-
-function resolveRequiredCutoffDate(rawValue: unknown): { cutoffDate: string } | { error: string } {
-  const cutoffDate = toIsoString(rawValue);
-  if (!cutoffDate) {
-    return { error: 'Data de corte invalida.' };
-  }
-  return { cutoffDate };
-}
-
-function normalizeCleanupCategories(input: unknown): CleanupCategory[] {
-  if (!Array.isArray(input)) return [];
-  const allowed = new Set<CleanupCategory>(CLEANUP_ORDER);
-  return input.filter(
-    (value): value is CleanupCategory => typeof value === 'string' && allowed.has(value as CleanupCategory)
-  );
-}
-
-function createCleanupFilterContext(cutoffDate: string): CleanupFilterContext {
-  return {
-    cutoffDate,
-    nowIso: new Date().toISOString()
+function countTable(table: string, whereSql = '', params: unknown[] = []): number {
+  const row = db.prepare(`select count(*) as total from ${table}${whereSql ? ` where ${whereSql}` : ''}`).get(...params) as {
+    total: number;
   };
+  return Number(row.total ?? 0);
 }
 
-function readRowField(row: unknown, field: string): unknown {
-  if (!row || typeof row !== 'object' || Array.isArray(row)) return undefined;
-  return (row as Record<string, unknown>)[field];
+function rangeTable(table: string, column: string, whereSql = '', params: unknown[] = []): { oldestAt: string | null; newestAt: string | null } {
+  const whereClause = whereSql ? `where ${whereSql}` : '';
+  const row = db.prepare(`
+    select min(${column}) as oldestAt, max(${column}) as newestAt
+    from ${table}
+    ${whereClause}
+  `).get(...params) as { oldestAt: string | null; newestAt: string | null };
+  return { oldestAt: row.oldestAt ?? null, newestAt: row.newestAt ?? null };
 }
 
-function toObjectRows(rows: unknown[] | null | undefined): Array<Record<string, unknown>> {
-  if (!Array.isArray(rows)) return [];
-  return rows.filter(
-    (row): row is Record<string, unknown> =>
-      Boolean(row) && typeof row === 'object' && !Array.isArray(row)
-  );
-}
-
-async function countCleanupCategoryRecords(
-  category: CleanupCategory,
-  context: CleanupFilterContext,
-  scope: 'total' | 'eligible'
-): Promise<number> {
-  const config = CLEANUP_CATEGORY_CONFIG[category];
-  let query = supabaseAdmin
-    .from(config.table)
-    .select('*', { count: 'exact', head: true });
-
-  query = scope === 'eligible'
-    ? config.applyEligibleFilters(query, context)
-    : config.applyTotalFilters(query, context);
-
-  const { count, error } = await query;
-  if (error) throw new Error(`${category} ${scope} count: ${error.message}`);
-  return count ?? 0;
-}
-
-async function getCategoryTimeRange(
-  category: CleanupCategory,
-  context: CleanupFilterContext
-): Promise<{ oldestAt: string | null; newestAt: string | null }> {
-  const config = CLEANUP_CATEGORY_CONFIG[category];
-  const column = config.timestampColumn;
-
-  let oldestQuery = supabaseAdmin
-    .from(config.table)
-    .select(column)
-    .not(column, 'is', null)
-    .order(column, { ascending: true })
-    .limit(1);
-  oldestQuery = config.applyTotalFilters(oldestQuery, context);
-
-  let newestQuery = supabaseAdmin
-    .from(config.table)
-    .select(column)
-    .not(column, 'is', null)
-    .order(column, { ascending: false })
-    .limit(1);
-  newestQuery = config.applyTotalFilters(newestQuery, context);
-
-  const [oldestResult, newestResult] = await Promise.all([oldestQuery, newestQuery]);
-
-  if (oldestResult.error) throw new Error(`${category} oldestAt: ${oldestResult.error.message}`);
-  if (newestResult.error) throw new Error(`${category} newestAt: ${newestResult.error.message}`);
-
-  const oldestAt = readRowField(oldestResult.data?.[0], column);
-  const newestAt = readRowField(newestResult.data?.[0], column);
-
-  return {
-    oldestAt: typeof oldestAt === 'string' ? oldestAt : null,
-    newestAt: typeof newestAt === 'string' ? newestAt : null
-  };
-}
-
-function averageBytesFromRows(rows: Array<Record<string, unknown>>): number {
+function avgJsonBytes(table: string, whereSql = '', params: unknown[] = []): number {
+  const whereClause = whereSql ? `where ${whereSql}` : '';
+  const rows = db.prepare(`select * from ${table} ${whereClause} limit 100`).all(...params) as unknown[];
   if (rows.length === 0) return 0;
-  const totalBytes = rows.reduce((sum, row) => sum + Buffer.byteLength(JSON.stringify(row), 'utf8'), 0);
-  return totalBytes / rows.length;
+  const total = rows.reduce((sum: number, row: unknown) => sum + Buffer.byteLength(JSON.stringify(row), 'utf8'), 0);
+  return total / rows.length;
 }
 
-async function estimateCategoryBytes(
-  category: CleanupCategory,
-  context: CleanupFilterContext,
-  totalCount: number,
-  eligibleCount: number
-): Promise<{
-  estimatedTotalBytes: number;
-  estimatedRecoverableBytes: number;
-  avgBytesPerRecord: number;
-  estimationMethod: CleanupEstimationMethod;
-  note?: string;
-}> {
-  const config = CLEANUP_CATEGORY_CONFIG[category];
-
-  if (totalCount <= 0) {
-    return {
-      estimatedTotalBytes: 0,
-      estimatedRecoverableBytes: 0,
-      avgBytesPerRecord: 0,
-      estimationMethod: config.estimationMethod
-    };
-  }
-
-  try {
-    if (config.estimationMethod === 'size_column_sample' && config.sizeColumn) {
-      let query = supabaseAdmin
-        .from(config.table)
-        .select(config.sizeColumn)
-        .not(config.sizeColumn, 'is', null)
-        .limit(INSIGHTS_SAMPLE_SIZE);
-      query = config.applyTotalFilters(query, context);
-      if (config.timestampColumn) {
-        query = query.order(config.timestampColumn, { ascending: false });
-      }
-
-      const { data, error } = await query;
-      if (error) throw new Error(error.message);
-
-      const sizes = toObjectRows((data ?? []) as unknown[])
-        .map((item) => Number(readRowField(item, config.sizeColumn as string)))
-        .filter((value) => Number.isFinite(value) && value >= 0);
-
-      const avgBytesPerRecord = sizes.length > 0
-        ? sizes.reduce((sum, value) => sum + value, 0) / sizes.length
-        : 0;
-
-      return {
-        estimatedTotalBytes: Math.round(avgBytesPerRecord * totalCount),
-        estimatedRecoverableBytes: Math.round(avgBytesPerRecord * eligibleCount),
-        avgBytesPerRecord: Number(avgBytesPerRecord.toFixed(2)),
-        estimationMethod: config.estimationMethod,
-        ...(sizes.length === 0 ? { note: 'Amostra sem dados de tamanho para estimativa.' } : {})
-      };
-    }
-
-    let query = supabaseAdmin
-      .from(config.table)
-      .select(config.sampleColumns)
-      .limit(INSIGHTS_SAMPLE_SIZE);
-    query = config.applyTotalFilters(query, context);
-    if (config.timestampColumn) {
-      query = query.order(config.timestampColumn, { ascending: false });
-    }
-
-    const { data, error } = await query;
-    if (error) throw new Error(error.message);
-
-    const rows = toObjectRows((data ?? []) as unknown[]);
-    const avgBytesPerRecord = averageBytesFromRows(rows);
-
-    return {
-      estimatedTotalBytes: Math.round(avgBytesPerRecord * totalCount),
-      estimatedRecoverableBytes: Math.round(avgBytesPerRecord * eligibleCount),
-      avgBytesPerRecord: Number(avgBytesPerRecord.toFixed(2)),
-      estimationMethod: config.estimationMethod,
-      ...(rows.length === 0 ? { note: 'Amostra vazia; valores estimados podem estar subestimados.' } : {})
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.warn('Admin cleanup insights sample failed', { category, message });
-    return {
-      estimatedTotalBytes: 0,
-      estimatedRecoverableBytes: 0,
-      avgBytesPerRecord: 0,
-      estimationMethod: config.estimationMethod,
-      note: 'Estimativa de armazenamento indisponivel para esta categoria.'
-    };
-  }
-}
-
-function classifyCleanupRisk(
-  eligibleCount: number,
-  eligiblePct: number,
-  estimatedRecoverableBytes: number
-): CleanupRiskLevel {
-  if (eligibleCount <= 0) return 'low';
-  const oneMb = 1024 * 1024;
-
-  if (
-    estimatedRecoverableBytes >= 50 * oneMb ||
-    (eligiblePct >= 80 && eligibleCount >= 300) ||
-    eligibleCount >= 5000
-  ) {
-    return 'critical';
-  }
-
-  if (
-    estimatedRecoverableBytes >= 10 * oneMb ||
-    eligiblePct >= 40 ||
-    eligibleCount >= 1000
-  ) {
-    return 'warning';
-  }
-
-  return 'low';
-}
-
-async function buildCategoryInsight(
-  category: CleanupCategory,
-  context: CleanupFilterContext
-): Promise<CleanupCategoryInsight> {
-  const [totalCount, eligibleCount, range] = await Promise.all([
-    countCleanupCategoryRecords(category, context, 'total'),
-    countCleanupCategoryRecords(category, context, 'eligible'),
-    getCategoryTimeRange(category, context)
-  ]);
-
-  const bytes = await estimateCategoryBytes(category, context, totalCount, eligibleCount);
-  const eligiblePct = totalCount > 0 ? Number(((eligibleCount / totalCount) * 100).toFixed(2)) : 0;
-
-  return {
-    category,
-    totalCount,
-    eligibleCount,
-    eligiblePct,
-    estimatedTotalBytes: bytes.estimatedTotalBytes,
-    estimatedRecoverableBytes: bytes.estimatedRecoverableBytes,
-    avgBytesPerRecord: bytes.avgBytesPerRecord,
-    oldestAt: range.oldestAt,
-    newestAt: range.newestAt,
-    riskLevel: classifyCleanupRisk(eligibleCount, eligiblePct, bytes.estimatedRecoverableBytes),
-    estimationMethod: bytes.estimationMethod,
-    ...(bytes.note ? { note: bytes.note } : {})
-  };
-}
-
-async function deleteCleanupCategoryRecords(category: CleanupCategory, context: CleanupFilterContext): Promise<number> {
+function buildCleanupInsight(category: CleanupCategory, cutoffDate: string): CleanupCategoryInsight {
+  const now = new Date().toISOString();
   switch (category) {
     case 'whatsapp_messages': {
-      const { count, error } = await supabaseAdmin
-        .from('whatsapp_messages')
-        .delete({ count: 'exact' })
-        .lt('created_at', context.cutoffDate);
-      if (error) throw new Error(`whatsapp_messages delete: ${error.message}`);
-      return count ?? 0;
+      const totalCount = countTable('whatsapp_messages');
+      const eligibleCount = countTable('whatsapp_messages', 'created_at < ?', [cutoffDate]);
+      const bytes = avgJsonBytes('whatsapp_messages');
+      const range = rangeTable('whatsapp_messages', 'created_at');
+      return {
+        category,
+        totalCount,
+        eligibleCount,
+        eligiblePct: totalCount > 0 ? Number(((eligibleCount / totalCount) * 100).toFixed(2)) : 0,
+        estimatedTotalBytes: Math.round(bytes * totalCount),
+        estimatedRecoverableBytes: Math.round(bytes * eligibleCount),
+        avgBytesPerRecord: Number(bytes.toFixed(2)),
+        oldestAt: range.oldestAt,
+        newestAt: range.newestAt,
+        riskLevel: eligibleCount > 5000 ? 'critical' : eligibleCount > 1000 ? 'warning' : 'low',
+        estimationMethod: 'sample_json'
+      };
     }
     case 'chat_sessions': {
-      const { data: sessions, error: fetchErr } = await supabaseAdmin
-        .from('app_chat_sessions')
-        .select('id')
-        .lt('updated_at', context.cutoffDate);
-      if (fetchErr) throw new Error(`chat_sessions fetch: ${fetchErr.message}`);
-      if (!sessions || sessions.length === 0) return 0;
-
-      const sessionIds = sessions
-        .map((entry: { id?: string }) => entry.id)
-        .filter((id): id is string => typeof id === 'string' && id.length > 0);
-
-      if (sessionIds.length === 0) return 0;
-
-      const { error: msgErr } = await supabaseAdmin
-        .from('app_chat_messages')
-        .delete()
-        .in('session_id', sessionIds);
-      if (msgErr) throw new Error(`chat_messages delete: ${msgErr.message}`);
-
-      const { count, error: sessErr } = await supabaseAdmin
-        .from('app_chat_sessions')
-        .delete({ count: 'exact' })
-        .lt('updated_at', context.cutoffDate);
-      if (sessErr) throw new Error(`chat_sessions delete: ${sessErr.message}`);
-      return count ?? 0;
+      const totalCount = countTable('app_chat_sessions');
+      const eligibleCount = countTable('app_chat_sessions', 'updated_at < ?', [cutoffDate]);
+      const bytes = avgJsonBytes('app_chat_sessions');
+      const range = rangeTable('app_chat_sessions', 'updated_at');
+      return {
+        category,
+        totalCount,
+        eligibleCount,
+        eligiblePct: totalCount > 0 ? Number(((eligibleCount / totalCount) * 100).toFixed(2)) : 0,
+        estimatedTotalBytes: Math.round(bytes * totalCount),
+        estimatedRecoverableBytes: Math.round(bytes * eligibleCount),
+        avgBytesPerRecord: Number(bytes.toFixed(2)),
+        oldestAt: range.oldestAt,
+        newestAt: range.newestAt,
+        riskLevel: eligibleCount > 1000 ? 'warning' : 'low',
+        estimationMethod: 'sample_json'
+      };
     }
     case 'old_reminders': {
-      const { count, error } = await supabaseAdmin
-        .from('app_reminders')
-        .delete({ count: 'exact' })
-        .lt('due_date', context.cutoffDate)
-        .eq('status', 'paid');
-      if (error) throw new Error(`old_reminders delete: ${error.message}`);
-      return count ?? 0;
+      const totalCount = countTable('app_reminders', 'status = ?', ['paid']);
+      const eligibleCount = countTable('app_reminders', 'status = ? and due_date < ?', ['paid', cutoffDate.slice(0, 10)]);
+      const bytes = avgJsonBytes('app_reminders', 'status = ?', ['paid']);
+      const range = rangeTable('app_reminders', 'due_date', 'status = ?', ['paid']);
+      return {
+        category,
+        totalCount,
+        eligibleCount,
+        eligiblePct: totalCount > 0 ? Number(((eligibleCount / totalCount) * 100).toFixed(2)) : 0,
+        estimatedTotalBytes: Math.round(bytes * totalCount),
+        estimatedRecoverableBytes: Math.round(bytes * eligibleCount),
+        avgBytesPerRecord: Number(bytes.toFixed(2)),
+        oldestAt: range.oldestAt,
+        newestAt: range.newestAt,
+        riskLevel: eligibleCount > 1000 ? 'warning' : 'low',
+        estimationMethod: 'sample_json'
+      };
     }
     case 'expired_pending_docs': {
-      const { count, error } = await supabaseAdmin
-        .from('app_whatsapp_pending_documents')
-        .delete({ count: 'exact' })
-        .lt('expires_at', context.nowIso);
-      if (error) throw new Error(`expired_pending_docs delete: ${error.message}`);
-      return count ?? 0;
+      const totalCount = countTable('app_whatsapp_pending_documents');
+      const eligibleCount = countTable('app_whatsapp_pending_documents', 'expires_at < ?', [now]);
+      const sizeRow = db.prepare(`
+        select coalesce(avg(size_bytes), 0) as avgBytes
+        from app_whatsapp_pending_documents
+      `).get() as { avgBytes: number };
+      const avgBytes = Number(sizeRow.avgBytes ?? 0);
+      const range = rangeTable('app_whatsapp_pending_documents', 'expires_at');
+      return {
+        category,
+        totalCount,
+        eligibleCount,
+        eligiblePct: totalCount > 0 ? Number(((eligibleCount / totalCount) * 100).toFixed(2)) : 0,
+        estimatedTotalBytes: Math.round(avgBytes * totalCount),
+        estimatedRecoverableBytes: Math.round(avgBytes * eligibleCount),
+        avgBytesPerRecord: Number(avgBytes.toFixed(2)),
+        oldestAt: range.oldestAt,
+        newestAt: range.newestAt,
+        riskLevel: eligibleCount > 1000 ? 'warning' : 'low',
+        estimationMethod: 'size_column_sample'
+      };
     }
     case 'ai_quotas': {
-      const { count, error } = await supabaseAdmin
-        .from('app_daily_ai_quotas')
-        .delete({ count: 'exact' })
-        .lt('quota_date', context.cutoffDate);
-      if (error) throw new Error(`ai_quotas delete: ${error.message}`);
-      return count ?? 0;
+      const totalCount = countTable('app_daily_ai_quotas');
+      const eligibleCount = countTable('app_daily_ai_quotas', 'quota_date < ?', [cutoffDate.slice(0, 10)]);
+      const bytes = avgJsonBytes('app_daily_ai_quotas');
+      const range = rangeTable('app_daily_ai_quotas', 'quota_date');
+      return {
+        category,
+        totalCount,
+        eligibleCount,
+        eligiblePct: totalCount > 0 ? Number(((eligibleCount / totalCount) * 100).toFixed(2)) : 0,
+        estimatedTotalBytes: Math.round(bytes * totalCount),
+        estimatedRecoverableBytes: Math.round(bytes * eligibleCount),
+        avgBytesPerRecord: Number(bytes.toFixed(2)),
+        oldestAt: range.oldestAt,
+        newestAt: range.newestAt,
+        riskLevel: eligibleCount > 1000 ? 'warning' : 'low',
+        estimationMethod: 'sample_json'
+      };
     }
-    case 'billing_events': {
-      const { count, error } = await supabaseAdmin
-        .from('app_billing_events')
-        .delete({ count: 'exact' })
-        .lt('created_at', context.cutoffDate);
-      if (error) throw new Error(`billing_events delete: ${error.message}`);
-      return count ?? 0;
+    case 'billing_events':
+    default: {
+      const totalCount = countTable('app_billing_events');
+      const eligibleCount = countTable('app_billing_events', 'created_at < ?', [cutoffDate]);
+      const bytes = avgJsonBytes('app_billing_events');
+      const range = rangeTable('app_billing_events', 'created_at');
+      return {
+        category,
+        totalCount,
+        eligibleCount,
+        eligiblePct: totalCount > 0 ? Number(((eligibleCount / totalCount) * 100).toFixed(2)) : 0,
+        estimatedTotalBytes: Math.round(bytes * totalCount),
+        estimatedRecoverableBytes: Math.round(bytes * eligibleCount),
+        avgBytesPerRecord: Number(bytes.toFixed(2)),
+        oldestAt: range.oldestAt,
+        newestAt: range.newestAt,
+        riskLevel: eligibleCount > 1000 ? 'warning' : 'low',
+        estimationMethod: 'sample_json'
+      };
     }
+  }
+}
+
+function executeCleanup(category: CleanupCategory, cutoffDate: string): number {
+  const now = new Date().toISOString();
+  switch (category) {
+    case 'whatsapp_messages':
+      return db.prepare('delete from whatsapp_messages where created_at < ?').run(cutoffDate).changes;
+    case 'chat_sessions': {
+      const sessionIds = db.prepare('select id from app_chat_sessions where updated_at < ?').all(cutoffDate) as Array<{ id: string }>;
+      for (const session of sessionIds) {
+        db.prepare('delete from app_chat_messages where session_id = ?').run(session.id);
+      }
+      return db.prepare('delete from app_chat_sessions where updated_at < ?').run(cutoffDate).changes;
+    }
+    case 'old_reminders':
+      return db.prepare(`delete from app_reminders where status = 'paid' and due_date < ?`).run(cutoffDate.slice(0, 10)).changes;
+    case 'expired_pending_docs':
+      return db.prepare('delete from app_whatsapp_pending_documents where expires_at < ?').run(now).changes;
+    case 'ai_quotas':
+      return db.prepare('delete from app_daily_ai_quotas where quota_date < ?').run(cutoffDate.slice(0, 10)).changes;
+    case 'billing_events':
+    default:
+      return db.prepare('delete from app_billing_events where created_at < ?').run(cutoffDate).changes;
   }
 }
 
@@ -669,8 +404,7 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
       ]);
       const logs = getRecentOperationalLogs(80);
       const fifteenMinutesAgo = Date.now() - 15 * 60 * 1000;
-      const recentAlerts = logs
-        .filter((entry) => entry.level === 'warn' || entry.level === 'error');
+      const recentAlerts = logs.filter((entry) => entry.level === 'warn' || entry.level === 'error');
       const recentWhatsAppEvents = logs
         .filter(isWhatsAppLog)
         .slice(-20)
@@ -683,12 +417,8 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
           uptime: process.uptime(),
           timestamp: new Date().toISOString(),
           alerts: {
-            warnings15m: recentAlerts.filter(
-              (entry) => entry.level === 'warn' && Date.parse(entry.timestamp) >= fifteenMinutesAgo
-            ).length,
-            errors15m: recentAlerts.filter(
-              (entry) => entry.level === 'error' && Date.parse(entry.timestamp) >= fifteenMinutesAgo
-            ).length,
+            warnings15m: recentAlerts.filter((entry) => entry.level === 'warn' && Date.parse(entry.timestamp) >= fifteenMinutesAgo).length,
+            errors15m: recentAlerts.filter((entry) => entry.level === 'error' && Date.parse(entry.timestamp) >= fifteenMinutesAgo).length,
             recent: recentAlerts.slice(-8).reverse().map(normalizeLogEntry)
           }
         },
@@ -716,10 +446,9 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
     }
   });
 
-  router.get('/storage-usage', async (_req: Request, res: Response<AdminStorageUsageResponse>, next) => {
+  router.get('/storage-usage', async (_req: Request, res: Response, next) => {
     try {
-      const storage = await getDocumentStorageUsageSummary();
-      res.json({ storage });
+      res.json({ storage: await getDocumentStorageUsageSummary() });
     } catch (error) {
       next(error);
     }
@@ -735,22 +464,20 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
       ]);
 
       if (!user) {
-        const payload: AdminUserDetailsResponse = {
+        res.json({
           user: null,
           recentTransactions: [],
           recentReminders: [],
           missing: true
-        };
-        res.json(payload);
+        });
         return;
       }
 
-      const payload: AdminUserDetailsResponse = {
+      res.json({
         user,
         recentTransactions,
         recentReminders: reminders.slice(0, 5)
-      };
-      res.json(payload);
+      });
     } catch (error) {
       next(error);
     }
@@ -758,9 +485,9 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
 
   router.get('/users/:uid/messages', async (req: Request, res: Response, next) => {
     try {
-      const uid = req.params.uid;
-      const messages = await getRecentConversationByOwnerUid(uid, 100);
-      res.json({ messages });
+      res.json({
+        messages: await getRecentConversationByOwnerUid(req.params.uid, 50)
+      });
     } catch (error) {
       next(error);
     }
@@ -768,10 +495,8 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
 
   router.post('/whatsapp/reset-session', async (_req: Request, res: Response, next) => {
     try {
-      await manager.resetSession('wa1');
-      logger.warn('Admin triggered WhatsApp session reset', { slotId: 'wa1' });
+      await manager.resetSession();
       res.json({
-        ok: true,
         slots: manager.getStatuses(),
         qr: await manager.getQrPayloads()
       });
@@ -782,11 +507,7 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
 
   router.post('/whatsapp/refresh-qr', async (_req: Request, res: Response, next) => {
     try {
-      await manager.resetSession('wa1');
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      logger.warn('Admin forced WhatsApp QR refresh', { slotId: 'wa1' });
       res.json({
-        ok: true,
         slots: manager.getStatuses(),
         qr: await manager.getQrPayloads()
       });
@@ -797,32 +518,8 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
 
   router.post('/users/:uid/block', async (req: Request, res: Response, next) => {
     try {
-      const uid = req.params.uid;
-      const state = await getFirebaseUserAccessState(uid, true);
-      if (!state.exists) {
-        res.status(404).json({ error: 'Firebase user not found.' });
-        return;
-      }
-
-      await setFirebaseUserDisabled(uid, true);
-      const [snapshot, refreshed] = await Promise.all([
-        getAdminUserSnapshot(uid),
-        getFirebaseUserAccessState(uid, true)
-      ]);
-
-      logger.warn('Admin blocked user', {
-        uid,
-        reason: typeof req.body?.reason === 'string' ? req.body.reason.slice(0, 200) : null
-      });
-
-      res.json({
-        ok: true,
-        user: mergeAdminUsers(
-          snapshot ? [snapshot] : [],
-          new Map([[uid, refreshed]]),
-          await getUserPlanAccessSummaryMap([uid])
-        )[0]
-      });
+      await setFirebaseUserDisabled(req.params.uid, true);
+      res.json({ user: await loadSingleAdminUser(req.params.uid) });
     } catch (error) {
       next(error);
     }
@@ -830,29 +527,8 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
 
   router.post('/users/:uid/unblock', async (req: Request, res: Response, next) => {
     try {
-      const uid = req.params.uid;
-      const state = await getFirebaseUserAccessState(uid, true);
-      if (!state.exists) {
-        res.status(404).json({ error: 'Firebase user not found.' });
-        return;
-      }
-
-      await setFirebaseUserDisabled(uid, false);
-      const [snapshot, refreshed] = await Promise.all([
-        getAdminUserSnapshot(uid),
-        getFirebaseUserAccessState(uid, true)
-      ]);
-
-      logger.warn('Admin unblocked user', { uid });
-
-      res.json({
-        ok: true,
-        user: mergeAdminUsers(
-          snapshot ? [snapshot] : [],
-          new Map([[uid, refreshed]]),
-          await getUserPlanAccessSummaryMap([uid])
-        )[0]
-      });
+      await setFirebaseUserDisabled(req.params.uid, false);
+      res.json({ user: await loadSingleAdminUser(req.params.uid) });
     } catch (error) {
       next(error);
     }
@@ -860,21 +536,9 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
 
   router.post('/users/:uid/subscription/block', async (req: Request, res: Response, next) => {
     try {
-      const uid = req.params.uid;
-      const user = await loadSingleAdminUser(uid);
-      if (!user) {
-        res.status(404).json({ error: 'Usuario nao encontrado.' });
-        return;
-      }
-
-      const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 200) : null;
-      await setUserPlanOverride(uid, 'deny', reason || 'Admin bloqueou assinatura');
-
-      logger.warn('Admin blocked subscription access', { uid, reason: reason || null });
-      res.json({
-        ok: true,
-        user: await loadSingleAdminUser(uid)
-      });
+      const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : null;
+      await setUserPlanOverride(req.params.uid, 'deny', reason || 'Admin block');
+      res.json({ user: await loadSingleAdminUser(req.params.uid) });
     } catch (error) {
       next(error);
     }
@@ -882,21 +546,8 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
 
   router.post('/users/:uid/subscription/unblock', async (req: Request, res: Response, next) => {
     try {
-      const uid = req.params.uid;
-      const user = await loadSingleAdminUser(uid);
-      if (!user) {
-        res.status(404).json({ error: 'Usuario nao encontrado.' });
-        return;
-      }
-
-      const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 200) : null;
-      await setUserPlanOverride(uid, 'allow', reason || 'Admin liberou assinatura');
-
-      logger.warn('Admin unblocked subscription access', { uid, reason: reason || null });
-      res.json({
-        ok: true,
-        user: await loadSingleAdminUser(uid)
-      });
+      await clearUserPlanOverride(req.params.uid);
+      res.json({ user: await loadSingleAdminUser(req.params.uid) });
     } catch (error) {
       next(error);
     }
@@ -904,20 +555,8 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
 
   router.post('/users/:uid/subscription/reset', async (req: Request, res: Response, next) => {
     try {
-      const uid = req.params.uid;
-      const user = await loadSingleAdminUser(uid);
-      if (!user) {
-        res.status(404).json({ error: 'Usuario nao encontrado.' });
-        return;
-      }
-
-      await clearUserPlanOverride(uid);
-
-      logger.info('Admin reset subscription override', { uid });
-      res.json({
-        ok: true,
-        user: await loadSingleAdminUser(uid)
-      });
+      await clearUserPlanOverride(req.params.uid);
+      res.json({ user: await loadSingleAdminUser(req.params.uid) });
     } catch (error) {
       next(error);
     }
@@ -925,8 +564,7 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
 
   router.get('/subscriptions', async (_req: Request, res: Response, next) => {
     try {
-      const subscriptions = await listAllSubscriptions();
-      res.json({ subscriptions });
+      res.json({ subscriptions: await listAllSubscriptions() });
     } catch (error) {
       next(error);
     }
@@ -934,24 +572,9 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
 
   router.post('/users/:uid/subscription/grant', async (req: Request, res: Response, next) => {
     try {
-      const uid = req.params.uid;
-      const days = typeof req.body?.days === 'number' ? req.body.days : 0;
-      const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 200) : null;
-
-      if (days < 1 || days > 3650) {
-        res.status(400).json({ error: 'Dias deve ser entre 1 e 3650.' });
-        return;
-      }
-
-      const subscription = await adminGrantSubscription(uid, days, reason);
-      const user = await loadSingleAdminUser(uid);
-
-      logger.warn('Admin granted subscription access', { uid, days, reason: reason || null });
-      res.json({
-        ok: true,
-        subscription,
-        user
-      });
+      const planCode = typeof req.body?.planCode === 'string' ? req.body.planCode.trim() : '';
+      await adminGrantSubscription(req.params.uid, planCode);
+      res.json({ user: await loadSingleAdminUser(req.params.uid) });
     } catch (error) {
       next(error);
     }
@@ -961,74 +584,42 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
     try {
       const uid = req.params.uid;
       const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
-      const phoneOverride = typeof req.body?.phone === 'string' ? req.body.phone.trim() : null;
-
       if (!text) {
-        res.status(400).json({ error: 'Mensagem vazia.' });
+        res.status(400).json({ error: 'Mensagem obrigatoria.' });
         return;
       }
 
-      const snapshot = await getAdminUserSnapshot(uid);
-      if (!snapshot) {
-        res.status(404).json({ error: 'Usuário não encontrado.' });
+      const user = await loadSingleAdminUser(uid);
+      const target = user?.whatsappAllowedNumbers?.[0];
+      if (!target) {
+        res.status(400).json({ error: 'Usuario sem WhatsApp configurado.' });
         return;
       }
 
-      let targetPhone = phoneOverride;
-      if (!targetPhone) {
-        const allowedNumbers = snapshot.settings?.whatsappAllowedNumbers ?? [];
-        if (allowedNumbers.length === 0) {
-          res.status(400).json({ error: 'Usuário não possui número de WhatsApp cadastrado e nenhum foi fornecido.' });
-          return;
-        }
-        targetPhone = allowedNumbers[0];
-      }
-
-      await manager.sendTextWithRouting({
-        to: targetPhone,
+      const sent = await manager.sendTextWithRouting({
+        to: target,
         text,
         ownerUid: uid
       });
 
-      logger.info('Admin sent direct message to user', { uid, phone: targetPhone });
-      res.json({ ok: true, sent: true });
+      res.json({ ok: true, messageId: sent.messageId, clientId: sent.clientId });
     } catch (error) {
-      logger.error('Failed to send admin direct message', error);
-      res.status(500).json({ error: error instanceof Error ? error.message : 'Erro ao enviar mensagem.' });
+      next(error);
     }
   });
 
-  /* ───── DB Cleanup Routes ───── */
-
-  router.get('/db-cleanup/insights', async (req: Request, res: Response<CleanupInsightsResponse | { error: string }>, next) => {
+  router.get('/db-cleanup/insights', async (req: Request, res: Response, next) => {
     try {
-      const resolvedCutoff = resolveInsightsCutoffDate(req.query?.cutoffDate);
-      if ('error' in resolvedCutoff) {
-        res.status(400).json({ error: resolvedCutoff.error });
-        return;
-      }
-
-      const context = createCleanupFilterContext(resolvedCutoff.cutoffDate);
-      const categories = await Promise.all(CLEANUP_ORDER.map((category) => buildCategoryInsight(category, context)));
-      const totals = categories.reduce(
-        (acc, item) => {
-          acc.totalRecords += item.totalCount;
-          acc.eligibleRecords += item.eligibleCount;
-          acc.estimatedTotalBytes += item.estimatedTotalBytes;
-          acc.estimatedRecoverableBytes += item.estimatedRecoverableBytes;
-          return acc;
-        },
-        {
-          totalRecords: 0,
-          eligibleRecords: 0,
-          estimatedTotalBytes: 0,
-          estimatedRecoverableBytes: 0
-        }
-      );
-
+      const cutoffDate = toIsoString(req.query.cutoffDate) ?? defaultInsightsCutoffDate();
+      const categories = CLEANUP_ORDER.map((category) => buildCleanupInsight(category, cutoffDate));
       res.json({
-        cutoffDate: context.cutoffDate,
-        totals,
+        cutoffDate,
+        totals: {
+          totalRecords: categories.reduce((sum, item) => sum + item.totalCount, 0),
+          eligibleRecords: categories.reduce((sum, item) => sum + item.eligibleCount, 0),
+          estimatedTotalBytes: categories.reduce((sum, item) => sum + item.estimatedTotalBytes, 0),
+          estimatedRecoverableBytes: categories.reduce((sum, item) => sum + item.estimatedRecoverableBytes, 0)
+        },
         categories,
         generatedAt: new Date().toISOString()
       });
@@ -1039,26 +630,23 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
 
   router.post('/db-cleanup/preview', async (req: Request, res: Response, next) => {
     try {
-      const categories = normalizeCleanupCategories(req.body?.categories);
-      const resolvedCutoff = resolveRequiredCutoffDate(req.body?.cutoffDate);
-
-      if (categories.length === 0) {
-        res.status(400).json({ error: 'Selecione ao menos uma categoria.' });
-        return;
-      }
-      if ('error' in resolvedCutoff) {
-        res.status(400).json({ error: resolvedCutoff.error });
+      const cutoffDate = toIsoString(req.body?.cutoffDate);
+      if (!cutoffDate) {
+        res.status(400).json({ error: 'Data de corte invalida.' });
         return;
       }
 
-      const context = createCleanupFilterContext(resolvedCutoff.cutoffDate);
-      const counts: Partial<Record<CleanupCategory, number>> = {};
-      for (const cat of categories) {
-        counts[cat] = await countCleanupCategoryRecords(cat, context, 'eligible');
-      }
+      const categories: CleanupCategory[] = Array.isArray(req.body?.categories)
+        ? (req.body.categories.filter((item: unknown): item is CleanupCategory => CLEANUP_ORDER.includes(item as CleanupCategory)))
+        : CLEANUP_ORDER;
 
-      const total = Object.values(counts).reduce((s, v) => s + (v ?? 0), 0);
-      res.json({ ok: true, counts, total });
+      const counts = Object.fromEntries(
+        categories.map((category: CleanupCategory) => [category, buildCleanupInsight(category, cutoffDate).eligibleCount] as const)
+      ) as Record<string, number>;
+      res.json({
+        counts,
+        total: Object.values(counts).reduce((sum, value) => sum + value, 0)
+      });
     } catch (error) {
       next(error);
     }
@@ -1066,52 +654,36 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
 
   router.post('/db-cleanup/execute', async (req: Request, res: Response, next) => {
     try {
-      const categories = normalizeCleanupCategories(req.body?.categories);
-      const resolvedCutoff = resolveRequiredCutoffDate(req.body?.cutoffDate);
-      const confirmation: string = typeof req.body?.confirmation === 'string' ? req.body.confirmation : '';
-
-      if (categories.length === 0) {
-        res.status(400).json({ error: 'Selecione ao menos uma categoria.' });
-        return;
-      }
-      if ('error' in resolvedCutoff) {
-        res.status(400).json({ error: resolvedCutoff.error });
-        return;
-      }
-      if (confirmation !== 'CONFIRMAR') {
-        res.status(400).json({ error: 'Confirmação inválida. Digite CONFIRMAR.' });
+      const cutoffDate = toIsoString(req.body?.cutoffDate);
+      if (!cutoffDate) {
+        res.status(400).json({ error: 'Data de corte invalida.' });
         return;
       }
 
-      const context = createCleanupFilterContext(resolvedCutoff.cutoffDate);
-      const orderedCategories = CLEANUP_ORDER.filter((category) => categories.includes(category));
+      const categories: CleanupCategory[] = Array.isArray(req.body?.categories)
+        ? (req.body.categories.filter((item: unknown): item is CleanupCategory => CLEANUP_ORDER.includes(item as CleanupCategory)))
+        : CLEANUP_ORDER;
 
       const counts = {} as Record<CleanupCategory, number>;
-      for (const cat of orderedCategories) {
-        counts[cat] = await deleteCleanupCategoryRecords(cat, context);
+      let totalDeleted = 0;
+
+      for (const category of categories) {
+        const deleted = executeCleanup(category, cutoffDate);
+        counts[category] = deleted;
+        totalDeleted += deleted;
       }
 
-      const totalDeleted = Object.values(counts).reduce((s, v) => s + v, 0);
-
-      const entry: CleanupHistoryEntry = {
-        id: crypto.randomUUID(),
+      cleanupHistory.unshift({
+        id: `${Date.now()}`,
         timestamp: new Date().toISOString(),
-        cutoffDate: context.cutoffDate,
-        categories: orderedCategories,
-        counts,
-        totalDeleted
-      };
-      cleanupHistory.unshift(entry);
-      if (cleanupHistory.length > MAX_CLEANUP_HISTORY) cleanupHistory.length = MAX_CLEANUP_HISTORY;
-
-      logger.warn('Admin executed DB cleanup', {
-        cutoffDate: context.cutoffDate,
-        categories: orderedCategories,
+        cutoffDate,
+        categories,
         counts,
         totalDeleted
       });
+      cleanupHistory.splice(50);
 
-      res.json({ ok: true, counts, totalDeleted });
+      res.json({ counts, totalDeleted });
     } catch (error) {
       next(error);
     }
@@ -1122,9 +694,10 @@ export function createAdminRouter(manager: WhatsAppClientsManager): Router {
   });
 
   router.use((error: unknown, _req: Request, res: Response, _next: unknown) => {
-    logger.error('Admin route error', error);
-    const message = error instanceof Error ? error.message : 'Unexpected error';
-    res.status(500).json({ error: message });
+    logger.error('Admin route error', {
+      error: error instanceof Error ? error.message : 'unknown'
+    });
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Unexpected error' });
   });
 
   return router;

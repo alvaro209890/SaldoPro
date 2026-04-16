@@ -7,8 +7,8 @@ exports.getBillingPlans = getBillingPlans;
 exports.ensureBillingPlansSeeded = ensureBillingPlansSeeded;
 exports.getBillingPlanByCode = getBillingPlanByCode;
 exports.setBillingPlanMercadoPagoId = setBillingPlanMercadoPagoId;
-const supabase_1 = require("./supabase");
-const TABLE_NAME = 'app_subscription_plans';
+const node_crypto_1 = require("node:crypto");
+const local_db_1 = require("./local-db");
 const PLAN_CATALOG = [
     {
         code: 'monthly',
@@ -41,11 +41,6 @@ const PLAN_CATALOG = [
         active: true
     }
 ];
-function assertNoError(error, context) {
-    if (!error)
-        return;
-    throw new Error(`${context}: ${error.message}`);
-}
 function formatCurrencyBrl(priceCents) {
     return new Intl.NumberFormat('pt-BR', {
         style: 'currency',
@@ -59,28 +54,14 @@ function mapPlanRow(row) {
         name: row.name,
         description: row.description,
         intervalUnit: row.interval_unit,
-        intervalCount: row.interval_count,
-        priceCents: row.price_cents,
-        priceFormatted: formatCurrencyBrl(row.price_cents),
+        intervalCount: Number(row.interval_count),
+        priceCents: Number(row.price_cents),
+        priceFormatted: formatCurrencyBrl(Number(row.price_cents)),
         currency: row.currency,
         mercadoPagoPlanId: row.mercado_pago_plan_id,
-        active: row.active,
+        active: Number(row.active) === 1,
         createdAt: row.created_at,
         updatedAt: row.updated_at
-    };
-}
-function buildPlanMutation(seed, nowIso) {
-    return {
-        code: seed.code,
-        name: seed.name,
-        description: seed.description,
-        interval_unit: seed.intervalUnit,
-        interval_count: seed.intervalCount,
-        price_cents: seed.priceCents,
-        currency: seed.currency,
-        active: seed.active,
-        created_at: nowIso,
-        updated_at: nowIso
     };
 }
 function getBillingPlanCatalog() {
@@ -97,77 +78,45 @@ function getBillingPlanDefinition(code) {
     return plan;
 }
 async function getBillingPlans() {
-    const { data, error } = await supabase_1.supabaseAdmin
-        .from(TABLE_NAME)
-        .select('*')
-        .order('interval_count', { ascending: true });
-    assertNoError(error, 'getBillingPlans');
-    return (data ?? []).map(mapPlanRow);
+    const rows = local_db_1.db
+        .prepare('select * from app_subscription_plans order by interval_count asc')
+        .all();
+    return rows.map(mapPlanRow);
 }
 async function ensureBillingPlansSeeded() {
-    const nowIso = new Date().toISOString();
-    const codes = PLAN_CATALOG.map((plan) => plan.code);
-    const { data: existingRows, error: existingError } = await supabase_1.supabaseAdmin
-        .from(TABLE_NAME)
-        .select('*')
-        .in('code', codes);
-    assertNoError(existingError, 'ensureBillingPlansSeeded.select');
-    const existingByCode = new Map((existingRows ?? []).map((row) => [row.code, row]));
-    const missing = PLAN_CATALOG
-        .filter((plan) => !existingByCode.has(plan.code))
-        .map((plan) => buildPlanMutation(plan, nowIso));
-    if (missing.length > 0) {
-        const { error } = await supabase_1.supabaseAdmin.from(TABLE_NAME).insert(missing);
-        assertNoError(error, 'ensureBillingPlansSeeded.insert');
-    }
-    for (const seed of PLAN_CATALOG) {
-        const current = existingByCode.get(seed.code);
-        if (current &&
-            current.name === seed.name &&
-            current.description === seed.description &&
-            current.interval_unit === seed.intervalUnit &&
-            current.interval_count === seed.intervalCount &&
-            current.price_cents === seed.priceCents &&
-            current.currency === seed.currency &&
-            current.active === seed.active) {
+    const now = (0, local_db_1.nowIso)();
+    const selectByCode = local_db_1.db.prepare('select * from app_subscription_plans where code = ?').pluck(false);
+    const insertPlan = local_db_1.db.prepare(`
+    insert into app_subscription_plans (
+      id, code, name, description, interval_unit, interval_count, price_cents, currency,
+      mercado_pago_plan_id, active, created_at, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+    const updatePlan = local_db_1.db.prepare(`
+    update app_subscription_plans
+    set name = ?, description = ?, interval_unit = ?, interval_count = ?, price_cents = ?, currency = ?, active = ?, updated_at = ?
+    where code = ?
+  `);
+    for (const plan of PLAN_CATALOG) {
+        const existing = selectByCode.get(plan.code);
+        if (!existing) {
+            insertPlan.run((0, node_crypto_1.randomUUID)(), plan.code, plan.name, plan.description, plan.intervalUnit, plan.intervalCount, plan.priceCents, plan.currency, null, plan.active ? 1 : 0, now, now);
             continue;
         }
-        const mutation = buildPlanMutation(seed, current?.created_at ?? nowIso);
-        const { error } = await supabase_1.supabaseAdmin
-            .from(TABLE_NAME)
-            .update({
-            name: mutation.name,
-            description: mutation.description,
-            interval_unit: mutation.interval_unit,
-            interval_count: mutation.interval_count,
-            price_cents: mutation.price_cents,
-            currency: mutation.currency,
-            active: mutation.active,
-            updated_at: nowIso
-        })
-            .eq('code', seed.code);
-        assertNoError(error, 'ensureBillingPlansSeeded.update');
+        updatePlan.run(plan.name, plan.description, plan.intervalUnit, plan.intervalCount, plan.priceCents, plan.currency, plan.active ? 1 : 0, now, plan.code);
     }
     return getBillingPlans();
 }
 async function getBillingPlanByCode(code) {
-    const { data, error } = await supabase_1.supabaseAdmin
-        .from(TABLE_NAME)
-        .select('*')
-        .eq('code', code)
-        .maybeSingle();
-    assertNoError(error, 'getBillingPlanByCode');
-    if (!data)
-        return null;
-    return mapPlanRow(data);
+    const row = local_db_1.db
+        .prepare('select * from app_subscription_plans where code = ? limit 1')
+        .get(code);
+    return row ? mapPlanRow(row) : null;
 }
 async function setBillingPlanMercadoPagoId(code, mercadoPagoPlanId) {
-    const { error } = await supabase_1.supabaseAdmin
-        .from(TABLE_NAME)
-        .update({
-        mercado_pago_plan_id: mercadoPagoPlanId,
-        updated_at: new Date().toISOString()
-    })
-        .eq('code', code);
-    assertNoError(error, 'setBillingPlanMercadoPagoId');
+    local_db_1.db.prepare(`
+    update app_subscription_plans
+    set mercado_pago_plan_id = ?, updated_at = ?
+    where code = ?
+  `).run(mercadoPagoPlanId, (0, local_db_1.nowIso)(), code);
 }

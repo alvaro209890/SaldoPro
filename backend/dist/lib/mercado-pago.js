@@ -11,6 +11,20 @@ exports.getMercadoPagoSubscription = getMercadoPagoSubscription;
 exports.validateMercadoPagoWebhookSignature = validateMercadoPagoWebhookSignature;
 const node_crypto_1 = require("node:crypto");
 const env_1 = require("../config/env");
+function getMercadoPagoAccessToken() {
+    const token = env_1.env.mercadoPagoAccessToken?.trim();
+    if (!token) {
+        throw new Error('Mercado Pago access token is not configured.');
+    }
+    return token;
+}
+function getMercadoPagoWebhookSecret() {
+    const secret = env_1.env.mercadoPagoWebhookSecret?.trim();
+    if (!secret) {
+        throw new Error('Mercado Pago webhook secret is not configured.');
+    }
+    return secret;
+}
 class MercadoPagoRequestError extends Error {
     status;
     code;
@@ -37,7 +51,7 @@ async function requestMercadoPago(path, context, options = {}) {
     const response = await fetch(`https://api.mercadopago.com${path}`, {
         method: options.method ?? 'GET',
         headers: {
-            Authorization: `Bearer ${env_1.env.mercadoPagoAccessToken}`,
+            Authorization: `Bearer ${getMercadoPagoAccessToken()}`,
             'Content-Type': 'application/json'
         },
         ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {})
@@ -148,7 +162,7 @@ async function getMercadoPagoSubscription(preapprovalId) {
     return requestMercadoPago(`/preapproval/${encodeURIComponent(preapprovalId)}`, 'getMercadoPagoSubscription');
 }
 function validateMercadoPagoWebhookSignature(rawBody, signatureHeader, fallbackSecretHeader) {
-    const secret = env_1.env.mercadoPagoWebhookSecret.trim();
+    const secret = getMercadoPagoWebhookSecret();
     const headerValue = signatureHeader?.trim() ?? '';
     const manualHeaderValue = fallbackSecretHeader?.trim() ?? '';
     if (manualHeaderValue && safeCompare(manualHeaderValue, secret)) {

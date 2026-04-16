@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SaldoPro QR WhatsApp</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --text: #0f172a;
+      --muted: #475569;
+      --line: #dbe2ea;
+      --brand: #0f766e;
+      --brand-strong: #115e59;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(15, 118, 110, 0.12), transparent 30%),
+        linear-gradient(180deg, #eef6f5 0%, var(--bg) 42%, #e8edf5 100%);
+    }
+
+    .layout {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 24px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .hero {
+      background: linear-gradient(135deg, #0f766e 0%, #0f172a 100%);
+      color: #f8fafc;
+      border-radius: 24px;
+      padding: 28px;
+      display: grid;
+      gap: 10px;
+      box-shadow: 0 18px 50px rgba(15, 23, 42, 0.18);
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: clamp(1.8rem, 3vw, 2.7rem);
+      line-height: 1.05;
+    }
+
+    .hero p {
+      margin: 0;
+      max-width: 760px;
+      color: rgba(248, 250, 252, 0.86);
+      font-size: 1rem;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .btn {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      padding: 12px 18px;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: none;
+      transition: transform 0.15s ease, opacity 0.15s ease, background 0.15s ease;
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+    }
+
+    .btn-primary {
+      background: #f8fafc;
+      color: #0f172a;
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.12);
+      color: #f8fafc;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      overflow: hidden;
+      box-shadow: 0 14px 32px rgba(15, 23, 42, 0.08);
+    }
+
+    .panel-header {
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: center;
+    }
+
+    .panel-header strong {
+      display: block;
+      font-size: 1rem;
+    }
+
+    .panel-header span {
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .frame-wrap {
+      height: min(80vh, 980px);
+      background: #d9e3ea;
+    }
+
+    iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #fff;
+    }
+
+    .footnote {
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.45;
+    }
+
+    code {
+      background: rgba(15, 23, 42, 0.06);
+      padding: 2px 6px;
+      border-radius: 6px;
+      font-size: 0.92em;
+    }
+
+    @media (max-width: 720px) {
+      .layout {
+        padding: 14px;
+      }
+
+      .hero,
+      .panel {
+        border-radius: 18px;
+      }
+
+      .frame-wrap {
+        height: 74vh;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="layout">
+    <section class="hero">
+      <h1>Conectar WhatsApp da IA do SaldoPro</h1>
+      <p>
+        Esta página exibe o QR do backend local publicado em <code>saldopro-api.cursar.space</code>.
+        Abra o WhatsApp no celular, vá em <strong>Dispositivos conectados</strong> e escaneie o código.
+      </p>
+      <div class="toolbar">
+        <a class="btn btn-primary" href="https://saldopro-api.cursar.space/" target="_blank" rel="noopener noreferrer">
+          Abrir QR em nova aba
+        </a>
+        <button class="btn btn-secondary" type="button" id="reload-frame">
+          Atualizar página do QR
+        </button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <strong>QR do backend local</strong>
+          <span>Origem: https://saldopro-api.cursar.space/</span>
+        </div>
+      </div>
+      <div class="frame-wrap">
+        <iframe
+          id="qr-frame"
+          src="https://saldopro-api.cursar.space/"
+          title="QR WhatsApp SaldoPro"
+          loading="eager"
+          referrerpolicy="no-referrer"
+        ></iframe>
+      </div>
+    </section>
+
+    <p class="footnote">
+      Se o QR não aparecer, o backend local ainda não conseguiu iniciar a sessão do WhatsApp.
+      Nesse caso, confirme as variáveis pendentes do backend e recarregue esta página.
+    </p>
+  </main>
+
+  <script>
+    const frame = document.getElementById('qr-frame');
+    document.getElementById('reload-frame').addEventListener('click', () => {
+      frame.src = 'https://saldopro-api.cursar.space/?t=' + Date.now();
+    });
+  </script>
+</body>
+</html>

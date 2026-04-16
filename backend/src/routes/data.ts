@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Router, type NextFunction, type Request, type Response } from 'express';
+import { getAuth } from 'firebase-admin/auth';
 import { requireSupabaseAuth } from '../middleware/supabase-auth';
 import { requirePlanFeature } from '../middleware/plan-access';
 import {
@@ -43,6 +44,7 @@ import {
   deleteUserGoal,
   updateUserDisplayName,
   DuplicateCategoryError,
+  DuplicateUserEmailError,
 } from '../lib/firestore';
 import { generateFinancialGoals } from '../ai/groq';
 import {
@@ -51,6 +53,7 @@ import {
   finalizePendingDocumentMove,
   uploadPendingDocument
 } from '../lib/document-storage';
+import { ensureFirebaseAdmin } from '../lib/firebase-admin';
 import { logger } from '../lib/logger';
 import {
   normalizeDocumentText,
@@ -230,11 +233,20 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
       return;
     }
 
-    const bootstrapResult = await bootstrapUserData(uid, {
-      email,
-      displayName,
-      phone: normalizedPhone
-    });
+    let bootstrapResult;
+    try {
+      bootstrapResult = await bootstrapUserData(uid, {
+        email,
+        displayName,
+        phone: normalizedPhone
+      });
+    } catch (error) {
+      if (error instanceof DuplicateUserEmailError) {
+        res.status(409).json({ error: 'Este email ja esta cadastrado em outra conta.' });
+        return;
+      }
+      throw error;
+    }
 
     res.json({ ok: true });
 
@@ -258,6 +270,16 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
     }
 
     await updateUserDisplayName(uid, displayName);
+    if (ensureFirebaseAdmin()) {
+      try {
+        await getAuth().updateUser(uid, { displayName: displayName.trim() });
+      } catch (error) {
+        logger.warn('Failed to sync Firebase display name from local profile update', {
+          uid,
+          error: error instanceof Error ? error.message : 'unknown'
+        });
+      }
+    }
     res.json({ ok: true, displayName: displayName.trim() });
   });
 

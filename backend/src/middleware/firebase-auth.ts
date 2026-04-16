@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { getAuth } from 'firebase-admin/auth';
 import { ensureFirebaseAdmin } from '../lib/firebase-admin';
-import { getFirebaseUserAccessState } from '../lib/firebase-user-access';
+import { getFirebaseUserAccessStateFromIdToken } from '../lib/firebase-user-access';
 import { logger } from '../lib/logger';
 
 /**
@@ -9,8 +9,6 @@ import { logger } from '../lib/logger';
  * On success, attaches the decoded UID to `req.uid`.
  */
 export async function requireFirebaseAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
-    ensureFirebaseAdmin();
-
     const authHeader = req.header('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         res.status(401).json({ error: 'Token de autenticação ausente.' });
@@ -24,13 +22,32 @@ export async function requireFirebaseAuth(req: Request, res: Response, next: Nex
     }
 
     try {
-        const decoded = await getAuth().verifyIdToken(idToken);
-        const userState = await getFirebaseUserAccessState(decoded.uid);
-        if (!userState.exists || userState.disabled) {
-            res.status(403).json({ error: 'Conta bloqueada ou indisponível.' });
+        let uid = '';
+        let valid = false;
+
+        if (ensureFirebaseAdmin()) {
+            try {
+                const decoded = await getAuth().verifyIdToken(idToken);
+                uid = decoded.uid;
+                valid = true;
+            } catch (error) {
+                logger.warn('Firebase Auth middleware falling back to Identity Toolkit lookup', {
+                    error: error instanceof Error ? error.message : 'unknown'
+                });
+            }
+        }
+
+        if (!valid) {
+            const userState = await getFirebaseUserAccessStateFromIdToken(idToken);
+            uid = userState?.uid ?? '';
+            valid = Boolean(userState?.exists && !userState.disabled);
+        }
+
+        if (!uid || !valid) {
+            res.status(401).json({ error: 'Token de autenticação inválido ou expirado.' });
             return;
         }
-        (req as Request & { uid: string }).uid = decoded.uid;
+        (req as Request & { uid: string }).uid = uid;
         next();
     } catch (error) {
         logger.warn('Firebase Auth: invalid ID token', {

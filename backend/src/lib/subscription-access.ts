@@ -1,13 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import { getFreeWhatsAppQuotaState, type DailyQuotaState } from './daily-ai-quota';
 import { type BillingPlanCode, isBillingPlanCode } from './billing-plans';
 import { type UserSubscriptionStatus } from './mercado-pago';
-import { supabaseAdmin as db } from './supabase';
+import { db, nowIso } from './local-db';
 
-const SUBSCRIPTIONS_TABLE = 'app_user_subscriptions';
-const BILLING_EVENTS_TABLE = 'app_billing_events';
-const PLAN_OVERRIDES_TABLE = 'app_user_plan_overrides';
-// Temporary maintenance mode: when false, all premium features stay enabled
-// without changing subscription records/billing internals.
 const SUBSCRIPTION_ENFORCEMENT_ENABLED = false;
 
 export type PremiumFeature =
@@ -122,11 +118,6 @@ interface UpdateUserSubscriptionInput {
   cancelledAt?: string | null;
 }
 
-function assertNoError(error: { message: string } | null, context: string): void {
-  if (!error) return;
-  throw new Error(`${context}: ${error.message}`);
-}
-
 function mapSubscriptionRow(row: DbUserSubscriptionRow): UserSubscriptionRecord {
   return {
     id: row.id,
@@ -198,45 +189,39 @@ function buildUserPlanAccessSummary(
   const subscriptionStatus: PlanAwareSubscriptionStatus = subscription?.status ?? 'none';
   const baseHasActivePlan = isSubscriptionAuthorized(subscriptionStatus);
   const manualOverride = override?.mode ?? 'none';
+  const effectiveBaseHasPlan = SUBSCRIPTION_ENFORCEMENT_ENABLED ? baseHasActivePlan : true;
   const hasActivePlan =
     manualOverride === 'allow'
       ? true
       : manualOverride === 'deny'
         ? false
-        : baseHasActivePlan;
+        : effectiveBaseHasPlan;
 
   return {
     subscriptionStatus,
-    baseHasActivePlan,
+    baseHasActivePlan: effectiveBaseHasPlan,
     hasActivePlan,
     manualOverride
   };
 }
 
 export async function getLatestUserSubscription(uid: string): Promise<UserSubscriptionRecord | null> {
-  const { data, error } = await db
-    .from(SUBSCRIPTIONS_TABLE)
-    .select('*')
-    .eq('uid', uid)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const row = db.prepare(`
+    select *
+    from app_user_subscriptions
+    where uid = ?
+    order by created_at desc
+    limit 1
+  `).get(uid) as DbUserSubscriptionRow | undefined;
 
-  assertNoError(error, 'getLatestUserSubscription');
-  if (!data) return null;
-  return mapSubscriptionRow(data as DbUserSubscriptionRow);
+  return row ? mapSubscriptionRow(row) : null;
 }
 
 export async function getUserPlanOverride(uid: string): Promise<UserPlanOverrideRecord | null> {
-  const { data, error } = await db
-    .from(PLAN_OVERRIDES_TABLE)
-    .select('*')
-    .eq('uid', uid)
-    .maybeSingle();
-
-  assertNoError(error, 'getUserPlanOverride');
-  if (!data) return null;
-  return mapPlanOverrideRow(data as DbUserPlanOverrideRow);
+  const row = db.prepare(`
+    select * from app_user_plan_overrides where uid = ? limit 1
+  `).get(uid) as DbUserPlanOverrideRow | undefined;
+  return row ? mapPlanOverrideRow(row) : null;
 }
 
 export async function getUserPlanAccessSummary(uid: string): Promise<UserPlanAccessSummary> {
@@ -244,7 +229,6 @@ export async function getUserPlanAccessSummary(uid: string): Promise<UserPlanAcc
     getLatestUserSubscription(uid),
     getUserPlanOverride(uid)
   ]);
-
   return buildUserPlanAccessSummary(subscription, override);
 }
 
@@ -252,299 +236,208 @@ export async function getUserPlanAccessSummaryMap(
   uids: readonly string[]
 ): Promise<Map<string, UserPlanAccessSummary>> {
   const uniqueUids = [...new Set(uids.filter((uid) => uid.trim().length > 0))];
-  if (uniqueUids.length === 0) {
-    return new Map();
-  }
-
-  const [subscriptionRows, overrideRows] = await Promise.all([
-    db
-      .from(SUBSCRIPTIONS_TABLE)
-      .select('*')
-      .in('uid', uniqueUids)
-      .order('created_at', { ascending: false }),
-    db
-      .from(PLAN_OVERRIDES_TABLE)
-      .select('*')
-      .in('uid', uniqueUids)
-  ]);
-
-  assertNoError(subscriptionRows.error, 'getUserPlanAccessSummaryMap.subscriptions');
-  assertNoError(overrideRows.error, 'getUserPlanAccessSummaryMap.overrides');
-
-  const latestByUid = new Map<string, UserSubscriptionRecord>();
-  for (const row of (subscriptionRows.data ?? []) as DbUserSubscriptionRow[]) {
-    if (!latestByUid.has(row.uid)) {
-      latestByUid.set(row.uid, mapSubscriptionRow(row));
-    }
-  }
-
-  const overrideByUid = new Map<string, UserPlanOverrideRecord>();
-  for (const row of (overrideRows.data ?? []) as DbUserPlanOverrideRow[]) {
-    overrideByUid.set(row.uid, mapPlanOverrideRow(row));
-  }
-
-  const result = new Map<string, UserPlanAccessSummary>();
+  const map = new Map<string, UserPlanAccessSummary>();
   for (const uid of uniqueUids) {
-    result.set(
-      uid,
-      buildUserPlanAccessSummary(latestByUid.get(uid) ?? null, overrideByUid.get(uid) ?? null)
-    );
+    map.set(uid, await getUserPlanAccessSummary(uid));
   }
-
-  return result;
+  return map;
 }
 
 export async function getUserSubscriptionByMercadoPagoId(
   mercadoPagoPreapprovalId: string
 ): Promise<UserSubscriptionRecord | null> {
-  const { data, error } = await db
-    .from(SUBSCRIPTIONS_TABLE)
-    .select('*')
-    .eq('mercado_pago_preapproval_id', mercadoPagoPreapprovalId)
-    .maybeSingle();
-
-  assertNoError(error, 'getUserSubscriptionByMercadoPagoId');
-  if (!data) return null;
-  return mapSubscriptionRow(data as DbUserSubscriptionRow);
+  const row = db.prepare(`
+    select * from app_user_subscriptions where mercado_pago_preapproval_id = ? limit 1
+  `).get(mercadoPagoPreapprovalId) as DbUserSubscriptionRow | undefined;
+  return row ? mapSubscriptionRow(row) : null;
 }
 
 export async function listUserSubscriptionsByStatuses(
   uid: string,
   statuses: readonly UserSubscriptionStatus[]
 ): Promise<UserSubscriptionRecord[]> {
-  const { data, error } = await db
-    .from(SUBSCRIPTIONS_TABLE)
-    .select('*')
-    .eq('uid', uid)
-    .in('status', [...statuses])
-    .order('created_at', { ascending: false });
-
-  assertNoError(error, 'listUserSubscriptionsByStatuses');
-  return ((data ?? []) as DbUserSubscriptionRow[]).map(mapSubscriptionRow);
+  if (statuses.length === 0) {
+    return [];
+  }
+  const placeholders = statuses.map(() => '?').join(', ');
+  const rows = db.prepare(`
+    select * from app_user_subscriptions
+    where uid = ? and status in (${placeholders})
+    order by created_at desc
+  `).all(uid, ...statuses) as DbUserSubscriptionRow[];
+  return rows.map(mapSubscriptionRow);
 }
 
 export async function createUserSubscriptionRecord(
   input: CreateUserSubscriptionInput
 ): Promise<UserSubscriptionRecord> {
-  const nowIso = new Date().toISOString();
-  const { data, error } = await db
-    .from(SUBSCRIPTIONS_TABLE)
-    .insert({
-      uid: input.uid,
-      plan_code: input.planCode,
-      status: input.status,
-      status_reason: input.statusReason ?? null,
-      mercado_pago_preapproval_id: input.mercadoPagoPreapprovalId ?? null,
-      mercado_pago_plan_id: input.mercadoPagoPlanId ?? null,
-      external_reference: input.externalReference,
-      payer_email: input.payerEmail,
-      next_billing_date: input.nextBillingDate ?? null,
-      last_payment_at: input.lastPaymentAt ?? null,
-      last_payment_status: input.lastPaymentStatus ?? null,
-      cancelled_at: input.cancelledAt ?? null,
-      created_at: nowIso,
-      updated_at: nowIso
-    })
-    .select('*')
-    .single();
+  const id = randomUUID();
+  const now = nowIso();
+  db.prepare(`
+    insert into app_user_subscriptions (
+      id, uid, plan_code, status, status_reason, mercado_pago_preapproval_id, mercado_pago_plan_id,
+      external_reference, payer_email, next_billing_date, last_payment_at, last_payment_status,
+      cancelled_at, created_at, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    input.uid,
+    input.planCode,
+    input.status,
+    input.statusReason ?? null,
+    input.mercadoPagoPreapprovalId ?? null,
+    input.mercadoPagoPlanId ?? null,
+    input.externalReference,
+    input.payerEmail,
+    input.nextBillingDate ?? null,
+    input.lastPaymentAt ?? null,
+    input.lastPaymentStatus ?? null,
+    input.cancelledAt ?? null,
+    now,
+    now
+  );
 
-  assertNoError(error, 'createUserSubscriptionRecord');
-  return mapSubscriptionRow(data as DbUserSubscriptionRow);
+  return (await getUserSubscriptionById(id)) as UserSubscriptionRecord;
+}
+
+async function getUserSubscriptionById(id: string): Promise<UserSubscriptionRecord | null> {
+  const row = db.prepare('select * from app_user_subscriptions where id = ? limit 1').get(id) as DbUserSubscriptionRow | undefined;
+  return row ? mapSubscriptionRow(row) : null;
 }
 
 export async function updateUserSubscriptionRecord(
   id: string,
-  updates: UpdateUserSubscriptionInput
-): Promise<UserSubscriptionRecord> {
-  const { data, error } = await db
-    .from(SUBSCRIPTIONS_TABLE)
-    .update({
-      ...(updates.status ? { status: updates.status } : {}),
-      ...(updates.statusReason !== undefined ? { status_reason: updates.statusReason } : {}),
-      ...(updates.nextBillingDate !== undefined ? { next_billing_date: updates.nextBillingDate } : {}),
-      ...(updates.lastPaymentAt !== undefined ? { last_payment_at: updates.lastPaymentAt } : {}),
-      ...(updates.lastPaymentStatus !== undefined ? { last_payment_status: updates.lastPaymentStatus } : {}),
-      ...(updates.cancelledAt !== undefined ? { cancelled_at: updates.cancelledAt } : {}),
-      updated_at: new Date().toISOString()
-    })
-    .eq('id', id)
-    .select('*')
-    .single();
+  input: UpdateUserSubscriptionInput
+): Promise<UserSubscriptionRecord | null> {
+  const current = await getUserSubscriptionById(id);
+  if (!current) {
+    return null;
+  }
 
-  assertNoError(error, 'updateUserSubscriptionRecord');
-  return mapSubscriptionRow(data as DbUserSubscriptionRow);
+  db.prepare(`
+    update app_user_subscriptions
+    set status = ?, status_reason = ?, next_billing_date = ?, last_payment_at = ?, last_payment_status = ?, cancelled_at = ?, updated_at = ?
+    where id = ?
+  `).run(
+    input.status ?? current.status,
+    input.statusReason ?? current.statusReason,
+    input.nextBillingDate ?? current.nextBillingDate,
+    input.lastPaymentAt ?? current.lastPaymentAt,
+    input.lastPaymentStatus ?? current.lastPaymentStatus,
+    input.cancelledAt ?? current.cancelledAt,
+    nowIso(),
+    id
+  );
+
+  return getUserSubscriptionById(id);
 }
 
 export async function updateUserSubscriptionByMercadoPagoId(
   mercadoPagoPreapprovalId: string,
-  updates: UpdateUserSubscriptionInput
-): Promise<UserSubscriptionRecord> {
-  const { data, error } = await db
-    .from(SUBSCRIPTIONS_TABLE)
-    .update({
-      ...(updates.status ? { status: updates.status } : {}),
-      ...(updates.statusReason !== undefined ? { status_reason: updates.statusReason } : {}),
-      ...(updates.nextBillingDate !== undefined ? { next_billing_date: updates.nextBillingDate } : {}),
-      ...(updates.lastPaymentAt !== undefined ? { last_payment_at: updates.lastPaymentAt } : {}),
-      ...(updates.lastPaymentStatus !== undefined ? { last_payment_status: updates.lastPaymentStatus } : {}),
-      ...(updates.cancelledAt !== undefined ? { cancelled_at: updates.cancelledAt } : {}),
-      updated_at: new Date().toISOString()
-    })
-    .eq('mercado_pago_preapproval_id', mercadoPagoPreapprovalId)
-    .select('*')
-    .single();
-
-  assertNoError(error, 'updateUserSubscriptionByMercadoPagoId');
-  return mapSubscriptionRow(data as DbUserSubscriptionRow);
+  input: UpdateUserSubscriptionInput
+): Promise<UserSubscriptionRecord | null> {
+  const current = await getUserSubscriptionByMercadoPagoId(mercadoPagoPreapprovalId);
+  if (!current) {
+    return null;
+  }
+  return updateUserSubscriptionRecord(current.id, input);
 }
 
 export async function createBillingEvent(input: {
   provider: string;
   eventType: string;
-  providerEventId?: string | null;
-  rawPayload: unknown;
+  providerEventId: string;
+  rawPayload?: unknown;
 }): Promise<string> {
-  const { data, error } = await db
-    .from(BILLING_EVENTS_TABLE)
-    .insert({
-      provider: input.provider,
-      event_type: input.eventType,
-      provider_event_id: input.providerEventId ?? null,
-      raw_payload: input.rawPayload
-    })
-    .select('id')
-    .single();
+  const now = nowIso();
+  const existing = db.prepare(`
+    select id from app_billing_events where provider = ? and provider_event_id = ? limit 1
+  `).get(input.provider, input.providerEventId) as { id: string } | undefined;
+  if (existing) {
+    return existing.id;
+  }
 
-  assertNoError(error, 'createBillingEvent');
-  const row = data as { id: string };
-  return row.id;
+  const id = randomUUID();
+  db.prepare(`
+    insert into app_billing_events (
+      id, provider, event_type, provider_event_id, processed, failed, error_message, raw_payload, created_at, updated_at
+    ) values (?, ?, ?, ?, 0, 0, null, ?, ?, ?)
+  `).run(id, input.provider, input.eventType, input.providerEventId, JSON.stringify(input.rawPayload ?? null), now, now);
+  return id;
 }
 
 export async function markBillingEventProcessed(id: string): Promise<void> {
-  const { error } = await db
-    .from(BILLING_EVENTS_TABLE)
-    .update({
-      processed: true,
-      processed_at: new Date().toISOString(),
-      error_message: null
-    })
-    .eq('id', id);
-
-  assertNoError(error, 'markBillingEventProcessed');
+  db.prepare(`
+    update app_billing_events
+    set processed = 1, failed = 0, error_message = null, updated_at = ?
+    where id = ?
+  `).run(nowIso(), id);
 }
 
 export async function markBillingEventFailed(id: string, errorMessage: string): Promise<void> {
-  const { error } = await db
-    .from(BILLING_EVENTS_TABLE)
-    .update({
-      processed: false,
-      error_message: errorMessage
-    })
-    .eq('id', id);
-
-  assertNoError(error, 'markBillingEventFailed');
+  db.prepare(`
+    update app_billing_events
+    set failed = 1, error_message = ?, updated_at = ?
+    where id = ?
+  `).run(errorMessage, nowIso(), id);
 }
 
 export async function setUserPlanOverride(
   uid: string,
   mode: ManualPlanOverrideMode,
   reason: string | null = null
-): Promise<UserPlanOverrideRecord> {
-  const nowIso = new Date().toISOString();
-  const { data, error } = await db
-    .from(PLAN_OVERRIDES_TABLE)
-    .upsert({
-      uid,
-      mode,
-      reason,
-      created_at: nowIso,
-      updated_at: nowIso
-    }, {
-      onConflict: 'uid'
-    })
-    .select('*')
-    .single();
-
-  assertNoError(error, 'setUserPlanOverride');
-  return mapPlanOverrideRow(data as DbUserPlanOverrideRow);
+): Promise<void> {
+  const now = nowIso();
+  db.prepare(`
+    insert into app_user_plan_overrides (uid, mode, reason, created_at, updated_at)
+    values (?, ?, ?, ?, ?)
+    on conflict(uid) do update set
+      mode = excluded.mode,
+      reason = excluded.reason,
+      updated_at = excluded.updated_at
+  `).run(uid, mode, reason, now, now);
 }
 
 export async function clearUserPlanOverride(uid: string): Promise<void> {
-  const { error } = await db
-    .from(PLAN_OVERRIDES_TABLE)
-    .delete()
-    .eq('uid', uid);
-
-  assertNoError(error, 'clearUserPlanOverride');
+  db.prepare('delete from app_user_plan_overrides where uid = ?').run(uid);
 }
 
 export async function getUserPlanAccess(uid: string): Promise<UserPlanAccess> {
   const summary = await getUserPlanAccessSummary(uid);
-  const { subscriptionStatus, baseHasActivePlan, hasActivePlan, manualOverride } = summary;
-  const effectiveHasActivePlan = SUBSCRIPTION_ENFORCEMENT_ENABLED ? hasActivePlan : true;
-  const features = buildPremiumFeatureFlags(effectiveHasActivePlan);
-  const freeWhatsappQuota = await getFreeWhatsAppQuotaState(uid, SUBSCRIPTION_ENFORCEMENT_ENABLED && !effectiveHasActivePlan);
+  const features = buildPremiumFeatureFlags(summary.hasActivePlan);
+  const freeWhatsappQuota = await getFreeWhatsAppQuotaState(uid, !summary.hasActivePlan);
 
   return {
-    subscriptionStatus,
-    baseHasActivePlan,
-    hasActivePlan: effectiveHasActivePlan,
-    manualOverride,
+    ...summary,
     features,
     freeWhatsappQuota
   };
 }
 
 export async function listAllSubscriptions(): Promise<UserSubscriptionRecord[]> {
-  const { data, error } = await db
-    .from(SUBSCRIPTIONS_TABLE)
-    .select('*')
-    .order('created_at', { ascending: false });
-
-  assertNoError(error, 'listAllSubscriptions');
-  return ((data ?? []) as DbUserSubscriptionRow[]).map(mapSubscriptionRow);
+  const rows = db.prepare(`
+    select * from app_user_subscriptions order by created_at desc
+  `).all() as DbUserSubscriptionRow[];
+  return rows.map(mapSubscriptionRow);
 }
 
 export async function adminGrantSubscription(
   uid: string,
-  days: number,
-  reason: string | null = null
+  planCode: string,
+  status: UserSubscriptionStatus = 'authorized'
 ): Promise<UserSubscriptionRecord> {
-  const nowIso = new Date().toISOString();
-  const nextBilling = new Date(Date.now() + days * 86_400_000).toISOString();
-
-  // Cancel existing active subscriptions before granting
-  const replaceable = await listUserSubscriptionsByStatuses(uid, ['pending', 'authorized', 'paused']);
-  for (const current of replaceable) {
-    await updateUserSubscriptionRecord(current.id, {
-      status: 'cancelled',
-      statusReason: 'replaced_by_admin_grant',
-      cancelledAt: nowIso,
-      lastPaymentStatus: 'cancelled'
-    });
+  if (!isBillingPlanCode(planCode)) {
+    throw new Error('Invalid billing plan code.');
   }
 
-  const { data, error } = await db
-    .from(SUBSCRIPTIONS_TABLE)
-    .insert({
-      uid,
-      plan_code: 'monthly' as BillingPlanCode,
-      status: 'authorized' as UserSubscriptionStatus,
-      status_reason: reason || `Admin concedeu ${days} dias`,
-      mercado_pago_preapproval_id: null,
-      mercado_pago_plan_id: null,
-      external_reference: `admin_grant:${uid}|days:${days}|ts:${Date.now()}`,
-      payer_email: 'admin@saldopro.com',
-      next_billing_date: nextBilling,
-      last_payment_at: nowIso,
-      last_payment_status: 'admin_grant',
-      cancelled_at: null,
-      created_at: nowIso,
-      updated_at: nowIso
-    })
-    .select('*')
-    .single();
-
-  assertNoError(error, 'adminGrantSubscription');
-  return mapSubscriptionRow(data as DbUserSubscriptionRow);
+  return createUserSubscriptionRecord({
+    uid,
+    planCode,
+    status,
+    statusReason: 'admin_grant',
+    externalReference: `admin:${uid}:${Date.now()}`,
+    payerEmail: 'admin@local.invalid',
+    lastPaymentStatus: status,
+    lastPaymentAt: nowIso()
+  });
 }

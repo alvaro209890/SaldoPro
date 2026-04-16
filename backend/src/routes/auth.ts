@@ -1,9 +1,10 @@
 import { Router, type Request, type Response } from 'express';
-import type { Session, User } from '@supabase/supabase-js';
+import { getAuth } from 'firebase-admin/auth';
 import { env } from '../config/env';
-import { bootstrapUserData } from '../lib/firestore';
+import { bootstrapUserData, DuplicateUserEmailError } from '../lib/firestore';
+import { ensureFirebaseAdmin } from '../lib/firebase-admin';
+import { getFirebaseUserAccessState } from '../lib/firebase-user-access';
 import { logger } from '../lib/logger';
-import { createSupabaseServerClient } from '../lib/supabase';
 import { requireSupabaseAuth, type AuthenticatedRequest } from '../middleware/supabase-auth';
 import type { SignupWelcomeDispatcher } from '../whatsapp/signup-welcome-dispatcher';
 
@@ -27,52 +28,139 @@ interface UpdatePasswordBody {
   password?: unknown;
 }
 
+interface FirebaseIdentitySignInResponse {
+  localId: string;
+  email?: string;
+  idToken: string;
+  refreshToken?: string;
+  expiresIn?: string;
+  displayName?: string;
+}
+
+interface FirebaseRefreshResponse {
+  user_id: string;
+  id_token: string;
+  refresh_token: string;
+  expires_in: string;
+}
+
 function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function normalizeAuthError(error: unknown, fallback: string): string {
-  if (!error || typeof error !== 'object') {
+function normalizeAuthErrorMessage(message: string, fallback: string): string {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) {
     return fallback;
   }
 
-  const maybeMessage = 'message' in error && typeof error.message === 'string' ? error.message : '';
-  if (!maybeMessage) {
-    return fallback;
-  }
-
-  const normalized = maybeMessage.toLowerCase();
-  if (normalized.includes('invalid login credentials')) {
-    return 'Email ou senha incorretos.';
-  }
-  if (normalized.includes('user already registered')) {
+  if (normalized.includes('email_exists')) {
     return 'Este email já está em uso.';
   }
-  if (normalized.includes('password should be at least')) {
+  if (normalized.includes('invalid_login_credentials') || normalized.includes('invalid password')) {
+    return 'Email ou senha incorretos.';
+  }
+  if (normalized.includes('email_not_found')) {
+    return 'Email ou senha incorretos.';
+  }
+  if (normalized.includes('weak_password')) {
     return 'A senha deve ter pelo menos 6 caracteres.';
   }
-  if (normalized.includes('email rate limit exceeded')) {
+  if (normalized.includes('too_many_attempts_try_later')) {
     return 'Muitas tentativas. Aguarde alguns minutos e tente novamente.';
   }
+  if (normalized.includes('invalid_grant')) {
+    return 'Não foi possível renovar a sessão.';
+  }
 
-  return maybeMessage;
+  return fallback;
 }
 
-function serializeUser(user: User) {
+async function requestFirebaseIdentity<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`https://identitytoolkit.googleapis.com/v1/${path}?key=${encodeURIComponent(env.firebaseWebApiKey)}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: { message: 'UNKNOWN' } })) as {
+      error?: { message?: string };
+    };
+    throw new Error(payload.error?.message ?? 'UNKNOWN');
+  }
+
+  return response.json() as Promise<T>;
+}
+
+async function refreshFirebaseSession(refreshToken: string): Promise<FirebaseRefreshResponse> {
+  const response = await fetch(`https://securetoken.googleapis.com/v1/token?key=${encodeURIComponent(env.firebaseWebApiKey)}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken
+    }).toString()
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: { message: 'UNKNOWN' } })) as {
+      error?: { message?: string };
+    };
+    throw new Error(payload.error?.message ?? 'UNKNOWN');
+  }
+
+  return response.json() as Promise<FirebaseRefreshResponse>;
+}
+
+async function serializeFirebaseUser(uid: string, fallbackEmail: string | null = null): Promise<{
+  id: string;
+  email: string | null;
+  created_at: string | null;
+  user_metadata: Record<string, unknown>;
+}> {
+  const state = await getFirebaseUserAccessState(uid, true);
   return {
-    id: user.id,
-    email: user.email ?? null,
-    created_at: user.created_at ?? null,
-    user_metadata: user.user_metadata ?? {}
+    id: uid,
+    email: state.email ?? fallbackEmail,
+    created_at: state.createdAt,
+    user_metadata: {
+      ...(state.displayName ? { display_name: state.displayName } : {})
+    }
   };
 }
 
-function serializeSession(session: Session) {
+async function serializeFirebaseSession(input: {
+  uid: string;
+  idToken: string;
+  refreshToken?: string | null;
+  expiresInSeconds?: string | number | null;
+  fallbackEmail?: string | null;
+}): Promise<{
+  accessToken: string;
+  refreshToken: string | null;
+  expiresAt: string | null;
+  user: {
+    id: string;
+    email: string | null;
+    created_at: string | null;
+    user_metadata: Record<string, unknown>;
+  };
+}> {
+  const expiresIn = Number(input.expiresInSeconds ?? 0);
+  const expiresAt = Number.isFinite(expiresIn) && expiresIn > 0
+    ? new Date(Date.now() + expiresIn * 1000).toISOString()
+    : null;
+
   return {
-    accessToken: session.access_token,
-    refreshToken: session.refresh_token,
-    expiresAt: session.expires_at ? new Date(session.expires_at * 1000).toISOString() : null,
-    user: serializeUser(session.user)
+    accessToken: input.idToken,
+    refreshToken: input.refreshToken ?? null,
+    expiresAt,
+    user: await serializeFirebaseUser(input.uid, input.fallbackEmail ?? null)
   };
 }
 
@@ -97,20 +185,30 @@ export function createAuthRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
       return;
     }
 
-    const authClient = createSupabaseServerClient();
-    const { data, error } = await authClient.auth.signInWithPassword({
-      email,
-      password
-    });
-
-    if (error || !data.session) {
-      res.status(401).json({
-        error: normalizeAuthError(error, 'Não foi possível autenticar com o Supabase.')
+    try {
+      const data = await requestFirebaseIdentity<FirebaseIdentitySignInResponse>('accounts:signInWithPassword', {
+        email,
+        password,
+        returnSecureToken: true
       });
-      return;
-    }
 
-    res.json({ session: serializeSession(data.session) });
+      res.json({
+        session: await serializeFirebaseSession({
+          uid: data.localId,
+          idToken: data.idToken,
+          refreshToken: data.refreshToken ?? null,
+          expiresInSeconds: data.expiresIn,
+          fallbackEmail: data.email ?? email
+        })
+      });
+    } catch (error) {
+      res.status(401).json({
+        error: normalizeAuthErrorMessage(
+          error instanceof Error ? error.message : '',
+          'Não foi possível autenticar.'
+        )
+      });
+    }
   });
 
   router.post('/register', async (req: Request, res: Response) => {
@@ -125,80 +223,73 @@ export function createAuthRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
       return;
     }
 
-    const authClient = createSupabaseServerClient();
-    const created = await authClient.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-      user_metadata: {
-        display_name: displayName,
-        phone
-      }
-    });
-
-    if (created.error || !created.data.user) {
-      res.status(400).json({
-        error: normalizeAuthError(created.error, 'Não foi possível criar a conta no Supabase.')
-      });
+    if (!ensureFirebaseAdmin()) {
+      res.status(500).json({ error: 'Firebase Admin não está configurado.' });
       return;
     }
 
-    let bootstrapResult;
+    let createdUid: string | null = null;
+
     try {
-      bootstrapResult = await bootstrapUserData(created.data.user.id, {
+      const user = await getAuth().createUser({
+        email,
+        password,
+        displayName
+      });
+      createdUid = user.uid;
+
+      const bootstrapResult = await bootstrapUserData(user.uid, {
         email,
         displayName,
         phone
       });
-    } catch (error) {
-      logger.error('Supabase register: bootstrap failed after account creation', {
+
+      const session = await requestFirebaseIdentity<FirebaseIdentitySignInResponse>('accounts:signInWithPassword', {
         email,
-        uid: created.data.user.id,
-        error: error instanceof Error ? error.message : 'unknown'
+        password,
+        returnSecureToken: true
       });
 
-      const cleanupClient = createSupabaseServerClient();
-      const { error: deleteError } = await cleanupClient.auth.admin.deleteUser(created.data.user.id);
-      if (deleteError) {
-        logger.error('Supabase register: failed to rollback account after bootstrap error', {
-          email,
-          uid: created.data.user.id,
-          error: deleteError.message
+      if (bootstrapResult.isNewUser && bootstrapResult.normalizedPhone) {
+        signupWelcomeDispatcher.enqueue({
+          uid: user.uid,
+          phone: bootstrapResult.normalizedPhone,
+          displayName
         });
       }
 
-      res.status(500).json({
-        error: 'Não foi possível preparar sua conta agora. Tente novamente em instantes.'
+      res.status(201).json({
+        session: await serializeFirebaseSession({
+          uid: session.localId,
+          idToken: session.idToken,
+          refreshToken: session.refreshToken ?? null,
+          expiresInSeconds: session.expiresIn,
+          fallbackEmail: session.email ?? email
+        })
       });
-      return;
+    } catch (error) {
+      if (createdUid) {
+        try {
+          await getAuth().deleteUser(createdUid);
+        } catch (rollbackError) {
+          logger.error('Firebase register rollback failed', {
+            uid: createdUid,
+            error: rollbackError instanceof Error ? rollbackError.message : 'unknown'
+          });
+        }
+      }
+
+      res.status(error instanceof DuplicateUserEmailError ? 409 : 400).json({
+        error: normalizeAuthErrorMessage(
+          error instanceof DuplicateUserEmailError
+            ? 'Este email ja esta cadastrado em outra conta.'
+            : error instanceof Error
+              ? error.message
+              : '',
+          'Não foi possível criar a conta.'
+        )
+      });
     }
-
-    const signInClient = createSupabaseServerClient();
-    const signedIn = await signInClient.auth.signInWithPassword({
-      email,
-      password
-    });
-
-    if (signedIn.error || !signedIn.data.session) {
-      logger.error('Supabase register: account created but sign-in failed', {
-        email,
-        error: signedIn.error?.message ?? 'unknown'
-      });
-      res.status(500).json({
-        error: 'Conta criada, mas não foi possível iniciar a sessão automaticamente.'
-      });
-      return;
-    }
-
-    if (bootstrapResult.isNewUser && bootstrapResult.normalizedPhone) {
-      signupWelcomeDispatcher.enqueue({
-        uid: created.data.user.id,
-        phone: bootstrapResult.normalizedPhone,
-        displayName
-      });
-    }
-
-    res.status(201).json({ session: serializeSession(signedIn.data.session) });
   });
 
   router.post('/refresh', async (req: Request, res: Response) => {
@@ -210,33 +301,31 @@ export function createAuthRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
       return;
     }
 
-    const authClient = createSupabaseServerClient();
-    const { data, error } = await authClient.auth.refreshSession({
-      refresh_token: refreshToken
-    });
-
-    if (error || !data.session) {
-      res.status(401).json({
-        error: normalizeAuthError(error, 'Não foi possível renovar a sessão.')
+    try {
+      const data = await refreshFirebaseSession(refreshToken);
+      res.json({
+        session: await serializeFirebaseSession({
+          uid: data.user_id,
+          idToken: data.id_token,
+          refreshToken: data.refresh_token,
+          expiresInSeconds: data.expires_in
+        })
       });
-      return;
+    } catch (error) {
+      res.status(401).json({
+        error: normalizeAuthErrorMessage(
+          error instanceof Error ? error.message : '',
+          'Não foi possível renovar a sessão.'
+        )
+      });
     }
-
-    res.json({ session: serializeSession(data.session) });
   });
 
   router.get('/session', requireSupabaseAuth, async (req: Request, res: Response) => {
-    const request = req as AuthenticatedRequest;
-    const user = request.authUser;
-
-    if (!user) {
-      res.status(401).json({ error: 'Sessão inválida.' });
-      return;
-    }
-
+    const uid = getAuthUid(req);
     res.json({
-      uid: getAuthUid(req),
-      user: serializeUser(user)
+      uid,
+      user: await serializeFirebaseUser(uid)
     });
   });
 
@@ -249,19 +338,21 @@ export function createAuthRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
       return;
     }
 
-    const authClient = createSupabaseServerClient();
-    const { error } = await authClient.auth.resetPasswordForEmail(email, {
-      redirectTo: `${env.webAppUrl}/reset-password`
-    });
-
-    if (error) {
-      res.status(400).json({
-        error: normalizeAuthError(error, 'Não foi possível enviar o email de recuperação.')
+    try {
+      await requestFirebaseIdentity('accounts:sendOobCode', {
+        requestType: 'PASSWORD_RESET',
+        email,
+        continueUrl: `${env.webAppUrl}/reset-password`
       });
-      return;
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(400).json({
+        error: normalizeAuthErrorMessage(
+          error instanceof Error ? error.message : '',
+          'Não foi possível enviar o email de recuperação.'
+        )
+      });
     }
-
-    res.json({ ok: true });
   });
 
   router.post('/update-password', requireSupabaseAuth, async (req: Request, res: Response) => {
@@ -274,17 +365,14 @@ export function createAuthRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
       return;
     }
 
-    const authClient = createSupabaseServerClient();
-    const { error } = await authClient.auth.admin.updateUserById(uid, {
-      password
-    });
-
-    if (error) {
-      res.status(400).json({
-        error: normalizeAuthError(error, 'Não foi possível atualizar a senha.')
-      });
+    if (!ensureFirebaseAdmin()) {
+      res.status(500).json({ error: 'Firebase Admin não está configurado.' });
       return;
     }
+
+    await getAuth().updateUser(uid, {
+      password
+    });
 
     res.json({ ok: true });
   });

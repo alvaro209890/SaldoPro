@@ -3,11 +3,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.createDataRouter = createDataRouter;
 const node_crypto_1 = require("node:crypto");
 const express_1 = require("express");
+const auth_1 = require("firebase-admin/auth");
 const supabase_auth_1 = require("../middleware/supabase-auth");
 const plan_access_1 = require("../middleware/plan-access");
 const firestore_1 = require("../lib/firestore");
 const groq_1 = require("../ai/groq");
 const document_storage_1 = require("../lib/document-storage");
+const firebase_admin_1 = require("../lib/firebase-admin");
 const logger_1 = require("../lib/logger");
 const document_intents_1 = require("../whatsapp/document-intents");
 const events_1 = require("../whatsapp/events");
@@ -145,11 +147,21 @@ function createDataRouter(signupWelcomeDispatcher) {
             res.status(400).json({ error: '`email`, `displayName` e `phone` sao obrigatorios.' });
             return;
         }
-        const bootstrapResult = await (0, firestore_1.bootstrapUserData)(uid, {
-            email,
-            displayName,
-            phone: normalizedPhone
-        });
+        let bootstrapResult;
+        try {
+            bootstrapResult = await (0, firestore_1.bootstrapUserData)(uid, {
+                email,
+                displayName,
+                phone: normalizedPhone
+            });
+        }
+        catch (error) {
+            if (error instanceof firestore_1.DuplicateUserEmailError) {
+                res.status(409).json({ error: 'Este email ja esta cadastrado em outra conta.' });
+                return;
+            }
+            throw error;
+        }
         res.json({ ok: true });
         if (bootstrapResult.isNewUser && bootstrapResult.normalizedPhone) {
             signupWelcomeDispatcher.enqueue({
@@ -168,6 +180,17 @@ function createDataRouter(signupWelcomeDispatcher) {
             return;
         }
         await (0, firestore_1.updateUserDisplayName)(uid, displayName);
+        if ((0, firebase_admin_1.ensureFirebaseAdmin)()) {
+            try {
+                await (0, auth_1.getAuth)().updateUser(uid, { displayName: displayName.trim() });
+            }
+            catch (error) {
+                logger_1.logger.warn('Failed to sync Firebase display name from local profile update', {
+                    uid,
+                    error: error instanceof Error ? error.message : 'unknown'
+                });
+            }
+        }
         res.json({ ok: true, displayName: displayName.trim() });
     });
     router.get('/settings', async (req, res) => {

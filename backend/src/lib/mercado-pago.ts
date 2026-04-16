@@ -34,6 +34,22 @@ interface MercadoPagoRequestOptions {
   body?: unknown;
 }
 
+function getMercadoPagoAccessToken(): string {
+  const token = env.mercadoPagoAccessToken?.trim();
+  if (!token) {
+    throw new Error('Mercado Pago access token is not configured.');
+  }
+  return token;
+}
+
+function getMercadoPagoWebhookSecret(): string {
+  const secret = env.mercadoPagoWebhookSecret?.trim();
+  if (!secret) {
+    throw new Error('Mercado Pago webhook secret is not configured.');
+  }
+  return secret;
+}
+
 export class MercadoPagoRequestError extends Error {
   status: number;
   code: string;
@@ -71,7 +87,7 @@ async function requestMercadoPago<TResponse>(
   const response = await fetch(`https://api.mercadopago.com${path}`, {
     method: options.method ?? 'GET',
     headers: {
-      Authorization: `Bearer ${env.mercadoPagoAccessToken}`,
+      Authorization: `Bearer ${getMercadoPagoAccessToken()}`,
       'Content-Type': 'application/json'
     },
     ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {})
@@ -224,7 +240,7 @@ export function validateMercadoPagoWebhookSignature(
   signatureHeader: string | null | undefined,
   fallbackSecretHeader: string | null | undefined
 ): boolean {
-  const secret = env.mercadoPagoWebhookSecret.trim();
+  const secret = getMercadoPagoWebhookSecret();
   const headerValue = signatureHeader?.trim() ?? '';
   const manualHeaderValue = fallbackSecretHeader?.trim() ?? '';
 

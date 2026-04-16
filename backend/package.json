@@ -21,6 +21,7 @@
     "@types/qrcode": "^1.5.5",
     "@types/qrcode-terminal": "^0.12.2",
     "@whiskeysockets/baileys": "^6.17.16",
+    "better-sqlite3": "^12.9.0",
     "cors": "^2.8.6",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",

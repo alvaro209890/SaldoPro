@@ -1,18 +1,20 @@
 import type { NextFunction, Request, Response } from 'express';
-import type { User } from '@supabase/supabase-js';
-import { supabaseAdmin } from '../lib/supabase';
+import { getAuth, type DecodedIdToken } from 'firebase-admin/auth';
+import { ensureFirebaseAdmin } from '../lib/firebase-admin';
+import { getFirebaseUserAccessStateFromIdToken } from '../lib/firebase-user-access';
 import { logger } from '../lib/logger';
 
 export interface AuthenticatedRequest extends Request {
   uid?: string;
-  authUser?: User;
   authAccessToken?: string;
+  authUser?: {
+    uid: string;
+    email: string | null;
+    displayName: string | null;
+    createdAt: string | null;
+  };
 }
 
-/**
- * Validates a Supabase access token from the Authorization header.
- * On success, attaches the authenticated UID and user snapshot to the request.
- */
 export async function requireSupabaseAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.header('authorization');
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -27,19 +29,52 @@ export async function requireSupabaseAuth(req: Request, res: Response, next: Nex
   }
 
   try {
-    const { data, error } = await supabaseAdmin.auth.getUser(accessToken);
-    if (error || !data.user) {
+    let uid = '';
+    let authUser = null as AuthenticatedRequest['authUser'] | null;
+    let decodedToken: DecodedIdToken | null = null;
+
+    if (ensureFirebaseAdmin()) {
+      try {
+        decodedToken = await getAuth().verifyIdToken(accessToken);
+        uid = decodedToken.uid;
+        authUser = {
+          uid,
+          email: typeof decodedToken.email === 'string' ? decodedToken.email : null,
+          displayName: typeof decodedToken.name === 'string' ? decodedToken.name : null,
+          createdAt: null
+        };
+      } catch (error) {
+        logger.warn('Firebase Admin verifyIdToken failed, falling back to Identity Toolkit lookup', {
+          error: error instanceof Error ? error.message : 'unknown'
+        });
+      }
+    }
+
+    if (!authUser) {
+      const userState = await getFirebaseUserAccessStateFromIdToken(accessToken);
+      uid = userState?.uid ?? '';
+      authUser = userState
+        ? {
+            uid,
+            email: userState.email,
+            displayName: userState.displayName,
+            createdAt: userState.createdAt
+          }
+        : null;
+    }
+
+    if (!uid || !authUser) {
       res.status(401).json({ error: 'Token de autenticação inválido ou expirado.' });
       return;
     }
 
     const request = req as AuthenticatedRequest;
-    request.uid = data.user.id;
-    request.authUser = data.user;
+    request.uid = uid;
     request.authAccessToken = accessToken;
+    request.authUser = authUser;
     next();
   } catch (error) {
-    logger.warn('Supabase Auth: invalid access token', {
+    logger.warn('Firebase Auth middleware rejected bearer token', {
       error: error instanceof Error ? error.message : 'unknown'
     });
     res.status(401).json({ error: 'Token de autenticação inválido ou expirado.' });

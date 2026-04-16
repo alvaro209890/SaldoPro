@@ -1,23 +1,7 @@
-import { supabaseAdmin as db } from './supabase';
-
-const TABLE_NAME = 'app_subscription_plans';
+import { randomUUID } from 'node:crypto';
+import { db, nowIso } from './local-db';
 
 export type BillingPlanCode = 'monthly' | 'quarterly' | 'yearly';
-
-interface DbSubscriptionPlanRow {
-  id: string;
-  code: BillingPlanCode;
-  name: string;
-  description: string;
-  interval_unit: string;
-  interval_count: number;
-  price_cents: number;
-  currency: string;
-  mercado_pago_plan_id: string | null;
-  active: boolean;
-  created_at: string;
-  updated_at: string;
-}
 
 interface BillingPlanSeed {
   code: BillingPlanCode;
@@ -77,11 +61,21 @@ const PLAN_CATALOG: readonly BillingPlanSeed[] = [
     currency: 'BRL',
     active: true
   }
-];
+] as const;
 
-function assertNoError(error: { message: string } | null, context: string): void {
-  if (!error) return;
-  throw new Error(`${context}: ${error.message}`);
+interface PlanRow {
+  id: string;
+  code: BillingPlanCode;
+  name: string;
+  description: string;
+  interval_unit: string;
+  interval_count: number;
+  price_cents: number;
+  currency: string;
+  mercado_pago_plan_id: string | null;
+  active: number;
+  created_at: string;
+  updated_at: string;
 }
 
 function formatCurrencyBrl(priceCents: number): string {
@@ -91,36 +85,21 @@ function formatCurrencyBrl(priceCents: number): string {
   }).format(priceCents / 100);
 }
 
-function mapPlanRow(row: DbSubscriptionPlanRow): BillingPlanRecord {
+function mapPlanRow(row: PlanRow): BillingPlanRecord {
   return {
     id: row.id,
     code: row.code,
     name: row.name,
     description: row.description,
     intervalUnit: row.interval_unit,
-    intervalCount: row.interval_count,
-    priceCents: row.price_cents,
-    priceFormatted: formatCurrencyBrl(row.price_cents),
+    intervalCount: Number(row.interval_count),
+    priceCents: Number(row.price_cents),
+    priceFormatted: formatCurrencyBrl(Number(row.price_cents)),
     currency: row.currency,
     mercadoPagoPlanId: row.mercado_pago_plan_id,
-    active: row.active,
+    active: Number(row.active) === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at
-  };
-}
-
-function buildPlanMutation(seed: BillingPlanSeed, nowIso: string): Omit<DbSubscriptionPlanRow, 'id' | 'mercado_pago_plan_id'> {
-  return {
-    code: seed.code,
-    name: seed.name,
-    description: seed.description,
-    interval_unit: seed.intervalUnit,
-    interval_count: seed.intervalCount,
-    price_cents: seed.priceCents,
-    currency: seed.currency,
-    active: seed.active,
-    created_at: nowIso,
-    updated_at: nowIso
   };
 }
 
@@ -141,98 +120,74 @@ export function getBillingPlanDefinition(code: BillingPlanCode): BillingPlanSeed
 }
 
 export async function getBillingPlans(): Promise<BillingPlanRecord[]> {
-  const { data, error } = await db
-    .from(TABLE_NAME)
-    .select('*')
-    .order('interval_count', { ascending: true });
-
-  assertNoError(error, 'getBillingPlans');
-  return ((data ?? []) as DbSubscriptionPlanRow[]).map(mapPlanRow);
+  const rows = db
+    .prepare('select * from app_subscription_plans order by interval_count asc')
+    .all() as PlanRow[];
+  return rows.map(mapPlanRow);
 }
 
 export async function ensureBillingPlansSeeded(): Promise<BillingPlanRecord[]> {
-  const nowIso = new Date().toISOString();
-  const codes = PLAN_CATALOG.map((plan) => plan.code);
+  const now = nowIso();
+  const selectByCode = db.prepare('select * from app_subscription_plans where code = ?').pluck(false);
+  const insertPlan = db.prepare(`
+    insert into app_subscription_plans (
+      id, code, name, description, interval_unit, interval_count, price_cents, currency,
+      mercado_pago_plan_id, active, created_at, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const updatePlan = db.prepare(`
+    update app_subscription_plans
+    set name = ?, description = ?, interval_unit = ?, interval_count = ?, price_cents = ?, currency = ?, active = ?, updated_at = ?
+    where code = ?
+  `);
 
-  const { data: existingRows, error: existingError } = await db
-    .from(TABLE_NAME)
-    .select('*')
-    .in('code', codes);
-
-  assertNoError(existingError, 'ensureBillingPlansSeeded.select');
-
-  const existingByCode = new Map(
-    ((existingRows ?? []) as DbSubscriptionPlanRow[]).map((row) => [row.code, row] as const)
-  );
-
-  const missing = PLAN_CATALOG
-    .filter((plan) => !existingByCode.has(plan.code))
-    .map((plan) => buildPlanMutation(plan, nowIso));
-
-  if (missing.length > 0) {
-    const { error } = await db.from(TABLE_NAME).insert(missing);
-    assertNoError(error, 'ensureBillingPlansSeeded.insert');
-  }
-
-  for (const seed of PLAN_CATALOG) {
-    const current = existingByCode.get(seed.code);
-    if (
-      current &&
-      current.name === seed.name &&
-      current.description === seed.description &&
-      current.interval_unit === seed.intervalUnit &&
-      current.interval_count === seed.intervalCount &&
-      current.price_cents === seed.priceCents &&
-      current.currency === seed.currency &&
-      current.active === seed.active
-    ) {
+  for (const plan of PLAN_CATALOG) {
+    const existing = selectByCode.get(plan.code) as PlanRow | undefined;
+    if (!existing) {
+      insertPlan.run(
+        randomUUID(),
+        plan.code,
+        plan.name,
+        plan.description,
+        plan.intervalUnit,
+        plan.intervalCount,
+        plan.priceCents,
+        plan.currency,
+        null,
+        plan.active ? 1 : 0,
+        now,
+        now
+      );
       continue;
     }
 
-    const mutation = buildPlanMutation(seed, current?.created_at ?? nowIso);
-    const { error } = await db
-      .from(TABLE_NAME)
-      .update({
-        name: mutation.name,
-        description: mutation.description,
-        interval_unit: mutation.interval_unit,
-        interval_count: mutation.interval_count,
-        price_cents: mutation.price_cents,
-        currency: mutation.currency,
-        active: mutation.active,
-        updated_at: nowIso
-      })
-      .eq('code', seed.code);
-
-    assertNoError(error, 'ensureBillingPlansSeeded.update');
+    updatePlan.run(
+      plan.name,
+      plan.description,
+      plan.intervalUnit,
+      plan.intervalCount,
+      plan.priceCents,
+      plan.currency,
+      plan.active ? 1 : 0,
+      now,
+      plan.code
+    );
   }
 
   return getBillingPlans();
 }
 
 export async function getBillingPlanByCode(code: BillingPlanCode): Promise<BillingPlanRecord | null> {
-  const { data, error } = await db
-    .from(TABLE_NAME)
-    .select('*')
-    .eq('code', code)
-    .maybeSingle();
-
-  assertNoError(error, 'getBillingPlanByCode');
-  if (!data) return null;
-  return mapPlanRow(data as DbSubscriptionPlanRow);
+  const row = db
+    .prepare('select * from app_subscription_plans where code = ? limit 1')
+    .get(code) as PlanRow | undefined;
+  return row ? mapPlanRow(row) : null;
 }
 
-export async function setBillingPlanMercadoPagoId(
-  code: BillingPlanCode,
-  mercadoPagoPlanId: string
-): Promise<void> {
-  const { error } = await db
-    .from(TABLE_NAME)
-    .update({
-      mercado_pago_plan_id: mercadoPagoPlanId,
-      updated_at: new Date().toISOString()
-    })
-    .eq('code', code);
-
-  assertNoError(error, 'setBillingPlanMercadoPagoId');
+export async function setBillingPlanMercadoPagoId(code: BillingPlanCode, mercadoPagoPlanId: string): Promise<void> {
+  db.prepare(`
+    update app_subscription_plans
+    set mercado_pago_plan_id = ?, updated_at = ?
+    where code = ?
+  `).run(mercadoPagoPlanId, nowIso(), code);
 }

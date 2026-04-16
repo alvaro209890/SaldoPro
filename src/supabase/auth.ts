@@ -1,299 +1,251 @@
+import {
+  browserLocalPersistence,
+  confirmPasswordReset as firebaseConfirmPasswordReset,
+  createUserWithEmailAndPassword,
+  onIdTokenChanged,
+  sendPasswordResetEmail,
+  setPersistence,
+  signInWithEmailAndPassword,
+  signOut,
+  updateProfile,
+  verifyPasswordResetCode,
+  type User
+} from 'firebase/auth';
 import { BACKEND_URL } from '@/config/backend';
+import { firebaseAuth } from '@/lib/firebase';
 
 export interface AuthUser {
-    id: string;
-    email: string | null;
-    created_at: string | null;
-    user_metadata: Record<string, unknown>;
+  id: string;
+  email: string | null;
+  created_at: string | null;
+  user_metadata: Record<string, unknown>;
 }
 
 export interface AuthSession {
-    accessToken: string;
-    refreshToken: string | null;
-    expiresAt: string | null;
-    user: AuthUser;
-}
-
-interface AuthSessionResponse {
-    session: AuthSession;
+  accessToken: string;
+  refreshToken: string | null;
+  expiresAt: string | null;
+  user: AuthUser;
 }
 
 const AUTH_STORAGE_KEY = 'saldopro.auth.session.v1';
 const AUTH_CHANGED_EVENT = 'saldopro:auth-changed';
 
+let initialized = false;
+let restorePromise: Promise<AuthSession | null> | null = null;
+
+function normalizeFirebaseClientError(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) {
+    return fallback;
+  }
+
+  const raw = `${error.name} ${error.message}`.toLowerCase();
+  if (raw.includes('email-already-in-use')) {
+    return 'Este email ja esta em uso.';
+  }
+  if (raw.includes('invalid-email')) {
+    return 'Email invalido.';
+  }
+  if (raw.includes('weak-password')) {
+    return 'A senha deve ter pelo menos 6 caracteres.';
+  }
+  if (raw.includes('too-many-requests')) {
+    return 'Muitas tentativas. Aguarde alguns minutos e tente novamente.';
+  }
+
+  return error.message || fallback;
+}
+
 function canUseStorage(): boolean {
-    return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
-}
-
-function normalizeUser(user: AuthUser): AuthUser {
-    return {
-        id: user.id,
-        email: user.email ?? null,
-        created_at: user.created_at ?? null,
-        user_metadata: user.user_metadata ?? {},
-    };
-}
-
-function normalizeSession(session: AuthSession): AuthSession {
-    return {
-        accessToken: session.accessToken,
-        refreshToken: session.refreshToken ?? null,
-        expiresAt: session.expiresAt ?? null,
-        user: normalizeUser(session.user),
-    };
+  return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
 }
 
 function dispatchAuthChanged(session: AuthSession | null): void {
-    if (typeof window === 'undefined') return;
-    window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT, { detail: { session } }));
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT, { detail: { session } }));
 }
 
 function writeSession(session: AuthSession | null): void {
-    if (!canUseStorage()) return;
-    if (!session) {
-        window.localStorage.removeItem(AUTH_STORAGE_KEY);
-        dispatchAuthChanged(null);
-        return;
-    }
+  if (!canUseStorage()) return;
+  if (!session) {
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    dispatchAuthChanged(null);
+    return;
+  }
 
-    const normalized = normalizeSession(session);
-    window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(normalized));
-    dispatchAuthChanged(normalized);
+  window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(session));
+  dispatchAuthChanged(session);
 }
 
 export function getStoredAuthSession(): AuthSession | null {
-    if (!canUseStorage()) return null;
+  if (!canUseStorage()) return null;
 
-    const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
-    if (!raw) return null;
+  const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
+  if (!raw) return null;
 
-    try {
-        return normalizeSession(JSON.parse(raw) as AuthSession);
-    } catch {
-        window.localStorage.removeItem(AUTH_STORAGE_KEY);
-        return null;
+  try {
+    return JSON.parse(raw) as AuthSession;
+  } catch {
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    return null;
+  }
+}
+
+function mapFirebaseUser(user: User, accessToken: string): AuthSession {
+  return {
+    accessToken,
+    refreshToken: user.refreshToken ?? null,
+    expiresAt: null,
+    user: {
+      id: user.uid,
+      email: user.email ?? null,
+      created_at: user.metadata.creationTime ? new Date(user.metadata.creationTime).toISOString() : null,
+      user_metadata: {
+        ...(user.displayName ? { display_name: user.displayName } : {})
+      }
     }
+  };
 }
 
-async function parseJson<T>(response: Response, fallbackMessage: string): Promise<T> {
-    if (response.ok) {
-        return response.json() as Promise<T>;
-    }
+async function buildSession(user: User | null): Promise<AuthSession | null> {
+  if (!user) {
+    return null;
+  }
 
-    const payload = await response.json().catch(() => ({ error: fallbackMessage })) as { error?: string };
-    throw new Error(payload.error || fallbackMessage);
+  const accessToken = await user.getIdToken();
+  return mapFirebaseUser(user, accessToken);
 }
 
-async function authRequest<T>(path: string, init?: RequestInit, fallbackMessage = 'Erro de autenticação.'): Promise<T> {
-    const response = await fetch(`${BACKEND_URL}${path}`, {
-        ...init,
-        headers: {
-            'Content-Type': 'application/json',
-            ...(init?.headers ?? {}),
-        },
-    });
+async function bootstrapUserProfile(session: AuthSession, displayName: string, phone: string): Promise<void> {
+  const response = await fetch(`${BACKEND_URL}/api/data/bootstrap`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.accessToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      email: session.user.email,
+      displayName,
+      phone
+    })
+  });
 
-    return parseJson<T>(response, fallbackMessage);
-}
-
-async function fetchSessionUser(accessToken: string): Promise<AuthUser> {
-    const response = await fetch(`${BACKEND_URL}/api/auth/session`, {
-        headers: {
-            Authorization: `Bearer ${accessToken}`,
-        },
-    });
-
-    const payload = await parseJson<{ user: AuthUser }>(response, 'Não foi possível validar a sessão atual.');
-    return normalizeUser(payload.user);
-}
-
-async function refreshAuthSession(refreshToken: string): Promise<AuthSession> {
-    const payload = await authRequest<AuthSessionResponse>(
-        '/api/auth/refresh',
-        {
-            method: 'POST',
-            body: JSON.stringify({ refreshToken }),
-        },
-        'Não foi possível renovar a sessão.'
-    );
-
-    const session = normalizeSession(payload.session);
-    writeSession(session);
-    return session;
-}
-
-// ─── Deduplication and caching for session restore ───────────────────────────
-// Prevents multiple concurrent calls from hitting the network simultaneously.
-let _restoreInFlight: Promise<AuthSession | null> | null = null;
-
-export async function restoreAuthSession(): Promise<AuthSession | null> {
-    // If a restore is already in progress, reuse it to prevent request storms.
-    if (_restoreInFlight) return _restoreInFlight;
-
-    _restoreInFlight = _doRestoreAuthSession();
-    try {
-        return await _restoreInFlight;
-    } finally {
-        _restoreInFlight = null;
-    }
-}
-
-async function _doRestoreAuthSession(): Promise<AuthSession | null> {
-    const stored = getStoredAuthSession();
-    if (!stored) {
-        return null;
-    }
-
-    try {
-        const user = await fetchSessionUser(stored.accessToken);
-        const session = normalizeSession({
-            ...stored,
-            user,
-        });
-        writeSession(session);
-        return session;
-    } catch {
-        if (stored.refreshToken) {
-            try {
-                return await refreshAuthSession(stored.refreshToken);
-            } catch {
-                writeSession(null);
-                return null;
-            }
-        }
-
-        writeSession(null);
-        return null;
-    }
-}
-
-/**
- * Returns the stored access token WITHOUT making any network requests.
- * This is called by every data/API request and must be fast and synchronous-like.
- * Session validation is done once at app startup via restoreAuthSession() in useAuth.
- */
-export async function getAccessToken(): Promise<string> {
-    const session = getStoredAuthSession();
-    if (!session?.accessToken) {
-        throw new Error('Usuário não autenticado.');
-    }
-    return session.accessToken;
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: 'Não foi possível preparar sua conta.' })) as {
+      error?: string;
+    };
+    throw new Error(payload.error || 'Não foi possível preparar sua conta.');
+  }
 }
 
 function emitProfileUpdated(uid: string, displayName: string | null): void {
-    if (typeof window === 'undefined') return;
+  if (typeof window === 'undefined') return;
 
-    window.dispatchEvent(
-        new CustomEvent('saldopro:profile-updated', {
-            detail: {
-                uid,
-                displayName,
-            },
-        })
-    );
+  window.dispatchEvent(
+    new CustomEvent('saldopro:profile-updated', {
+      detail: {
+        uid,
+        displayName
+      }
+    })
+  );
+}
+
+function ensureFirebaseAuthListener(): void {
+  if (initialized) return;
+  initialized = true;
+
+  onIdTokenChanged(firebaseAuth, async (user) => {
+    const session = await buildSession(user);
+    writeSession(session);
+  });
+}
+
+export async function restoreAuthSession(): Promise<AuthSession | null> {
+  ensureFirebaseAuthListener();
+
+  if (restorePromise) {
+    return restorePromise;
+  }
+
+  restorePromise = new Promise<AuthSession | null>((resolve) => {
+    const unsubscribe = onIdTokenChanged(firebaseAuth, async (user) => {
+      unsubscribe();
+      resolve(await buildSession(user));
+    });
+  }).finally(() => {
+    restorePromise = null;
+  });
+
+  return restorePromise;
+}
+
+export async function getAccessToken(): Promise<string> {
+  const user = firebaseAuth.currentUser;
+  if (!user) {
+    throw new Error('Usuário não autenticado.');
+  }
+
+  const accessToken = await user.getIdToken();
+  const session = mapFirebaseUser(user, accessToken);
+  writeSession(session);
+  return accessToken;
 }
 
 export async function registerUser(email: string, password: string, displayName: string, phone: string) {
-    const payload = await authRequest<AuthSessionResponse>(
-        '/api/auth/register',
-        {
-            method: 'POST',
-            body: JSON.stringify({ email, password, displayName, phone }),
-        },
-        'Não foi possível criar a conta.'
-    );
+  ensureFirebaseAuthListener();
+  try {
+    await setPersistence(firebaseAuth, browserLocalPersistence);
+    const result = await createUserWithEmailAndPassword(firebaseAuth, email, password);
+    await updateProfile(result.user, { displayName });
+    const session = await buildSession(result.user);
+    if (!session) {
+      throw new Error('Não foi possível iniciar a sessão.');
+    }
 
-    const session = normalizeSession(payload.session);
+    await bootstrapUserProfile(session, displayName, phone);
     writeSession(session);
     emitProfileUpdated(session.user.id, displayName);
     return session.user;
+  } catch (error) {
+    if (firebaseAuth.currentUser) {
+      await signOut(firebaseAuth);
+    }
+    throw new Error(normalizeFirebaseClientError(error, 'Não foi possível criar a conta.'));
+  }
 }
 
 export async function loginUser(email: string, password: string) {
-    const payload = await authRequest<AuthSessionResponse>(
-        '/api/auth/login',
-        {
-            method: 'POST',
-            body: JSON.stringify({ email, password }),
-        },
-        'Não foi possível fazer login.'
-    );
-
-    const session = normalizeSession(payload.session);
-    writeSession(session);
-    emitProfileUpdated(session.user.id, (session.user.user_metadata?.display_name as string | undefined) ?? null);
-    return session.user;
+  ensureFirebaseAuthListener();
+  await setPersistence(firebaseAuth, browserLocalPersistence);
+  const result = await signInWithEmailAndPassword(firebaseAuth, email, password);
+  const session = await buildSession(result.user);
+  if (!session) {
+    throw new Error('Não foi possível fazer login.');
+  }
+  writeSession(session);
+  emitProfileUpdated(session.user.id, (session.user.user_metadata?.display_name as string | undefined) ?? null);
+  return session.user;
 }
 
 export async function resetPassword(email: string) {
-    await authRequest<{ ok: true }>(
-        '/api/auth/reset-password',
-        {
-            method: 'POST',
-            body: JSON.stringify({ email }),
-        },
-        'Não foi possível enviar o email de recuperação.'
-    );
+  await sendPasswordResetEmail(firebaseAuth, email, {
+    url: `${window.location.origin}/reset-password`,
+    handleCodeInApp: false
+  });
 }
 
-function getRecoveryParams(): URLSearchParams {
-    if (typeof window === 'undefined') {
-        return new URLSearchParams();
-    }
-
-    const url = new URL(window.location.href);
-    const hash = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash;
-    return new URLSearchParams(hash || url.search);
+export async function validatePasswordResetCode(oobCode: string) {
+  return verifyPasswordResetCode(firebaseAuth, oobCode);
 }
 
-export async function validatePasswordResetCode(_oobCode: string) {
-    const params = getRecoveryParams();
-    const errorDescription = params.get('error_description');
-    if (errorDescription) {
-        throw new Error(errorDescription);
-    }
-
-    const accessToken = params.get('access_token')?.trim() ?? '';
-    const refreshToken = params.get('refresh_token')?.trim() ?? '';
-    const recoveryType = params.get('type')?.trim() ?? '';
-
-    if (!accessToken || recoveryType !== 'recovery') {
-        throw new Error('Este link de recuperação é inválido ou já foi usado.');
-    }
-
-    const user = await fetchSessionUser(accessToken);
-    writeSession({
-        accessToken,
-        refreshToken,
-        expiresAt: null,
-        user,
-    });
-
-    if (typeof window !== 'undefined' && window.location.hash) {
-        window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
-    }
-
-    return user.email ?? '';
-}
-
-export async function confirmUserPasswordReset(_oobCode: string, newPassword: string) {
-    const accessToken = await getAccessToken();
-
-    await authRequest<{ ok: true }>(
-        '/api/auth/update-password',
-        {
-            method: 'POST',
-            headers: {
-                Authorization: `Bearer ${accessToken}`,
-            },
-            body: JSON.stringify({ password: newPassword }),
-        },
-        'Não foi possível redefinir a senha.'
-    );
+export async function confirmUserPasswordReset(oobCode: string, newPassword: string) {
+  await firebaseConfirmPasswordReset(firebaseAuth, oobCode, newPassword);
 }
 
 export async function logoutUser() {
-    writeSession(null);
+  await signOut(firebaseAuth);
+  writeSession(null);
 }
 
 export { AUTH_CHANGED_EVENT };

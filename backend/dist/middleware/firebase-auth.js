@@ -10,7 +10,6 @@ const logger_1 = require("../lib/logger");
  * On success, attaches the decoded UID to `req.uid`.
  */
 async function requireFirebaseAuth(req, res, next) {
-    (0, firebase_admin_1.ensureFirebaseAdmin)();
     const authHeader = req.header('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         res.status(401).json({ error: 'Token de autenticação ausente.' });
@@ -22,13 +21,30 @@ async function requireFirebaseAuth(req, res, next) {
         return;
     }
     try {
-        const decoded = await (0, auth_1.getAuth)().verifyIdToken(idToken);
-        const userState = await (0, firebase_user_access_1.getFirebaseUserAccessState)(decoded.uid);
-        if (!userState.exists || userState.disabled) {
-            res.status(403).json({ error: 'Conta bloqueada ou indisponível.' });
+        let uid = '';
+        let valid = false;
+        if ((0, firebase_admin_1.ensureFirebaseAdmin)()) {
+            try {
+                const decoded = await (0, auth_1.getAuth)().verifyIdToken(idToken);
+                uid = decoded.uid;
+                valid = true;
+            }
+            catch (error) {
+                logger_1.logger.warn('Firebase Auth middleware falling back to Identity Toolkit lookup', {
+                    error: error instanceof Error ? error.message : 'unknown'
+                });
+            }
+        }
+        if (!valid) {
+            const userState = await (0, firebase_user_access_1.getFirebaseUserAccessStateFromIdToken)(idToken);
+            uid = userState?.uid ?? '';
+            valid = Boolean(userState?.exists && !userState.disabled);
+        }
+        if (!uid || !valid) {
+            res.status(401).json({ error: 'Token de autenticação inválido ou expirado.' });
             return;
         }
-        req.uid = decoded.uid;
+        req.uid = uid;
         next();
     }
     catch (error) {

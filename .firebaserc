@@ -10,8 +10,12 @@
         ],
         "admin": [
           "saldopro-98049-admin"
+        ],
+        "qr": [
+          "saldopro-98049-qr"
         ]
       }
     }
-  }
+  },
+  "etags": {}
 }

@@ -1,4 +1,5 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
+import { env } from '../config/env';
 import { ensureBillingPlansSeeded, getBillingPlanByCode, getBillingPlanDefinition, getBillingPlans, isBillingPlanCode, setBillingPlanMercadoPagoId, type BillingPlanCode, type BillingPlanRecord } from '../lib/billing-plans';
 import { FREE_WHATSAPP_DAILY_LIMIT } from '../lib/daily-ai-quota';
 import {
@@ -65,6 +66,10 @@ function buildExternalReference(uid: string, planCode: BillingPlanCode): string 
   return `uid:${uid}|plan:${planCode}|ts:${Date.now()}`;
 }
 
+function isMercadoPagoConfigured(): boolean {
+  return Boolean(env.mercadoPagoAccessToken && env.mercadoPagoWebhookSecret);
+}
+
 async function ensureMercadoPagoPlanForCode(code: BillingPlanCode): Promise<BillingPlanRecord> {
   const existing = await getBillingPlanByCode(code);
   if (!existing) {
@@ -99,6 +104,9 @@ async function ensureMercadoPagoPlanForCode(code: BillingPlanCode): Promise<Bill
 async function ensureAllMercadoPagoPlans(): Promise<BillingPlanRecord[]> {
   await ensureBillingPlansSeeded();
   const plans = await getBillingPlans();
+  if (!isMercadoPagoConfigured()) {
+    return plans;
+  }
   const synced: BillingPlanRecord[] = [];
 
   for (const plan of plans) {
@@ -178,6 +186,11 @@ export function createBillingRouter(): Router {
 
   router.post('/subscriptions/checkout', requireSupabaseAuth, async (req: Request, res: Response, next) => {
     try {
+      if (!isMercadoPagoConfigured()) {
+        res.status(503).json({ error: 'Mercado Pago nao esta configurado neste ambiente local.' });
+        return;
+      }
+
       const uid = getUid(req);
       const body = (req.body ?? {}) as CheckoutBody;
       const planCodeRaw = asString(body.planCode);
@@ -270,6 +283,11 @@ export function createBillingRouter(): Router {
 
   router.post('/subscriptions/cancel', requireSupabaseAuth, async (req: Request, res: Response, next) => {
     try {
+      if (!isMercadoPagoConfigured()) {
+        res.status(503).json({ error: 'Mercado Pago nao esta configurado neste ambiente local.' });
+        return;
+      }
+
       const uid = getUid(req);
       const current = await getLatestUserSubscription(uid);
 
@@ -308,9 +326,14 @@ export function createBillingRouter(): Router {
   });
 
   router.post('/webhooks/mercado-pago', async (req: Request, res: Response) => {
+    if (!isMercadoPagoConfigured()) {
+      res.status(503).json({ error: 'Mercado Pago nao esta configurado neste ambiente local.' });
+      return;
+    }
+
     const request = req as RawBodyRequest;
     const body = (req.body ?? {}) as MercadoPagoWebhookBody;
-    const providerEventId = String(body.id ?? body.data?.id ?? '').trim() || null;
+    const providerEventId = String(body.id ?? body.data?.id ?? '').trim() || 'unknown';
     const eventType = [asString(body.type), asString(body.action)].filter(Boolean).join(':') || 'unknown';
 
     let billingEventId: string | null = null;

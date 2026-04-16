@@ -482,13 +482,45 @@ function buildSystemPrompt(context) {
     const shouldSendSummary = lightweight;
     const { today, currentTime, currentDateTime } = getCurrentBrasiliaPromptContext();
     const summaryInstruction = shouldSendSummary
-        ? `Nesta resposta, inclua um resumo claro do que voce faz como assistente financeiro (6 a 8 bullets) e 2 exemplos de comandos reais que o usuario pode mandar.`
+        ? `Nesta resposta, apresente suas capacidades usando formatacao rica de WhatsApp. Siga este formato:
+1. Comece com um cumprimento breve usando o nome do usuario (se disponivel).
+2. Apresente-se em UMA frase como assistente financeiro do SaldoPro.
+3. Liste as funcionalidades em CATEGORIAS com emojis, cada item com bullet (•). Use este modelo:
+
+💰 *Controle Financeiro*
+• Registrar despesas e receitas por texto ou audio
+• Criar lancamentos recorrentes (mensal, semanal, anual)
+• Editar e excluir transacoes
+
+📊 *Resumos e Analises*
+• Ver resumo do mes (receitas, despesas, saldo)
+• Analise de gastos por categoria
+• Dicas e sugestoes financeiras personalizadas
+
+⏰ *Lembretes*
+• Criar lembretes de contas a pagar e a receber
+• Lembretes gerais com data e horario
+
+🎯 *Metas*
+• Acompanhar progresso das metas financeiras
+• Criar, editar e concluir metas
+
+📸 *Imagens e Documentos*
+• Ler comprovantes, recibos e notas fiscais por foto
+• Guardar e reenviar imagens, PDFs e ZIPs
+
+🎙️ *Audio*
+• Registrar gastos e receitas por mensagem de voz
+
+4. Termine com 2-3 exemplos praticos de mensagens que o usuario pode enviar, formatados em italico (_texto_).
+5. Encerre com uma frase convidativa.
+NAO use formato de lista simples sem emojis. A resposta DEVE ser visualmente rica e organizada.`
         : `Nao inclua lista de funcionalidades nesta resposta, a menos que o usuario peca explicitamente.`;
     const greetingInstruction = context.isGreeting
         ? 'Como a mensagem atual e uma saudacao, comece com cumprimento breve e acolhedor.'
         : 'Nao force saudacao longa.';
     const capabilitiesQuestionInstruction = context.isCapabilitiesQuestion
-        ? 'Como o usuario perguntou o que voce faz, responda de forma completa, concreta e nao generica.'
+        ? 'Como o usuario perguntou o que voce faz, responda de forma COMPLETA e VISUAL usando formatacao rica de WhatsApp (emojis por categoria, *negrito*, _italico_, bullets •). NAO responda com texto corrido generico. Organize as funcionalidades em categorias tematicas com emojis distintos. Inclua 2-3 exemplos praticos de comandos em italico no final.'
         : 'Se nao for pergunta de capacidade, mantenha foco no pedido atual.';
     // --- Financial context section (lightweight vs full) ---
     let financialContextBlock;
@@ -694,21 +726,38 @@ REGRAS DE RESUMO DE CAPACIDADES
 - ${greetingInstruction}
 - ${capabilitiesQuestionInstruction}
 
-QUANDO RESUMIR CAPACIDADES, PRIORIZE ESTES ITENS
-- Registrar despesas e receitas por texto.
-- Criar transacoes recorrentes (mensal, semanal, anual) para gastos fixos.
-- Criar lembretes de contas a pagar e a receber com vencimento.
-- Ler imagem e sugerir ou registrar lancamento quando houver contexto financeiro.
-- Receber e guardar PDF e ZIP enviados pelo WhatsApp, alem de imagens.
-- Guardar e reenviar imagens e documentos (PDF, ZIP) pelo WhatsApp quando o usuario pedir explicitamente para salvar ou ver um arquivo.
-- Se o usuario pedir para buscar ou enviar uma imagem (comprovante, documento, etc), use a acao "fetch_document" com sua "query".
-- Mostrar resumo do mes (receitas, despesas e saldo).
-- Ajudar no controle de orcamento e alertar excesso de gastos.
-- Editar e excluir lancamentos.
-- Concluir, editar e excluir lembretes.
-- Mostrar andamento detalhado de metas, concluir metas e ajustar meta existente.
-- Sugerir melhorias financeiras com base nos dados reais.
-- Tirar duvidas financeiras praticas (economia, planejamento e habitos).
+QUANDO RESUMIR CAPACIDADES, USE ESTA ESTRUTURA COM EMOJIS E CATEGORIAS:
+
+💰 *Controle Financeiro*
+• Registrar despesas e receitas por texto, audio ou imagem
+• Criar lancamentos recorrentes (mensal, semanal, anual) para gastos fixos
+• Editar e excluir lancamentos existentes
+
+📊 *Resumos e Analises*
+• Mostrar resumo do mes (receitas, despesas e saldo)
+• Analise detalhada de gastos por categoria
+• Alertas de orcamento e sugestoes de economia
+• Dicas financeiras praticas baseadas nos dados reais do usuario
+
+⏰ *Lembretes Inteligentes*
+• Criar lembretes de contas a pagar e a receber com vencimento
+• Lembretes gerais com data e horario
+• Concluir, editar e excluir lembretes
+
+🎯 *Metas Financeiras*
+• Mostrar andamento detalhado das metas (progresso, valor atual, quanto falta)
+• Criar, editar, concluir e excluir metas
+
+📸 *Imagens e Documentos*
+• Ler comprovantes, recibos, notas fiscais e boletos por foto (extrair e registrar automaticamente)
+• Guardar e reenviar imagens, PDFs e ZIPs pelo WhatsApp
+• Buscar arquivos salvos por nome (use a acao "fetch_document" com sua "query")
+
+🎙️ *Audio*
+• Entender e registrar gastos/receitas por mensagem de voz
+
+Ao final, inclua 2-3 exemplos PRATICOS de comandos reais em italico (_"gastei 50 no mercado"_, _"me lembra de pagar a conta de luz dia 10"_, _"como estao minhas metas?"_).
+Link do painel: ${env_1.env.appPanelUrl}
 
 REGRAS TECNICAS (OBRIGATORIO)
 1) Retorne SEMPRE um JSON valido com exatamente duas chaves:
