@@ -5,6 +5,7 @@ exports.saveWhatsAppMessage = saveWhatsAppMessage;
 exports.inboundMessageExists = inboundMessageExists;
 exports.saveMessageSafe = saveMessageSafe;
 exports.bootstrapUserData = bootstrapUserData;
+exports.ensureLocalUserData = ensureLocalUserData;
 exports.getUserSettings = getUserSettings;
 exports.updateUserSettings = updateUserSettings;
 exports.getUserProfile = getUserProfile;
@@ -425,7 +426,7 @@ async function inboundMessageExists(messageId, clientId, _processedInboundIds) {
 }
 async function saveMessageSafe(record) {
     const exists = record.direction === 'inbound'
-        ? await inboundMessageExists(record.clientId, record.messageId)
+        ? await inboundMessageExists(record.messageId, record.clientId)
         : false;
     if (exists)
         return;
@@ -447,6 +448,19 @@ async function bootstrapUserData(uid, input) {
         isNewUser: !existing,
         normalizedPhone: normalizedPhone.length >= 10 ? normalizedPhone : null
     };
+}
+async function ensureLocalUserData(uid, input) {
+    const existing = await getLocalUserAccessSnapshot(uid);
+    const displayName = input.displayName?.trim() ||
+        existing?.displayName?.trim() ||
+        input.email?.split('@')[0]?.trim() ||
+        'Usuario';
+    ensureUserRecord(uid, input.email ?? existing?.email ?? '', displayName);
+    ensureUserSettings(uid, []);
+    const categoryCount = local_db_1.db.prepare('select count(*) as total from app_categories where uid = ?').get(uid);
+    if (Number(categoryCount.total ?? 0) === 0) {
+        seedDefaultCategories(uid);
+    }
 }
 async function getUserSettings(uid) {
     const row = local_db_1.db.prepare('select * from app_user_settings where uid = ? limit 1').get(uid);
@@ -556,11 +570,19 @@ async function listLocalUserAccessSnapshots() {
     }));
 }
 async function getUserCategories(uid) {
-    const rows = local_db_1.db.prepare(`
+    let rows = local_db_1.db.prepare(`
     select * from app_categories
     where uid = ?
     order by type asc, name asc
   `).all(uid);
+    if (rows.length === 0) {
+        seedDefaultCategories(uid);
+        rows = local_db_1.db.prepare(`
+      select * from app_categories
+      where uid = ?
+      order by type asc, name asc
+    `).all(uid);
+    }
     return rows.map(mapCategoryRow);
 }
 async function addUserCategory(uid, input) {
@@ -826,8 +848,23 @@ async function isPhoneAllowedForAnyAccount(phone) {
     });
 }
 async function resolveUidFromPhone(phone) {
-    const binding = await getPhoneBinding(phone);
-    return binding?.uid ?? null;
+    const normalized = (0, events_1.normalizePhoneNumber)(phone);
+    if (normalized.length < 10) {
+        return null;
+    }
+    const variants = new Set((0, events_1.brazilianPhoneVariants)(normalized));
+    const rows = local_db_1.db.prepare(`
+    select uid, whatsapp_allowed_numbers, updated_at
+    from app_user_settings
+    order by updated_at desc
+  `).all();
+    for (const row of rows) {
+        const allowed = normalizeStoredPhoneList(row.whatsapp_allowed_numbers);
+        if (allowed.some((item) => variants.has(item))) {
+            return typeof row.uid === 'string' ? row.uid : null;
+        }
+    }
+    return null;
 }
 async function getPhoneBinding(phone) {
     const normalized = (0, events_1.normalizePhoneNumber)(phone);

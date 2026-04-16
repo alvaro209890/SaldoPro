@@ -129,6 +129,11 @@ export interface BootstrapUserResult {
   normalizedPhone: string | null;
 }
 
+export interface EnsureLocalUserInput {
+  email?: string | null;
+  displayName?: string | null;
+}
+
 export interface UserChatSession {
   id: string;
   title: string;
@@ -713,7 +718,7 @@ export async function inboundMessageExists(
 
 export async function saveMessageSafe(record: WhatsAppMessageRecord): Promise<void> {
   const exists = record.direction === 'inbound'
-    ? await inboundMessageExists(record.clientId, record.messageId)
+    ? await inboundMessageExists(record.messageId, record.clientId)
     : false;
   if (exists) return;
   await saveWhatsAppMessage(record);
@@ -739,6 +744,23 @@ export async function bootstrapUserData(uid: string, input: BootstrapUserInput):
     isNewUser: !existing,
     normalizedPhone: normalizedPhone.length >= 10 ? normalizedPhone : null
   };
+}
+
+export async function ensureLocalUserData(uid: string, input: EnsureLocalUserInput): Promise<void> {
+  const existing = await getLocalUserAccessSnapshot(uid);
+  const displayName =
+    input.displayName?.trim() ||
+    existing?.displayName?.trim() ||
+    input.email?.split('@')[0]?.trim() ||
+    'Usuario';
+
+  ensureUserRecord(uid, input.email ?? existing?.email ?? '', displayName);
+  ensureUserSettings(uid, []);
+
+  const categoryCount = db.prepare('select count(*) as total from app_categories where uid = ?').get(uid) as { total: number };
+  if (Number(categoryCount.total ?? 0) === 0) {
+    seedDefaultCategories(uid);
+  }
 }
 
 export async function getUserSettings(uid: string): Promise<UserSettingsBackend> {
@@ -871,11 +893,21 @@ export async function listLocalUserAccessSnapshots(): Promise<LocalUserAccessSna
 }
 
 export async function getUserCategories(uid: string): Promise<UserCategory[]> {
-  const rows = db.prepare(`
+  let rows = db.prepare(`
     select * from app_categories
     where uid = ?
     order by type asc, name asc
   `).all(uid) as SqlRow[];
+
+  if (rows.length === 0) {
+    seedDefaultCategories(uid);
+    rows = db.prepare(`
+      select * from app_categories
+      where uid = ?
+      order by type asc, name asc
+    `).all(uid) as SqlRow[];
+  }
+
   return rows.map(mapCategoryRow);
 }
 
@@ -1312,8 +1344,26 @@ export async function isPhoneAllowedForAnyAccount(phone: string): Promise<boolea
 }
 
 export async function resolveUidFromPhone(phone: string): Promise<string | null> {
-  const binding = await getPhoneBinding(phone);
-  return binding?.uid ?? null;
+  const normalized = normalizePhoneNumber(phone);
+  if (normalized.length < 10) {
+    return null;
+  }
+
+  const variants = new Set(brazilianPhoneVariants(normalized));
+  const rows = db.prepare(`
+    select uid, whatsapp_allowed_numbers, updated_at
+    from app_user_settings
+    order by updated_at desc
+  `).all() as SqlRow[];
+
+  for (const row of rows) {
+    const allowed = normalizeStoredPhoneList(row.whatsapp_allowed_numbers);
+    if (allowed.some((item) => variants.has(item))) {
+      return typeof row.uid === 'string' ? row.uid : null;
+    }
+  }
+
+  return null;
 }
 
 export async function getPhoneBinding(phone: string): Promise<WhatsAppPhoneBinding | null> {

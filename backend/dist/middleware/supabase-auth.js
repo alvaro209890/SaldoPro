@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.requireSupabaseAuth = requireSupabaseAuth;
 const auth_1 = require("firebase-admin/auth");
 const firebase_admin_1 = require("../lib/firebase-admin");
+const firestore_1 = require("../lib/firestore");
 const firebase_user_access_1 = require("../lib/firebase-user-access");
 const logger_1 = require("../lib/logger");
 async function requireSupabaseAuth(req, res, next) {
@@ -57,6 +58,10 @@ async function requireSupabaseAuth(req, res, next) {
         request.uid = uid;
         request.authAccessToken = accessToken;
         request.authUser = authUser;
+        await (0, firestore_1.ensureLocalUserData)(uid, {
+            email: authUser.email,
+            displayName: authUser.displayName
+        });
         next();
     }
     catch (error) {

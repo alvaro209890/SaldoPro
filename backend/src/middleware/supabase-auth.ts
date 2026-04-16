@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { getAuth, type DecodedIdToken } from 'firebase-admin/auth';
 import { ensureFirebaseAdmin } from '../lib/firebase-admin';
+import { ensureLocalUserData } from '../lib/firestore';
 import { getFirebaseUserAccessStateFromIdToken } from '../lib/firebase-user-access';
 import { logger } from '../lib/logger';
 
@@ -72,6 +73,12 @@ export async function requireSupabaseAuth(req: Request, res: Response, next: Nex
     request.uid = uid;
     request.authAccessToken = accessToken;
     request.authUser = authUser;
+
+    await ensureLocalUserData(uid, {
+      email: authUser.email,
+      displayName: authUser.displayName
+    });
+
     next();
   } catch (error) {
     logger.warn('Firebase Auth middleware rejected bearer token', {
