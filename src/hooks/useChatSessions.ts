@@ -6,11 +6,12 @@ import { toast } from 'sonner';
 
 export function useChatSessions() {
     const { user } = useAuth();
+    const uid = user?.id ?? null;
     const [sessions, setSessions] = useState<ChatSession[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        if (!user) {
+        if (!uid) {
             setSessions([]);
             setLoading(false);
             return;
@@ -18,7 +19,7 @@ export function useChatSessions() {
 
         setLoading(true);
         const unsubscribe = onChatSessionsSnapshot(
-            user.id,
+            uid,
             (data) => {
                 setSessions(data);
                 setLoading(false);
@@ -30,12 +31,12 @@ export function useChatSessions() {
         );
 
         return () => unsubscribe();
-    }, [user]);
+    }, [uid]);
 
     const addSession = async (title: string): Promise<string> => {
-        if (!user) throw new Error("Usuário não autenticado");
+        if (!uid) throw new Error("Usuário não autenticado");
         try {
-            const docRef = await createChatSession(user.id, title);
+            const docRef = await createChatSession(uid, title);
             return docRef.id;
         } catch (error) {
             console.error('Error creating chat session:', error);
@@ -45,9 +46,9 @@ export function useChatSessions() {
     };
 
     const editSession = async (sessionId: string, title: string) => {
-        if (!user) return;
+        if (!uid) return;
         try {
-            await updateChatSession(user.id, sessionId, title);
+            await updateChatSession(uid, sessionId, title);
         } catch (error) {
             console.error('Error updating chat session:', error);
             toast.error('Erro ao renomear conversa.');
@@ -56,9 +57,9 @@ export function useChatSessions() {
     };
 
     const removeSession = async (sessionId: string) => {
-        if (!user) return;
+        if (!uid) return;
         try {
-            await deleteChatSession(user.id, sessionId);
+            await deleteChatSession(uid, sessionId);
             // Note: Cloud function should ideally delete all sub-messages when parent is deleted,
             // or we just leave them orphaned if it's fine for simple use cases.
         } catch (error) {

@@ -13,16 +13,21 @@ import { todayISO, advanceDate } from '@/utils/date';
 
 export function useRecurringTransactions() {
     const { user } = useAuth();
+    const uid = user?.id ?? null;
     const [recurringTransactions, setRecurringTransactions] = useState<RecurringTransaction[]>([]);
     const [loading, setLoading] = useState(true);
     const generatingRef = useRef(false);
 
     useEffect(() => {
-        if (!user) return;
+        if (!uid) {
+            setRecurringTransactions([]);
+            setLoading(false);
+            return;
+        }
 
         setLoading(true);
         const unsubscribe = onRecurringTransactionsSnapshot(
-            user.id,
+            uid,
             (data) => {
                 setRecurringTransactions(data);
                 setLoading(false);
@@ -34,12 +39,12 @@ export function useRecurringTransactions() {
         );
 
         return () => unsubscribe();
-    }, [user]);
+    }, [uid]);
 
     const add = async (data: RecurringTransactionFormData) => {
-        if (!user) return;
+        if (!uid) return;
         try {
-            await addRecurringTransaction(user.id, {
+            await addRecurringTransaction(uid, {
                 ...data,
                 endDate: data.endDate || null,
                 nextDueDate: data.startDate,
@@ -54,9 +59,9 @@ export function useRecurringTransactions() {
     };
 
     const update = async (id: string, data: Partial<Omit<RecurringTransaction, 'id' | 'createdAt'>>) => {
-        if (!user) return;
+        if (!uid) return;
         try {
-            await updateRecurringTransaction(user.id, id, data);
+            await updateRecurringTransaction(uid, id, data);
             toast.success('Transação recorrente atualizada!');
         } catch (error) {
             console.error(error);
@@ -66,9 +71,9 @@ export function useRecurringTransactions() {
     };
 
     const remove = async (id: string) => {
-        if (!user) return;
+        if (!uid) return;
         try {
-            await deleteRecurringTransaction(user.id, id);
+            await deleteRecurringTransaction(uid, id);
             toast.success('Transação recorrente removida!');
         } catch (error) {
             console.error(error);
@@ -82,7 +87,7 @@ export function useRecurringTransactions() {
     };
 
     const generateOverdueTransactions = useCallback(async () => {
-        if (!user || generatingRef.current) return;
+        if (!uid || generatingRef.current) return;
         generatingRef.current = true;
 
         try {
@@ -95,7 +100,7 @@ export function useRecurringTransactions() {
             for (const rt of overdue) {
                 let nextDate = rt.nextDueDate;
                 while (nextDate <= today) {
-                    await addTransaction(user.id, {
+                    await addTransaction(uid, {
                         type: rt.type,
                         amount: rt.amount,
                         date: nextDate,
@@ -111,7 +116,7 @@ export function useRecurringTransactions() {
                 if (rt.endDate && nextDate > rt.endDate) {
                     updates.active = false;
                 }
-                await updateRecurringTransaction(user.id, rt.id, updates);
+                await updateRecurringTransaction(uid, rt.id, updates);
             }
 
             if (generated > 0) {
@@ -120,7 +125,7 @@ export function useRecurringTransactions() {
         } finally {
             generatingRef.current = false;
         }
-    }, [user, recurringTransactions]);
+    }, [uid, recurringTransactions]);
 
     return {
         recurringTransactions,

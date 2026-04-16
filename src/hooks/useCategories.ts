@@ -16,15 +16,20 @@ function getErrorMessage(error: unknown, fallback: string): string {
 
 export function useCategories() {
     const { user } = useAuth();
+    const uid = user?.id ?? null;
     const [categories, setCategories] = useState<Category[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        if (!user) return;
+        if (!uid) {
+            setCategories([]);
+            setLoading(false);
+            return;
+        }
 
         setLoading(true);
         const unsubscribe = onCategoriesSnapshot(
-            user.id,
+            uid,
             (data) => {
                 setCategories(data);
                 setLoading(false);
@@ -36,15 +41,15 @@ export function useCategories() {
         );
 
         return () => unsubscribe();
-    }, [user]);
+    }, [uid]);
 
     const incomeCategories = categories.filter((c) => c.type === 'income');
     const expenseCategories = categories.filter((c) => c.type === 'expense');
 
     const add = async (data: Omit<Category, 'id' | 'createdAt'>) => {
-        if (!user) return;
+        if (!uid) return;
         try {
-            await addCategory(user.id, data);
+            await addCategory(uid, data);
             toast.success('Categoria adicionada!');
         } catch (error) {
             console.error(error);
@@ -54,9 +59,9 @@ export function useCategories() {
     };
 
     const update = async (id: string, data: Partial<Omit<Category, 'id' | 'createdAt'>>) => {
-        if (!user) return;
+        if (!uid) return;
         try {
-            await updateCategory(user.id, id, data);
+            await updateCategory(uid, id, data);
             toast.success('Categoria atualizada!');
         } catch (error) {
             console.error(error);
@@ -66,9 +71,9 @@ export function useCategories() {
     };
 
     const remove = async (id: string) => {
-        if (!user) return;
+        if (!uid) return;
         try {
-            await deleteCategory(user.id, id);
+            await deleteCategory(uid, id);
             toast.success('Categoria removida!');
         } catch (error) {
             console.error(error);

@@ -22,12 +22,13 @@ interface LoadOptions {
 
 export function useUserDocuments() {
     const { user } = useAuth();
+    const uid = user?.id ?? null;
     const [documents, setDocuments] = useState<UserDocumentAsset[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
 
     const loadDocuments = async (options: LoadOptions = {}) => {
-        if (!user) {
+        if (!uid) {
             setDocuments([]);
             setLoading(false);
             setRefreshing(false);
@@ -41,7 +42,7 @@ export function useUserDocuments() {
         }
 
         try {
-            const items = await getUserDocuments(user.id);
+            const items = await getUserDocuments(uid);
             setDocuments(items);
         } catch (error) {
             console.error(error);
@@ -58,20 +59,20 @@ export function useUserDocuments() {
     };
 
     useEffect(() => {
-        if (!user) {
+        if (!uid) {
             setDocuments([]);
             setLoading(false);
             return;
         }
 
         void loadDocuments({ suppressToast: true });
-    }, [user]);
+    }, [uid]);
 
     const upload = async (data: UserDocumentInput) => {
-        if (!user) return;
+        if (!uid) return;
 
         try {
-            await createUserDocumentAsset(user.id, data);
+            await createUserDocumentAsset(uid, data);
             await loadDocuments({ silent: true, suppressToast: true });
             toast.success('Arquivo enviado com sucesso.');
         } catch (error) {
@@ -82,10 +83,10 @@ export function useUserDocuments() {
     };
 
     const update = async (documentId: string, data: UserDocumentUpdateInput) => {
-        if (!user) return;
+        if (!uid) return;
 
         try {
-            await updateUserDocumentAsset(user.id, documentId, data);
+            await updateUserDocumentAsset(uid, documentId, data);
             await loadDocuments({ silent: true, suppressToast: true });
             toast.success('Arquivo atualizado.');
         } catch (error) {
@@ -96,10 +97,10 @@ export function useUserDocuments() {
     };
 
     const remove = async (documentId: string) => {
-        if (!user) return;
+        if (!uid) return;
 
         try {
-            await deleteUserDocumentAsset(user.id, documentId);
+            await deleteUserDocumentAsset(uid, documentId);
             await loadDocuments({ silent: true, suppressToast: true });
             toast.success('Arquivo removido.');
         } catch (error) {
@@ -110,10 +111,10 @@ export function useUserDocuments() {
     };
 
     const download = async (documentId: string) => {
-        if (!user) return;
+        if (!uid) return;
 
         try {
-            const { url, fileName } = await getUserDocumentDownloadUrl(user.id, documentId);
+            const { url, fileName } = await getUserDocumentDownloadUrl(uid, documentId);
             const response = await fetch(url);
             if (!response.ok) {
                 throw new Error('Falha ao baixar o arquivo.');

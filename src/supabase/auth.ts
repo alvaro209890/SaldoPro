@@ -186,10 +186,7 @@ export async function getAccessToken(): Promise<string> {
     throw new Error('Usuário não autenticado.');
   }
 
-  const accessToken = await user.getIdToken();
-  const session = mapFirebaseUser(user, accessToken);
-  writeSession(session);
-  return accessToken;
+  return user.getIdToken();
 }
 
 export async function registerUser(email: string, password: string, displayName: string, phone: string) {

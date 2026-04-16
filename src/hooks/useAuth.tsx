@@ -57,10 +57,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Custom event to update display name across the app without reloading
     useEffect(() => {
         if (typeof window === 'undefined') return;
+        const uid = user?.id ?? null;
 
         const handleProfileUpdated = (event: Event) => {
             const detail = (event as CustomEvent<{ uid?: string; displayName?: string | null }>).detail;
-            if (!user || detail?.uid !== user.id) return;
+            if (!uid || detail?.uid !== uid) return;
             setDisplayName(detail.displayName || null);
         };
 
@@ -69,7 +70,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return () => {
             window.removeEventListener('saldopro:profile-updated', handleProfileUpdated);
         };
-    }, [user]);
+    }, [user?.id]);
 
     return (
         <AuthContext.Provider

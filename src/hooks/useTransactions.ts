@@ -11,15 +11,20 @@ import { toast } from 'sonner';
 
 export function useTransactions(monthKey: string) {
     const { user } = useAuth();
+    const uid = user?.id ?? null;
     const [transactions, setTransactions] = useState<Transaction[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        if (!user) return;
+        if (!uid) {
+            setTransactions([]);
+            setLoading(false);
+            return;
+        }
 
         setLoading(true);
         const unsubscribe = onTransactionsSnapshot(
-            user.id,
+            uid,
             monthKey,
             (data) => {
                 setTransactions(data);
@@ -32,12 +37,12 @@ export function useTransactions(monthKey: string) {
         );
 
         return () => unsubscribe();
-    }, [user, monthKey]);
+    }, [uid, monthKey]);
 
     const add = async (data: Omit<Transaction, 'id' | 'monthKey' | 'createdAt' | 'updatedAt'>) => {
-        if (!user) return;
+        if (!uid) return;
         try {
-            await addTransaction(user.id, data);
+            await addTransaction(uid, data);
             toast.success('Transação adicionada com sucesso!');
         } catch (error) {
             console.error(error);
@@ -47,9 +52,9 @@ export function useTransactions(monthKey: string) {
     };
 
     const update = async (id: string, data: Partial<Omit<Transaction, 'id' | 'createdAt'>>) => {
-        if (!user) return;
+        if (!uid) return;
         try {
-            await updateTransaction(user.id, id, data);
+            await updateTransaction(uid, id, data);
             toast.success('Transação atualizada!');
         } catch (error) {
             console.error(error);
@@ -59,9 +64,9 @@ export function useTransactions(monthKey: string) {
     };
 
     const remove = async (id: string) => {
-        if (!user) return;
+        if (!uid) return;
         try {
-            await deleteTransaction(user.id, id);
+            await deleteTransaction(uid, id);
             toast.success('Transação removida!');
         } catch (error) {
             console.error(error);

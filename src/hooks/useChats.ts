@@ -6,11 +6,12 @@ import { toast } from 'sonner';
 
 export function useChats(sessionId: string | null) {
     const { user } = useAuth();
+    const uid = user?.id ?? null;
     const [messages, setMessages] = useState<StoredChatMessage[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        if (!user || !sessionId) {
+        if (!uid || !sessionId) {
             setMessages([]);
             setLoading(false);
             return;
@@ -18,7 +19,7 @@ export function useChats(sessionId: string | null) {
 
         setLoading(true);
         const unsubscribe = onChatMessagesSnapshot(
-            user.id,
+            uid,
             sessionId,
             (data) => {
                 setMessages(data);
@@ -31,12 +32,12 @@ export function useChats(sessionId: string | null) {
         );
 
         return () => unsubscribe();
-    }, [user, sessionId]);
+    }, [uid, sessionId]);
 
     const addMessage = async (data: Omit<StoredChatMessage, 'id' | 'createdAt'>) => {
-        if (!user) return;
+        if (!uid) return;
         try {
-            await addChatMessage(user.id, data);
+            await addChatMessage(uid, data);
         } catch (error) {
             console.error('Error saving chat message:', error);
             toast.error('Erro ao salvar o histórico no banco de dados.');

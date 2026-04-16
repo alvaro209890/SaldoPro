@@ -11,15 +11,20 @@ import { toast } from 'sonner';
 
 export function useReminders() {
     const { user } = useAuth();
+    const uid = user?.id ?? null;
     const [reminders, setReminders] = useState<Reminder[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        if (!user) return;
+        if (!uid) {
+            setReminders([]);
+            setLoading(false);
+            return;
+        }
 
         setLoading(true);
         const unsubscribe = onRemindersSnapshot(
-            user.id,
+            uid,
             (data) => {
                 setReminders(data);
                 setLoading(false);
@@ -31,12 +36,12 @@ export function useReminders() {
         );
 
         return () => unsubscribe();
-    }, [user]);
+    }, [uid]);
 
     const add = async (data: Omit<Reminder, 'id' | 'createdAt' | 'updatedAt'>) => {
-        if (!user) return;
+        if (!uid) return;
         try {
-            await addReminder(user.id, data);
+            await addReminder(uid, data);
             toast.success('Lembrete adicionado com sucesso!');
         } catch (error) {
             console.error(error);
@@ -46,9 +51,9 @@ export function useReminders() {
     };
 
     const update = async (id: string, data: Partial<Omit<Reminder, 'id' | 'createdAt'>>) => {
-        if (!user) return;
+        if (!uid) return;
         try {
-            await updateReminder(user.id, id, data);
+            await updateReminder(uid, id, data);
             toast.success('Lembrete atualizado!');
         } catch (error) {
             console.error(error);
@@ -58,9 +63,9 @@ export function useReminders() {
     };
 
     const remove = async (id: string) => {
-        if (!user) return;
+        if (!uid) return;
         try {
-            await deleteReminder(user.id, id);
+            await deleteReminder(uid, id);
             toast.success('Lembrete removido!');
         } catch (error) {
             console.error(error);

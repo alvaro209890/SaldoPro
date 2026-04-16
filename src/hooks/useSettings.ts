@@ -6,15 +6,20 @@ import { toast } from 'sonner';
 
 export function useSettings() {
     const { user } = useAuth();
+    const uid = user?.id ?? null;
     const [settings, setSettings] = useState<UserSettings | null>(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        if (!user) return;
+        if (!uid) {
+            setSettings(null);
+            setLoading(false);
+            return;
+        }
 
         setLoading(true);
         const unsubscribe = onSettingsSnapshot(
-            user.id,
+            uid,
             (data) => {
                 setSettings(data);
                 setLoading(false);
@@ -26,12 +31,12 @@ export function useSettings() {
         );
 
         return () => unsubscribe();
-    }, [user]);
+    }, [uid]);
 
     const update = async (data: Partial<UserSettings>, options?: { silent?: boolean }) => {
-        if (!user) return;
+        if (!uid) return;
         try {
-            await updateSettings(user.id, data);
+            await updateSettings(uid, data);
             if (!options?.silent) {
                 toast.success('Configurações atualizadas!');
             }
