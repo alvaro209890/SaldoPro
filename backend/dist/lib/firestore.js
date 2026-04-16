@@ -78,6 +78,7 @@ exports.updateUserGoal = updateUserGoal;
 exports.deleteUserGoal = deleteUserGoal;
 const node_crypto_1 = require("node:crypto");
 const local_db_1 = require("./local-db");
+const realtime_1 = require("./realtime");
 const events_1 = require("../whatsapp/events");
 const GLOBAL_CATEGORIES_UID = '__global__';
 class DuplicateCategoryError extends Error {
@@ -444,6 +445,8 @@ async function bootstrapUserData(uid, input) {
     if (normalizedPhone.length >= 10) {
         await savePhoneBinding(normalizedPhone, uid);
     }
+    (0, realtime_1.publishUserDataChange)(uid, 'settings');
+    (0, realtime_1.publishUserDataChange)(uid, 'categories');
     return {
         isNewUser: !existing,
         normalizedPhone: normalizedPhone.length >= 10 ? normalizedPhone : null
@@ -458,8 +461,16 @@ async function ensureLocalUserData(uid, input) {
     ensureUserRecord(uid, input.email ?? existing?.email ?? '', displayName);
     ensureUserSettings(uid, []);
     const categoryCount = local_db_1.db.prepare('select count(*) as total from app_categories where uid = ?').get(uid);
+    let seededCategories = false;
     if (Number(categoryCount.total ?? 0) === 0) {
         seedDefaultCategories(uid);
+        seededCategories = true;
+    }
+    if (!existing) {
+        (0, realtime_1.publishUserDataChange)(uid, 'settings');
+    }
+    if (seededCategories) {
+        (0, realtime_1.publishUserDataChange)(uid, 'categories');
     }
 }
 async function getUserSettings(uid) {
@@ -487,6 +498,7 @@ async function updateUserSettings(uid, input) {
       updated_at = excluded.updated_at
   `).run(uid, merged.budget, merged.startDay, merged.currency, (0, local_db_1.stringifyJson)(merged.whatsappAllowedNumbers), (0, local_db_1.nowIso)());
     invalidateAllowedNumbersCacheForUid(uid);
+    (0, realtime_1.publishUserDataChange)(uid, 'settings');
 }
 async function getUserProfile(uid) {
     const row = local_db_1.db.prepare('select display_name from app_users where uid = ? limit 1').get(uid);
@@ -496,6 +508,7 @@ async function getUserProfile(uid) {
 }
 async function updateUserDisplayName(uid, displayName) {
     local_db_1.db.prepare('update app_users set display_name = ? where uid = ?').run(displayName.trim(), uid);
+    (0, realtime_1.publishUserDataChange)(uid, 'profile');
 }
 function getUserMetrics(uid) {
     const tx = local_db_1.db.prepare('select count(*) as total from app_transactions where uid = ?').get(uid);
@@ -598,6 +611,7 @@ async function addUserCategory(uid, input) {
     insert into app_categories (id, uid, name, normalized_name, type, color, icon, created_at)
     values (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(id, uid, input.name.trim(), normalizedName, input.type, input.color, input.icon, (0, local_db_1.nowIso)());
+    (0, realtime_1.publishUserDataChange)(uid, 'categories');
     return id;
 }
 async function updateUserCategory(uid, categoryId, input) {
@@ -619,9 +633,11 @@ async function updateUserCategory(uid, categoryId, input) {
     set name = ?, normalized_name = ?, type = ?, color = ?, icon = ?
     where uid = ? and id = ?
   `).run(name, normalizedName, type, typeof input.color === 'string' ? input.color : String(current.color), typeof input.icon === 'string' ? input.icon : String(current.icon), uid, categoryId);
+    (0, realtime_1.publishUserDataChange)(uid, 'categories');
 }
 async function deleteUserCategory(uid, categoryId) {
     local_db_1.db.prepare('delete from app_categories where uid = ? and id = ?').run(uid, categoryId);
+    (0, realtime_1.publishUserDataChange)(uid, 'categories');
 }
 async function getRecentTransactions(uid, limitCount = 50) {
     const rows = local_db_1.db.prepare(`
@@ -645,6 +661,7 @@ async function addUserTransaction(uid, input) {
       id, uid, type, amount, date, month_key, category, description, payment_method, created_at, updated_at
     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(id, uid, input.type, input.amount, input.date, monthKeyFromDate(input.date), input.category, input.description, input.paymentMethod, now, now);
+    (0, realtime_1.publishUserDataChange)(uid, 'transactions');
     return id;
 }
 async function updateUserTransaction(uid, transactionId, input) {
@@ -658,9 +675,11 @@ async function updateUserTransaction(uid, transactionId, input) {
     set type = ?, amount = ?, date = ?, month_key = ?, category = ?, description = ?, payment_method = ?, updated_at = ?
     where uid = ? and id = ?
   `).run(input.type ?? current.type, typeof input.amount === 'number' ? input.amount : current.amount, date, monthKeyFromDate(date), input.category ?? current.category, input.description ?? current.description, input.paymentMethod ?? current.paymentMethod, (0, local_db_1.nowIso)(), uid, transactionId);
+    (0, realtime_1.publishUserDataChange)(uid, 'transactions');
 }
 async function deleteUserTransaction(uid, transactionId) {
     local_db_1.db.prepare('delete from app_transactions where uid = ? and id = ?').run(uid, transactionId);
+    (0, realtime_1.publishUserDataChange)(uid, 'transactions');
 }
 async function getUserTransactionById(uid, transactionId) {
     const row = local_db_1.db.prepare('select * from app_transactions where uid = ? and id = ? limit 1').get(uid, transactionId);
@@ -672,6 +691,7 @@ async function restoreUserTransaction(uid, transactionId, input) {
       id, uid, type, amount, date, month_key, category, description, payment_method, created_at, updated_at
     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(transactionId, uid, input.type, input.amount, input.date, input.monthKey, input.category, input.description, input.paymentMethod, input.createdAt, input.updatedAt);
+    (0, realtime_1.publishUserDataChange)(uid, 'transactions');
 }
 async function addUserReminder(uid, input) {
     const id = (0, node_crypto_1.randomUUID)();
@@ -686,6 +706,7 @@ async function addUserReminder(uid, input) {
       id, uid, title, amount, due_date, due_time, due_at, notified_at, notify_phone, reminder_kind, type, status, created_at, updated_at
     ) values (?, ?, ?, ?, ?, ?, ?, null, ?, ?, ?, ?, ?, ?)
   `).run(id, uid, input.title, input.amount ?? null, input.dueDate, dueTime, dueAt, notifyPhone, reminderKind, type, input.status ?? 'pending', now, now);
+    (0, realtime_1.publishUserDataChange)(uid, 'reminders');
     return id;
 }
 async function getUserReminders(uid) {
@@ -716,9 +737,11 @@ async function updateUserReminder(uid, reminderId, input) {
     set title = ?, amount = ?, due_date = ?, due_time = ?, due_at = ?, notify_phone = ?, reminder_kind = ?, type = ?, status = ?, updated_at = ?
     where uid = ? and id = ?
   `).run(input.title ?? current.title, input.amount !== undefined ? input.amount : current.amount, dueDate, dueTime ?? null, dueAt, notifyPhone, reminderKind, type, input.status ?? current.status, (0, local_db_1.nowIso)(), uid, reminderId);
+    (0, realtime_1.publishUserDataChange)(uid, 'reminders');
 }
 async function deleteUserReminder(uid, reminderId) {
     local_db_1.db.prepare('delete from app_reminders where uid = ? and id = ?').run(uid, reminderId);
+    (0, realtime_1.publishUserDataChange)(uid, 'reminders');
 }
 async function getDueWhatsAppReminders(nowValue, limitCount = 50) {
     const rows = local_db_1.db.prepare(`
@@ -749,6 +772,9 @@ async function markReminderAsNotified(uid, reminderId, notifiedAt) {
     set notified_at = ?, updated_at = ?
     where uid = ? and id = ? and notified_at is null
   `).run(notifiedAt, (0, local_db_1.nowIso)(), uid, reminderId);
+    if (result.changes > 0) {
+        (0, realtime_1.publishUserDataChange)(uid, 'reminders');
+    }
     return result.changes > 0;
 }
 async function addRecurringTransaction(uid, input) {
@@ -759,6 +785,7 @@ async function addRecurringTransaction(uid, input) {
       id, uid, type, amount, category, description, payment_method, frequency, start_date, end_date, next_due_date, active, created_at, updated_at
     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
   `).run(id, uid, input.type, input.amount, input.category, input.description, input.paymentMethod, input.frequency, input.startDate, input.endDate ?? null, input.startDate, now, now);
+    (0, realtime_1.publishUserDataChange)(uid, 'recurring-transactions');
     return id;
 }
 async function getActiveRecurringTransactions(uid) {
@@ -775,6 +802,7 @@ async function getRecurringTransactions(uid) {
 }
 async function deleteRecurringTransaction(uid, recurringId) {
     local_db_1.db.prepare('delete from app_recurring_transactions where uid = ? and id = ?').run(uid, recurringId);
+    (0, realtime_1.publishUserDataChange)(uid, 'recurring-transactions');
 }
 async function updateRecurringTransactionBackend(uid, recurringId, input) {
     const current = local_db_1.db.prepare('select * from app_recurring_transactions where uid = ? and id = ? limit 1').get(uid, recurringId);
@@ -786,6 +814,7 @@ async function updateRecurringTransactionBackend(uid, recurringId, input) {
     set type = ?, amount = ?, category = ?, description = ?, payment_method = ?, frequency = ?, start_date = ?, end_date = ?, next_due_date = ?, active = ?, updated_at = ?
     where uid = ? and id = ?
   `).run(input.type ?? current.type, typeof input.amount === 'number' ? input.amount : toNumber(current.amount), input.category ?? String(current.category), input.description ?? String(current.description), input.paymentMethod ?? String(current.payment_method), input.frequency ?? String(current.frequency), input.startDate ?? String(current.start_date), input.endDate !== undefined ? input.endDate : (typeof current.end_date === 'string' ? current.end_date : null), input.nextDueDate ?? String(current.next_due_date), input.active !== undefined ? (input.active ? 1 : 0) : Number(current.active ?? 1), (0, local_db_1.nowIso)(), uid, recurringId);
+    (0, realtime_1.publishUserDataChange)(uid, 'recurring-transactions');
 }
 async function generateOverdueRecurringTransactions(uid) {
     const today = new Date().toISOString().slice(0, 10);
@@ -1033,15 +1062,19 @@ async function createUserChatSession(uid, title) {
     insert into app_chat_sessions (id, uid, title, created_at, updated_at)
     values (?, ?, ?, ?, ?)
   `).run(id, uid, title, now, now);
+    (0, realtime_1.publishUserDataChange)(uid, 'chat-sessions');
     return id;
 }
 async function updateUserChatSessionTitle(uid, sessionId, title) {
     local_db_1.db.prepare(`
     update app_chat_sessions set title = ?, updated_at = ? where uid = ? and id = ?
   `).run(title, (0, local_db_1.nowIso)(), uid, sessionId);
+    (0, realtime_1.publishUserDataChange)(uid, 'chat-sessions');
 }
 async function deleteUserChatSession(uid, sessionId) {
     local_db_1.db.prepare('delete from app_chat_sessions where uid = ? and id = ?').run(uid, sessionId);
+    (0, realtime_1.publishUserDataChange)(uid, 'chat-sessions');
+    (0, realtime_1.publishUserDataChange)(uid, 'chat-messages');
 }
 async function getUserChatMessages(uid, sessionId) {
     const rows = local_db_1.db.prepare(`
@@ -1065,6 +1098,8 @@ async function addUserChatMessage(uid, sessionId, input) {
     values (?, ?, ?, ?, ?, ?, ?)
   `).run(id, uid, sessionId, input.role, input.content, input.imageUrl ?? null, now);
     local_db_1.db.prepare('update app_chat_sessions set updated_at = ? where id = ?').run(now, sessionId);
+    (0, realtime_1.publishUserDataChange)(uid, 'chat-messages');
+    (0, realtime_1.publishUserDataChange)(uid, 'chat-sessions');
     return id;
 }
 async function createPendingWhatsAppDocumentDraft(uid, sourcePhone, input) {
@@ -1107,6 +1142,7 @@ async function createUserDocument(uid, input) {
       search_tokens, storage_path, mime_type, size_bytes, status, created_at, updated_at, last_accessed_at
     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null)
   `).run(id, uid, input.source ?? 'whatsapp', input.title, input.description ?? null, input.normalizedTitle, input.normalizedDescription ?? null, (0, local_db_1.stringifyJson)(input.searchTokens ?? []), input.storagePath, input.mimeType, input.sizeBytes, input.status ?? 'ready', now, now);
+    (0, realtime_1.publishUserDataChange)(uid, 'documents');
     return id;
 }
 async function getUserDocument(uid, documentId) {
@@ -1125,16 +1161,19 @@ async function updateUserDocument(uid, documentId, input) {
     set title = ?, description = ?, normalized_title = ?, normalized_description = ?, search_tokens = ?, storage_path = ?, status = ?, updated_at = ?
     where uid = ? and id = ?
   `).run(input.title ?? current.title, input.description !== undefined ? input.description : (current.description ?? null), input.normalizedTitle ?? current.normalizedTitle, input.normalizedDescription !== undefined ? input.normalizedDescription : (current.normalizedDescription ?? null), (0, local_db_1.stringifyJson)(input.searchTokens ?? current.searchTokens), input.storagePath ?? current.storagePath, input.status ?? current.status, (0, local_db_1.nowIso)(), uid, documentId);
+    (0, realtime_1.publishUserDataChange)(uid, 'documents');
 }
 async function markUserDocumentDeleted(uid, documentId) {
     local_db_1.db.prepare(`
     update app_user_documents set status = 'deleted', updated_at = ? where uid = ? and id = ?
   `).run((0, local_db_1.nowIso)(), uid, documentId);
+    (0, realtime_1.publishUserDataChange)(uid, 'documents');
 }
 async function touchUserDocumentAccess(uid, documentId) {
     local_db_1.db.prepare(`
     update app_user_documents set last_accessed_at = ? where uid = ? and id = ?
   `).run((0, local_db_1.nowIso)(), uid, documentId);
+    (0, realtime_1.publishUserDataChange)(uid, 'documents');
 }
 async function listRecentUserDocuments(uid, limitCount) {
     const rows = local_db_1.db.prepare(`
@@ -1186,6 +1225,7 @@ async function upsertUserFinancialProfile(uid, input) {
       completed_at = excluded.completed_at,
       updated_at = excluded.updated_at
   `).run(uid, input.monthlyIncome, input.fixedExpenses, input.variableExpenses, input.savingsTargetPct, input.financialGoalsText, now, existing?.createdAt ?? now, now);
+    (0, realtime_1.publishUserDataChange)(uid, 'financial-profile');
 }
 async function getUserGoals(uid) {
     const rows = local_db_1.db.prepare(`
@@ -1201,6 +1241,7 @@ async function addUserGoal(uid, input) {
       id, uid, title, description, target_amount, current_amount, deadline, source, status, priority, created_at, updated_at
     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(id, uid, input.title, input.description ?? null, input.targetAmount ?? null, input.currentAmount ?? 0, input.deadline ?? null, input.source, input.status ?? 'active', input.priority ?? 'medium', now, now);
+    (0, realtime_1.publishUserDataChange)(uid, 'goals');
     return id;
 }
 async function updateUserGoal(uid, goalId, input) {
@@ -1213,7 +1254,9 @@ async function updateUserGoal(uid, goalId, input) {
     set title = ?, description = ?, target_amount = ?, current_amount = ?, deadline = ?, source = ?, status = ?, priority = ?, updated_at = ?
     where uid = ? and id = ?
   `).run(input.title ?? String(current.title), input.description !== undefined ? input.description : (typeof current.description === 'string' ? current.description : null), input.targetAmount !== undefined ? input.targetAmount : (current.target_amount == null ? null : toNumber(current.target_amount)), input.currentAmount !== undefined ? input.currentAmount : toNumber(current.current_amount), input.deadline !== undefined ? input.deadline : (typeof current.deadline === 'string' ? current.deadline : null), input.source ?? (current.source === 'ai' ? 'ai' : 'manual'), input.status ?? current.status, input.priority ?? current.priority, (0, local_db_1.nowIso)(), uid, goalId);
+    (0, realtime_1.publishUserDataChange)(uid, 'goals');
 }
 async function deleteUserGoal(uid, goalId) {
     local_db_1.db.prepare('delete from app_goals where uid = ? and id = ?').run(uid, goalId);
+    (0, realtime_1.publishUserDataChange)(uid, 'goals');
 }

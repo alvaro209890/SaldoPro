@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { db, nowIso, parseJsonArray, parseJsonObject, stringifyJson } from './local-db';
 import { logger } from './logger';
+import { publishUserDataChange } from './realtime';
 import type { WhatsAppMessageRecord, WhatsAppSlotId } from '../types/whatsapp';
 import { brazilianPhoneVariants, normalizePhoneNumber } from '../whatsapp/events';
 
@@ -740,6 +741,9 @@ export async function bootstrapUserData(uid: string, input: BootstrapUserInput):
     await savePhoneBinding(normalizedPhone, uid);
   }
 
+  publishUserDataChange(uid, 'settings');
+  publishUserDataChange(uid, 'categories');
+
   return {
     isNewUser: !existing,
     normalizedPhone: normalizedPhone.length >= 10 ? normalizedPhone : null
@@ -758,8 +762,17 @@ export async function ensureLocalUserData(uid: string, input: EnsureLocalUserInp
   ensureUserSettings(uid, []);
 
   const categoryCount = db.prepare('select count(*) as total from app_categories where uid = ?').get(uid) as { total: number };
+  let seededCategories = false;
   if (Number(categoryCount.total ?? 0) === 0) {
     seedDefaultCategories(uid);
+    seededCategories = true;
+  }
+
+  if (!existing) {
+    publishUserDataChange(uid, 'settings');
+  }
+  if (seededCategories) {
+    publishUserDataChange(uid, 'categories');
   }
 }
 
@@ -794,6 +807,7 @@ export async function updateUserSettings(
   `).run(uid, merged.budget, merged.startDay, merged.currency, stringifyJson(merged.whatsappAllowedNumbers), nowIso());
 
   invalidateAllowedNumbersCacheForUid(uid);
+  publishUserDataChange(uid, 'settings');
 }
 
 export async function getUserProfile(uid: string): Promise<UserProfileBackend> {
@@ -805,6 +819,7 @@ export async function getUserProfile(uid: string): Promise<UserProfileBackend> {
 
 export async function updateUserDisplayName(uid: string, displayName: string): Promise<void> {
   db.prepare('update app_users set display_name = ? where uid = ?').run(displayName.trim(), uid);
+  publishUserDataChange(uid, 'profile');
 }
 
 function getUserMetrics(uid: string): AdminUserMetrics {
@@ -925,6 +940,7 @@ export async function addUserCategory(uid: string, input: Omit<UserCategory, 'id
     insert into app_categories (id, uid, name, normalized_name, type, color, icon, created_at)
     values (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(id, uid, input.name.trim(), normalizedName, input.type, input.color, input.icon, nowIso());
+  publishUserDataChange(uid, 'categories');
   return id;
 }
 
@@ -961,10 +977,12 @@ export async function updateUserCategory(
     uid,
     categoryId
   );
+  publishUserDataChange(uid, 'categories');
 }
 
 export async function deleteUserCategory(uid: string, categoryId: string): Promise<void> {
   db.prepare('delete from app_categories where uid = ? and id = ?').run(uid, categoryId);
+  publishUserDataChange(uid, 'categories');
 }
 
 export async function getRecentTransactions(uid: string, limitCount = 50): Promise<UserTransaction[]> {
@@ -1003,6 +1021,7 @@ export async function addUserTransaction(uid: string, input: CreateTransactionIn
     now,
     now
   );
+  publishUserDataChange(uid, 'transactions');
   return id;
 }
 
@@ -1033,10 +1052,12 @@ export async function updateUserTransaction(
     uid,
     transactionId
   );
+  publishUserDataChange(uid, 'transactions');
 }
 
 export async function deleteUserTransaction(uid: string, transactionId: string): Promise<void> {
   db.prepare('delete from app_transactions where uid = ? and id = ?').run(uid, transactionId);
+  publishUserDataChange(uid, 'transactions');
 }
 
 export async function getUserTransactionById(uid: string, transactionId: string): Promise<UserTransaction | null> {
@@ -1066,6 +1087,7 @@ export async function restoreUserTransaction(
     input.createdAt,
     input.updatedAt
   );
+  publishUserDataChange(uid, 'transactions');
 }
 
 export async function addUserReminder(uid: string, input: CreateReminderInput): Promise<string> {
@@ -1096,6 +1118,7 @@ export async function addUserReminder(uid: string, input: CreateReminderInput): 
     now,
     now
   );
+  publishUserDataChange(uid, 'reminders');
   return id;
 }
 
@@ -1148,10 +1171,12 @@ export async function updateUserReminder(
     uid,
     reminderId
   );
+  publishUserDataChange(uid, 'reminders');
 }
 
 export async function deleteUserReminder(uid: string, reminderId: string): Promise<void> {
   db.prepare('delete from app_reminders where uid = ? and id = ?').run(uid, reminderId);
+  publishUserDataChange(uid, 'reminders');
 }
 
 export async function getDueWhatsAppReminders(
@@ -1192,6 +1217,9 @@ export async function markReminderAsNotified(
     set notified_at = ?, updated_at = ?
     where uid = ? and id = ? and notified_at is null
   `).run(notifiedAt, nowIso(), uid, reminderId);
+  if (result.changes > 0) {
+    publishUserDataChange(uid, 'reminders');
+  }
   return result.changes > 0;
 }
 
@@ -1220,6 +1248,7 @@ export async function addRecurringTransaction(
     now,
     now
   );
+  publishUserDataChange(uid, 'recurring-transactions');
   return id;
 }
 
@@ -1239,6 +1268,7 @@ export async function getRecurringTransactions(uid: string): Promise<UserRecurri
 
 export async function deleteRecurringTransaction(uid: string, recurringId: string): Promise<void> {
   db.prepare('delete from app_recurring_transactions where uid = ? and id = ?').run(uid, recurringId);
+  publishUserDataChange(uid, 'recurring-transactions');
 }
 
 export async function updateRecurringTransactionBackend(
@@ -1270,6 +1300,7 @@ export async function updateRecurringTransactionBackend(
     uid,
     recurringId
   );
+  publishUserDataChange(uid, 'recurring-transactions');
 }
 
 export async function generateOverdueRecurringTransactions(uid: string): Promise<number> {
@@ -1568,6 +1599,7 @@ export async function createUserChatSession(uid: string, title: string): Promise
     insert into app_chat_sessions (id, uid, title, created_at, updated_at)
     values (?, ?, ?, ?, ?)
   `).run(id, uid, title, now, now);
+  publishUserDataChange(uid, 'chat-sessions');
   return id;
 }
 
@@ -1575,10 +1607,13 @@ export async function updateUserChatSessionTitle(uid: string, sessionId: string,
   db.prepare(`
     update app_chat_sessions set title = ?, updated_at = ? where uid = ? and id = ?
   `).run(title, nowIso(), uid, sessionId);
+  publishUserDataChange(uid, 'chat-sessions');
 }
 
 export async function deleteUserChatSession(uid: string, sessionId: string): Promise<void> {
   db.prepare('delete from app_chat_sessions where uid = ? and id = ?').run(uid, sessionId);
+  publishUserDataChange(uid, 'chat-sessions');
+  publishUserDataChange(uid, 'chat-messages');
 }
 
 export async function getUserChatMessages(uid: string, sessionId: string): Promise<UserChatMessage[]> {
@@ -1609,6 +1644,8 @@ export async function addUserChatMessage(
     values (?, ?, ?, ?, ?, ?, ?)
   `).run(id, uid, sessionId, input.role, input.content, input.imageUrl ?? null, now);
   db.prepare('update app_chat_sessions set updated_at = ? where id = ?').run(now, sessionId);
+  publishUserDataChange(uid, 'chat-messages');
+  publishUserDataChange(uid, 'chat-sessions');
   return id;
 }
 
@@ -1688,6 +1725,7 @@ export async function createUserDocument(uid: string, input: CreateUserDocumentI
     now,
     now
   );
+  publishUserDataChange(uid, 'documents');
   return id;
 }
 
@@ -1724,18 +1762,21 @@ export async function updateUserDocument(
     uid,
     documentId
   );
+  publishUserDataChange(uid, 'documents');
 }
 
 export async function markUserDocumentDeleted(uid: string, documentId: string): Promise<void> {
   db.prepare(`
     update app_user_documents set status = 'deleted', updated_at = ? where uid = ? and id = ?
   `).run(nowIso(), uid, documentId);
+  publishUserDataChange(uid, 'documents');
 }
 
 export async function touchUserDocumentAccess(uid: string, documentId: string): Promise<void> {
   db.prepare(`
     update app_user_documents set last_accessed_at = ? where uid = ? and id = ?
   `).run(nowIso(), uid, documentId);
+  publishUserDataChange(uid, 'documents');
 }
 
 export async function listRecentUserDocuments(uid: string, limitCount: number): Promise<UserDocument[]> {
@@ -1800,6 +1841,7 @@ export async function upsertUserFinancialProfile(uid: string, input: UpsertFinan
     existing?.createdAt ?? now,
     now
   );
+  publishUserDataChange(uid, 'financial-profile');
 }
 
 export async function getUserGoals(uid: string): Promise<UserGoal[]> {
@@ -1830,6 +1872,7 @@ export async function addUserGoal(uid: string, input: CreateGoalInput): Promise<
     now,
     now
   );
+  publishUserDataChange(uid, 'goals');
   return id;
 }
 
@@ -1860,8 +1903,10 @@ export async function updateUserGoal(
     uid,
     goalId
   );
+  publishUserDataChange(uid, 'goals');
 }
 
 export async function deleteUserGoal(uid: string, goalId: string): Promise<void> {
   db.prepare('delete from app_goals where uid = ? and id = ?').run(uid, goalId);
+  publishUserDataChange(uid, 'goals');
 }

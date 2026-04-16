@@ -11,6 +11,7 @@ const groq_1 = require("../ai/groq");
 const document_storage_1 = require("../lib/document-storage");
 const firebase_admin_1 = require("../lib/firebase-admin");
 const logger_1 = require("../lib/logger");
+const realtime_1 = require("../lib/realtime");
 const document_intents_1 = require("../whatsapp/document-intents");
 const events_1 = require("../whatsapp/events");
 const USER_DOCUMENT_SIGNED_URL_TTL_SECONDS = 60 * 60;
@@ -18,6 +19,10 @@ const USER_DOCUMENT_DOWNLOAD_TTL_SECONDS = 10 * 60;
 const MAX_DOCUMENT_TITLE_LENGTH = 80;
 const MAX_DOCUMENT_DESCRIPTION_LENGTH = 300;
 const MAX_DOCUMENT_TAGS = 12;
+function writeSseEvent(res, eventName, payload) {
+    res.write(`event: ${eventName}\n`);
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
 function getUid(req) {
     return req.uid;
 }
@@ -136,6 +141,33 @@ function getDocumentMetadata(body) {
 function createDataRouter(signupWelcomeDispatcher) {
     const router = (0, express_1.Router)();
     router.use(supabase_auth_1.requireSupabaseAuth);
+    router.get('/events', (req, res) => {
+        const uid = getUid(req);
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no');
+        res.flushHeaders?.();
+        req.socket.setKeepAlive(true);
+        writeSseEvent(res, 'ready', {
+            uid,
+            at: new Date().toISOString()
+        });
+        const unsubscribe = (0, realtime_1.subscribeToUserDataChanges)(uid, (event) => {
+            writeSseEvent(res, 'data-changed', event);
+        });
+        const heartbeat = setInterval(() => {
+            writeSseEvent(res, 'ping', {
+                uid,
+                at: new Date().toISOString()
+            });
+        }, 25000);
+        req.on('close', () => {
+            clearInterval(heartbeat);
+            unsubscribe();
+            res.end();
+        });
+    });
     router.post('/bootstrap', async (req, res) => {
         const uid = getUid(req);
         const body = (req.body ?? {});

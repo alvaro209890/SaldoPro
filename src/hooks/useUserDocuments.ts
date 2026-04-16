@@ -5,7 +5,8 @@ import {
     createUserDocumentAsset,
     deleteUserDocumentAsset,
     getUserDocumentDownloadUrl,
-    getUserDocuments,
+    onUserDocumentsSnapshot,
+    triggerDataRefresh,
     updateUserDocumentAsset,
 } from '@/supabase/data';
 import type {
@@ -14,12 +15,6 @@ import type {
     UserDocumentUpdateInput,
 } from '@/types';
 
-interface LoadOptions {
-    silent?: boolean;
-    suppressToast?: boolean;
-    rethrow?: boolean;
-}
-
 export function useUserDocuments() {
     const { user } = useAuth();
     const uid = user?.id ?? null;
@@ -27,45 +22,32 @@ export function useUserDocuments() {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
 
-    const loadDocuments = async (options: LoadOptions = {}) => {
-        if (!uid) {
-            setDocuments([]);
-            setLoading(false);
-            setRefreshing(false);
-            return;
-        }
-
-        if (options.silent) {
-            setRefreshing(true);
-        } else {
-            setLoading(true);
-        }
-
-        try {
-            const items = await getUserDocuments(uid);
-            setDocuments(items);
-        } catch (error) {
-            console.error(error);
-            if (!options.suppressToast) {
-                toast.error('Erro ao carregar suas imagens.');
-            }
-            if (options.rethrow) {
-                throw error;
-            }
-        } finally {
-            setLoading(false);
-            setRefreshing(false);
-        }
-    };
-
     useEffect(() => {
         if (!uid) {
             setDocuments([]);
             setLoading(false);
+            setRefreshing(false);
             return;
         }
 
-        void loadDocuments({ suppressToast: true });
+        setLoading(true);
+        setRefreshing(false);
+        const unsubscribe = onUserDocumentsSnapshot(
+            uid,
+            (items) => {
+                setDocuments(items);
+                setLoading(false);
+                setRefreshing(false);
+            },
+            (error) => {
+                console.error(error);
+                toast.error('Erro ao carregar suas imagens.');
+                setLoading(false);
+                setRefreshing(false);
+            }
+        );
+
+        return unsubscribe;
     }, [uid]);
 
     const upload = async (data: UserDocumentInput) => {
@@ -73,7 +55,6 @@ export function useUserDocuments() {
 
         try {
             await createUserDocumentAsset(uid, data);
-            await loadDocuments({ silent: true, suppressToast: true });
             toast.success('Arquivo enviado com sucesso.');
         } catch (error) {
             console.error(error);
@@ -87,7 +68,6 @@ export function useUserDocuments() {
 
         try {
             await updateUserDocumentAsset(uid, documentId, data);
-            await loadDocuments({ silent: true, suppressToast: true });
             toast.success('Arquivo atualizado.');
         } catch (error) {
             console.error(error);
@@ -101,7 +81,6 @@ export function useUserDocuments() {
 
         try {
             await deleteUserDocumentAsset(uid, documentId);
-            await loadDocuments({ silent: true, suppressToast: true });
             toast.success('Arquivo removido.');
         } catch (error) {
             console.error(error);
@@ -130,7 +109,6 @@ export function useUserDocuments() {
             anchor.remove();
             URL.revokeObjectURL(objectUrl);
 
-            await loadDocuments({ silent: true, suppressToast: true });
             toast.success('Download iniciado.');
         } catch (error) {
             console.error(error);
@@ -143,7 +121,10 @@ export function useUserDocuments() {
         documents,
         loading,
         refreshing,
-        reload: () => loadDocuments({ silent: true }),
+        reload: async () => {
+            setRefreshing(true);
+            triggerDataRefresh(['documents']);
+        },
         upload,
         update,
         remove,

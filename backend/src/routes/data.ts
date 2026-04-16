@@ -55,6 +55,7 @@ import {
 } from '../lib/document-storage';
 import { ensureFirebaseAdmin } from '../lib/firebase-admin';
 import { logger } from '../lib/logger';
+import { subscribeToUserDataChanges, type UserDataChangeEvent } from '../lib/realtime';
 import {
   normalizeDocumentText,
   tokenizeDocumentSearch
@@ -80,6 +81,11 @@ interface ApiUserDocument {
   createdAt: string;
   updatedAt: string;
   lastAccessedAt: string | null;
+}
+
+function writeSseEvent(res: Response, eventName: string, payload: unknown): void {
+  res.write(`event: ${eventName}\n`);
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
 function getUid(req: Request): string {
@@ -219,6 +225,39 @@ export function createDataRouter(signupWelcomeDispatcher: SignupWelcomeDispatche
   const router = Router();
 
   router.use(requireSupabaseAuth);
+
+  router.get('/events', (req: Request, res: Response) => {
+    const uid = getUid(req);
+
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+    req.socket.setKeepAlive(true);
+
+    writeSseEvent(res, 'ready', {
+      uid,
+      at: new Date().toISOString()
+    });
+
+    const unsubscribe = subscribeToUserDataChanges(uid, (event: UserDataChangeEvent) => {
+      writeSseEvent(res, 'data-changed', event);
+    });
+
+    const heartbeat = setInterval(() => {
+      writeSseEvent(res, 'ping', {
+        uid,
+        at: new Date().toISOString()
+      });
+    }, 25000);
+
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+      res.end();
+    });
+  });
 
   router.post('/bootstrap', async (req: Request, res: Response) => {
     const uid = getUid(req);
