@@ -1,18 +1,18 @@
 {
   "projects": {
-    "default": "saldopro-98049"
+    "default": "cybergis-8ed59"
   },
   "targets": {
-    "saldopro-98049": {
+    "cybergis-8ed59": {
       "hosting": {
         "app": [
-          "saldopro-98049"
+          "cybergis-8ed59"
         ],
         "admin": [
-          "saldopro-98049-admin"
+          "cybergis-8ed59"
         ],
         "qr": [
-          "saldopro-98049-qr"
+          "cybergis-8ed59"
         ]
       }
     }
