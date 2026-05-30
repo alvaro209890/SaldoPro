@@ -78,8 +78,12 @@ npm run dev
 
 ## Deploy
 
-- Frontend e admin: Firebase Hosting (config em `firebase.json`).
+- Frontend e admin: Vercel (config compartilhada em `vercel.json`), dois projetos apontando para o mesmo repo:
+  - App do usuario: build `npm run build`, output `dist`.
+  - Painel admin: build `npm run build:admin`, output `admin-dist`.
 - Backend: Render (config base em `render.yaml`).
+
+> Config legada de Firebase Hosting permanece em `firebase.json` (Firestore/Storage continuam no Firebase).
 
 ## Branding
 
